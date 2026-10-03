@@ -38,13 +38,6 @@ pub async fn find_all(
   }
 }
 
-pub async fn find(
-  pool: &SqlitePool,
-  reference: &str,
-) -> Result<Option<ProjectResponse>, sqlx::Error> {
-  Ok(find_all(pool, reference).await?.into_iter().next())
-}
-
 pub async fn name_taken_in_workspace(
   pool: &SqlitePool,
   workspace_id: &str,

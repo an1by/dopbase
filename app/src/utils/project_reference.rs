@@ -1,14 +1,14 @@
 use crate::constants::{tokens::PROJECT_ID_PREFIX, workspaces::DEFAULT_WORKSPACE_NAME};
-use crate::utils::slug;
+use crate::utils::{cli_path_argument, slug};
 
 /// Turn a CLI project reference into the API `project_ref` (workspace-qualified when needed).
 pub fn to_api_reference(reference: &str) -> Result<String, String> {
-  let reference = reference.trim();
+  let reference = cli_path_argument::normalize(reference);
   if reference.is_empty() {
     return Err("project reference cannot be empty".into());
   }
   if reference.starts_with(PROJECT_ID_PREFIX) {
-    return Ok(reference.to_owned());
+    return Ok(reference);
   }
   if reference.starts_with('/') {
     let path = reference.trim_start_matches('/');
@@ -19,16 +19,16 @@ pub fn to_api_reference(reference: &str) -> Result<String, String> {
     return Ok(format!("{}/{}", DEFAULT_WORKSPACE_NAME, path));
   }
   if reference.contains('/') {
-    validate_path_segments(reference)?;
-    return Ok(reference.to_owned());
+    validate_path_segments(&reference)?;
+    return Ok(reference);
   }
-  if !slug::is_valid(reference) {
+  if !slug::is_valid(&reference) {
     return Err(
       "project reference must be a project ID, WORKSPACE/PROJECT, /PROJECT for the default workspace, or a lowercase slug of at most 63 characters"
         .into(),
     );
   }
-  Ok(reference.to_owned())
+  Ok(reference)
 }
 
 /// Parsed `dopbase project create` target (optional workspace directory binding).

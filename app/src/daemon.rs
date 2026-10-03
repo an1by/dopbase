@@ -1,6 +1,6 @@
 use std::{
   fs::{self, File, OpenOptions},
-  io::{BufRead, BufReader, BufWriter, Write},
+  io::Write,
   path::{Path, PathBuf},
   sync::{
     Mutex,
@@ -9,17 +9,26 @@ use std::{
   time::Duration,
 };
 
+#[cfg(unix)]
+use std::io::{BufRead, BufReader, BufWriter};
+
 use anyhow::{Context, Result, bail};
 use serde::{Deserialize, Serialize};
 
 use crate::{
-  config::{ServerConfig, ensure_data_dir, resolve_data_dir},
+  config::{ServerConfig, resolve_data_dir},
   constants::config::{DAEMON_LOG_FILENAME, DAEMON_PID_FILENAME},
 };
 
+#[cfg(unix)]
+use crate::config::ensure_data_dir;
+
 /// File descriptor the supervised server reports readiness on.
+#[cfg(unix)]
 const READY_FD: i32 = 3;
+#[cfg(unix)]
 const READY_TIMEOUT: Duration = Duration::from_secs(30);
+#[cfg(unix)]
 const STOP_POLL_INTERVAL: Duration = Duration::from_millis(100);
 
 /// One-shot readiness reporter used by the supervised server process.

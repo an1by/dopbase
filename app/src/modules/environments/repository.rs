@@ -59,14 +59,6 @@ pub async fn resolve_all(
   }
 }
 
-pub async fn resolve(
-  pool: &SqlitePool,
-  reference: &str,
-) -> Result<Option<EnvironmentResponse>, sqlx::Error> {
-  let matches = resolve_all(pool, reference).await?;
-  Ok(matches.into_iter().next())
-}
-
 async fn resolve_qualified(
   pool: &SqlitePool,
   workspace: &str,

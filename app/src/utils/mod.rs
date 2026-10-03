@@ -1,3 +1,4 @@
+pub mod cli_path_argument;
 pub mod environment_reference;
 pub mod project_reference;
 pub mod generator;

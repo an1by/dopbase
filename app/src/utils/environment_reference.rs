@@ -15,12 +15,12 @@ pub enum EnvironmentReference {
 }
 
 pub fn parse(reference: &str) -> Option<EnvironmentReference> {
-  let reference = reference.trim();
+  let reference = crate::utils::cli_path_argument::normalize(reference);
   if reference.is_empty() {
     return None;
   }
   if reference.starts_with(ENVIRONMENT_ID_PREFIX) {
-    return Some(EnvironmentReference::Id(reference.to_owned()));
+    return Some(EnvironmentReference::Id(reference));
   }
   let reference = if reference.starts_with('/') {
     let path = reference.trim_start_matches('/');
@@ -37,7 +37,7 @@ pub fn parse(reference: &str) -> Option<EnvironmentReference> {
     }
     format!("{}/{}", DEFAULT_WORKSPACE_NAME, path)
   } else {
-    reference.to_owned()
+    reference
   };
   let parts = reference
     .split('/')

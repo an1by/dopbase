@@ -424,6 +424,7 @@ pub fn dopbase_home() -> PathBuf {
 }
 
 pub fn ensure_data_dir(path: &Path) -> Result<()> {
+  #[cfg(unix)]
   let existed = path.exists();
   fs::create_dir_all(path)
     .with_context(|| format!("failed to create data directory {}", path.display()))?;

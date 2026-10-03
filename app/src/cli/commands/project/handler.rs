@@ -66,6 +66,7 @@ pub(crate) async fn execute(
       } else if let Some(location) = location {
         output::print_fields(&[
           ("Project:", location.name),
+          ("Workspace:", location.workspace_name),
           ("Workspace root:", location.workspace_root),
           ("Directory:", location.relative_path),
         ]);
@@ -108,12 +109,17 @@ pub(crate) async fn execute(
       if json_output {
         output::print_json(&data)?;
       } else {
-        output::print_fields(&[
+        let location = project_location_fields(&api, &data).await?;
+        let mut fields = vec![
           ("Name:", output::string(&data, "name")),
           ("ID:", output::string(&data, "id")),
+        ];
+        fields.extend(location);
+        fields.extend([
           ("Created:", output::timestamp(&data, "createdAt")),
           ("Updated:", output::timestamp(&data, "updatedAt")),
         ]);
+        output::print_fields(&fields);
       }
     }
     ProjectCommand::Rename { project, new_name } => {
@@ -184,6 +190,45 @@ pub(crate) async fn execute(
 
 fn api_project_ref(reference: &str) -> Result<String> {
   project_reference::to_api_reference(reference).map_err(|error| anyhow::anyhow!(error))
+}
+
+async fn project_location_fields(
+  api: &ApiClient,
+  project: &Value,
+) -> Result<Vec<(&'static str, String)>> {
+  let workspace_id = project
+    .get("workspaceId")
+    .and_then(Value::as_str)
+    .filter(|value| !value.is_empty());
+  if workspace_id.is_none() {
+    return Ok(vec![("Workspace:", "not assigned".into())]);
+  }
+  let workspace_id = workspace_id.unwrap();
+  let workspace_name = workspace_name(api, workspace_id).await?;
+  let directory = project
+    .get("relativePath")
+    .and_then(Value::as_str)
+    .filter(|value| !value.is_empty())
+    .unwrap_or(".");
+  Ok(vec![
+    ("Workspace:", workspace_name),
+    ("Directory:", directory.into()),
+  ])
+}
+
+async fn workspace_name(
+  api: &ApiClient,
+  workspace_id: &str,
+) -> Result<String> {
+  let workspaces = api
+    .request(Method::GET, api_paths::workspaces::COLLECTION, None)
+    .await?;
+  let name = output::array(&workspaces)
+    .iter()
+    .find(|workspace| workspace.get("id").and_then(Value::as_str) == Some(workspace_id))
+    .map(|workspace| output::string(workspace, "name"))
+    .filter(|name| !name.is_empty());
+  name.ok_or_else(|| anyhow::anyhow!("workspace not found: {workspace_id}"))
 }
 
 async fn resolve_workspace_id(
