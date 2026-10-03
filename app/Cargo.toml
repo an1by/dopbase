@@ -92,3 +92,11 @@ opt-level = "z"
 strip = "symbols"
 lto = "thin"
 codegen-units = 1
+
+# Container images: faster CI builds; release binaries for distribution stay on [profile.release].
+[profile.docker]
+inherits = "release"
+opt-level = 3
+strip = "symbols"
+lto = false
+codegen-units = 16

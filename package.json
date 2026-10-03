@@ -12,6 +12,7 @@
     "prepare:app": "test -f dist/index.html || bun run build:ui",
     "build": "bun run build:ui && bun run build:app && bun run build:docs",
     "build:ui": "bun run clean:ui && bun run typecheck:ui && vite build",
+    "build:ui:docker": "vite build",
     "build:app": "cargo build --manifest-path app/Cargo.toml --release",
     "build:docs": "bun run clean:docs && vitepress build docs && bun ./scripts/docs-postbuild.mjs",
     "test": "bun run test:ui && bun run test:app && bun run test:docs",

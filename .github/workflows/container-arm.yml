@@ -1,23 +1,16 @@
-name: Container image
+name: Container image (arm64)
 
 on:
-  push:
-    branches:
-      - main
   workflow_dispatch:
 
 permissions:
   contents: read
   packages: write
 
-concurrency:
-  group: container-${{ github.workflow }}-${{ github.ref }}
-  cancel-in-progress: true
-
 jobs:
-  publish:
-    name: Build and push GHCR image
-    runs-on: ubuntu-24.04
+  publish-arm64:
+    name: Build and push arm64 GHCR image
+    runs-on: ubuntu-24.04-arm
     timeout-minutes: 45
     steps:
       - name: Check out repository
@@ -53,15 +46,15 @@ jobs:
           context: .
           file: Dockerfile
           push: true
-          platforms: linux/amd64
+          platforms: linux/arm64
           tags: |
-            ghcr.io/${{ github.repository }}:main
-            ghcr.io/${{ github.repository }}:latest
-            ghcr.io/${{ github.repository }}:${{ steps.product.outputs.version }}
-            ghcr.io/${{ github.repository }}:${{ steps.git.outputs.short }}
+            ghcr.io/${{ github.repository }}:main-arm64
+            ghcr.io/${{ github.repository }}:latest-arm64
+            ghcr.io/${{ github.repository }}:${{ steps.product.outputs.version }}-arm64
+            ghcr.io/${{ github.repository }}:${{ steps.git.outputs.short }}-arm64
           cache-from: |
-            type=gha
-            type=registry,ref=ghcr.io/${{ github.repository }}:buildcache
+            type=gha,scope=arm64
+            type=registry,ref=ghcr.io/${{ github.repository }}:buildcache-arm64
           cache-to: |
-            type=gha,mode=max
-            type=registry,ref=ghcr.io/${{ github.repository }}:buildcache,mode=max
+            type=gha,mode=max,scope=arm64
+            type=registry,ref=ghcr.io/${{ github.repository }}:buildcache-arm64,mode=max
