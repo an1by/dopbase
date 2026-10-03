@@ -106,7 +106,7 @@ async function confirmEnvDelete(): Promise<void> {
 
 <template>
   <aside
-    class="fixed inset-y-0 left-0 z-[60] flex h-svh w-[min(100%,18rem)] shrink-0 flex-col border-r border-line bg-panel/95 shadow-xl transition-transform duration-200 ease-out md:sticky md:z-auto md:w-72 md:translate-x-0 md:bg-panel/60 md:shadow-none"
+    class="fixed inset-y-0 left-0 z-[60] flex h-svh w-[min(100%,18rem)] shrink-0 flex-col border-r border-line bg-panel/95 shadow-xl transition-transform duration-200 ease-out md:sticky md:z-auto md:w-60 md:translate-x-0 md:bg-panel/60 md:shadow-none min-[1120px]:w-72"
     :class="mobileOpen ? 'translate-x-0' : '-translate-x-full md:translate-x-0'"
     aria-label="Projects">
     <WorkspaceControls :controller="controller" />

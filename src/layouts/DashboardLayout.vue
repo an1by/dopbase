@@ -86,42 +86,48 @@ const consoleLabel = computed(() =>
 <template>
   <div class="flex min-h-svh">
     <aside
-      class="sticky top-0 hidden h-svh w-60 shrink-0 flex-col border-r border-line bg-panel md:flex">
+      class="sticky top-0 hidden h-svh w-16 shrink-0 flex-col border-r border-line bg-panel md:flex min-[1120px]:w-60"
+      aria-label="Main navigation">
       <!-- Brand -->
       <div
-        class="flex h-[4.75rem] min-h-[4.75rem] shrink-0 items-center gap-2.5 border-b border-line-soft px-5 py-4">
+        class="flex h-[4.75rem] min-h-[4.75rem] shrink-0 items-center justify-center gap-2.5 border-b border-line-soft px-2 py-4 min-[1120px]:justify-start min-[1120px]:px-5">
         <div
-          class="flex h-8 w-8 items-center justify-center rounded-control border border-accent/40 bg-accent-soft text-accent-strong">
+          class="flex h-8 w-8 shrink-0 items-center justify-center rounded-control border border-accent/40 bg-accent-soft text-accent-strong"
+          :title="`Dopbase ${consoleLabel}`">
           <DopbaseIcon class="h-5 w-5" />
         </div>
-        <div class="leading-tight">
+        <div class="hidden min-w-0 leading-tight min-[1120px]:block">
           <p class="font-mono text-sm font-semibold text-ink-strong">Dopbase</p>
           <p class="text-xs text-ink-muted">{{ consoleLabel }}</p>
         </div>
       </div>
 
       <!-- Primary navigation -->
-      <nav class="flex flex-col gap-1 px-3 py-4">
+      <nav class="flex flex-col gap-1 px-2 py-4 min-[1120px]:px-3">
         <RouterLink
           v-for="item in visibleNavItems"
           :key="item.name"
           :to="{ name: item.name }"
-          class="flex items-center gap-2.5 rounded-control px-3 py-2 text-sm transition-colors"
+          class="flex items-center justify-center gap-2.5 rounded-control px-2 py-2 text-sm transition-colors min-[1120px]:justify-start min-[1120px]:px-3"
           :class="
             isActive(item)
               ? 'bg-accent-soft text-ink-strong'
               : 'text-ink-muted hover:bg-raised hover:text-ink-strong'
           "
-          :aria-current="isActive(item) ? 'page' : undefined">
-          <component :is="item.icon" class="h-4 w-4" />
-          <span>{{ item.label }}</span>
+          :aria-current="isActive(item) ? 'page' : undefined"
+          :title="item.label"
+          :aria-label="item.label">
+          <component :is="item.icon" class="h-4 w-4 shrink-0" />
+          <span class="hidden min-[1120px]:inline">{{ item.label }}</span>
         </RouterLink>
       </nav>
 
       <!-- Account footer -->
-      <div class="mt-auto border-t border-line-soft px-4 py-3.5">
-        <div class="flex items-center justify-between gap-2">
-          <div class="min-w-0">
+      <div
+        class="mt-auto border-t border-line-soft px-2 py-3.5 min-[1120px]:px-4">
+        <div
+          class="flex items-center justify-center gap-2 min-[1120px]:justify-between">
+          <div class="hidden min-w-0 min-[1120px]:block">
             <p class="text-xs uppercase tracking-wide text-ink-faint">
               signed in as
             </p>
