@@ -43,7 +43,7 @@ async function remove(): Promise<void> {
 <template>
   <div class="shrink-0 border-b border-line-soft">
     <div
-      class="flex items-center gap-2 px-4 py-4 md:gap-2.5 md:px-5"
+      class="flex h-[4.75rem] min-h-[4.75rem] items-center gap-2.5 px-5 py-4"
       data-testid="workspace-toolbar">
       <DbSelect
         compact

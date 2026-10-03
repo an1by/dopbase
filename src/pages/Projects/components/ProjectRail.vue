@@ -211,7 +211,6 @@ async function confirmEnvDelete(): Promise<void> {
                 All environments
               </button>
             </li>
-            <li v-if="project.relativePath" class="break-all px-2 py-1 text-xs text-ink-faint">{{ project.relativePath }}</li>
             <li v-for="environment in environments ?? []" :key="environment.id">
               <div
                 class="group flex items-center gap-1 rounded-control px-2 py-1.5"

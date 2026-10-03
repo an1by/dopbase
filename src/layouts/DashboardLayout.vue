@@ -89,7 +89,7 @@ const consoleLabel = computed(() =>
       class="sticky top-0 hidden h-svh w-60 shrink-0 flex-col border-r border-line bg-panel md:flex">
       <!-- Brand -->
       <div
-        class="flex items-center gap-2.5 border-b border-line-soft px-5 py-4">
+        class="flex h-[4.75rem] min-h-[4.75rem] shrink-0 items-center gap-2.5 border-b border-line-soft px-5 py-4">
         <div
           class="flex h-8 w-8 items-center justify-center rounded-control border border-accent/40 bg-accent-soft text-accent-strong">
           <DopbaseIcon class="h-5 w-5" />
