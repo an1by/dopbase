@@ -93,6 +93,7 @@ async function remove(): Promise<void> {
   <DirectoryDialog
     :open="dialog !== null"
     kind="workspace"
+    :workspace-mode="dialog === 'edit' ? 'edit' : 'create'"
     :title="dialog === 'edit' ? 'Workspace settings' : 'New workspace'"
     :initial-name="dialog === 'edit' ? controller.workspace.value?.name : ''"
     :initial-path="dialog === 'edit' ? controller.workspace.value?.rootPath : ''"
@@ -103,7 +104,7 @@ async function remove(): Promise<void> {
               name,
               rootPath,
             })
-          : controller.createWorkspace({ name, rootPath })
+          : controller.createWorkspace({ name })
     "
     @close="dialog = null" />
   <DbConfirmDialog

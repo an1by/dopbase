@@ -13,9 +13,21 @@ pub struct Workspace {
   pub updated_at: String,
 }
 
+pub const DEFAULT_WORKSPACE_ROOT_PATH: &str = "/workspace";
+
 #[derive(Deserialize, ToSchema)]
 #[serde(rename_all = "camelCase")]
-pub struct WorkspaceInput { pub name: String, pub root_path: String }
+pub struct CreateWorkspaceInput {
+  pub name: String,
+  pub root_path: Option<String>,
+}
+
+#[derive(Deserialize, ToSchema)]
+#[serde(rename_all = "camelCase")]
+pub struct UpdateWorkspaceInput {
+  pub name: String,
+  pub root_path: String,
+}
 
 pub fn validate_root(value: &str) -> Result<(), HttpError> {
   let path = value.replace('\\', "/");
@@ -46,23 +58,27 @@ pub async fn list(State(state): State<AppState>, identity: AuthIdentity) -> Resu
   Ok(HttpResponse::ok(rows, "WORKSPACES_FETCHED"))
 }
 
-#[utoipa::path(post, path=crate::constants::api::workspaces::COLLECTION, tag="workspaces", request_body=WorkspaceInput, responses((status=201, description="Workspace created")), security(("bearerAuth"=[]), ("cookieAuth"=[])))]
-pub async fn create(State(state): State<AppState>, headers: HeaderMap, identity: AuthIdentity, Json(input): Json<WorkspaceInput>) -> Result<HttpResponse<Workspace>, HttpError> {
+#[utoipa::path(post, path=crate::constants::api::workspaces::COLLECTION, tag="workspaces", request_body=CreateWorkspaceInput, responses((status=201, description="Workspace created")), security(("bearerAuth"=[]), ("cookieAuth"=[])))]
+pub async fn create(State(state): State<AppState>, headers: HeaderMap, identity: AuthIdentity, Json(input): Json<CreateWorkspaceInput>) -> Result<HttpResponse<Workspace>, HttpError> {
   require_mutation(&identity, &headers)?;
   let (admin_id, email) = require_project_manager(&identity)?;
   common::validate_slug(&input.name, "WORKSPACE_NAME_INVALID", "Workspace name")?;
-  validate_root(&input.root_path)?;
+  let root_path = input
+    .root_path
+    .as_deref()
+    .unwrap_or(DEFAULT_WORKSPACE_ROOT_PATH);
+  validate_root(root_path)?;
   let id = crate::services::token::public_id("wsp_");
   let now = chrono::Utc::now().to_rfc3339();
   let mut tx = state.db.pool().begin().await?;
-  let row = sqlx::query_as("INSERT INTO workspaces(id,name,root_path,created_at,updated_at) VALUES(?,?,?,?,?) RETURNING *").bind(&id).bind(&input.name).bind(&input.root_path).bind(&now).bind(&now).fetch_one(&mut *tx).await.map_err(database_error)?;
+  let row = sqlx::query_as("INSERT INTO workspaces(id,name,root_path,created_at,updated_at) VALUES(?,?,?,?,?) RETURNING *").bind(&id).bind(&input.name).bind(root_path).bind(&now).bind(&now).fetch_one(&mut *tx).await.map_err(database_error)?;
   common::audit(&mut *tx,"admin",Some(admin_id),Some(email),"workspace.created",None,None,Some("workspace"),Some(&id),serde_json::json!({"name":input.name})).await?;
   tx.commit().await?;
   Ok(HttpResponse::created(row, "WORKSPACE_CREATED"))
 }
 
-#[utoipa::path(patch, path=crate::constants::api::workspaces::ITEM, tag="workspaces", request_body=WorkspaceInput, params(("id"=String, Path)), responses((status=200, description="Workspace updated")), security(("bearerAuth"=[]), ("cookieAuth"=[])))]
-pub async fn update(State(state): State<AppState>, headers: HeaderMap, identity: AuthIdentity, Path(id): Path<String>, Json(input): Json<WorkspaceInput>) -> Result<HttpResponse<Workspace>, HttpError> {
+#[utoipa::path(patch, path=crate::constants::api::workspaces::ITEM, tag="workspaces", request_body=UpdateWorkspaceInput, params(("id"=String, Path)), responses((status=200, description="Workspace updated")), security(("bearerAuth"=[]), ("cookieAuth"=[])))]
+pub async fn update(State(state): State<AppState>, headers: HeaderMap, identity: AuthIdentity, Path(id): Path<String>, Json(input): Json<UpdateWorkspaceInput>) -> Result<HttpResponse<Workspace>, HttpError> {
   require_mutation(&identity, &headers)?;
   let (admin_id, email) = require_project_manager(&identity)?;
   common::validate_slug(&input.name, "WORKSPACE_NAME_INVALID", "Workspace name")?;
@@ -94,6 +110,6 @@ pub fn routes() -> Router<AppState> {
 }
 
 #[derive(OpenApi)]
-#[openapi(paths(list,create,update,delete), components(schemas(Workspace,WorkspaceInput)), tags((name="workspaces")))]
+#[openapi(paths(list,create,update,delete), components(schemas(Workspace,CreateWorkspaceInput,UpdateWorkspaceInput)), tags((name="workspaces")))]
 struct WorkspaceApi;
 pub fn openapi() -> utoipa::openapi::OpenApi { WorkspaceApi::openapi() }

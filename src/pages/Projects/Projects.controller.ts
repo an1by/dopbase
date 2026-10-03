@@ -217,11 +217,16 @@ export function useProjectsController() {
     },
   );
 
-  async function createWorkspace(input: workspacesApi.WorkspaceInput): Promise<void> {
+  async function createWorkspace(
+    input: workspacesApi.CreateWorkspaceInput,
+  ): Promise<void> {
     const created = await workspacesApi.createWorkspace(input);
     await loadWorkspaces(); selectWorkspace(created.id);
   }
-  async function updateWorkspace(id: string, input: workspacesApi.WorkspaceInput): Promise<void> {
+  async function updateWorkspace(
+    id: string,
+    input: workspacesApi.UpdateWorkspaceInput,
+  ): Promise<void> {
     await workspacesApi.updateWorkspace(id, input); await loadWorkspaces();
   }
   async function deleteWorkspace(id: string): Promise<void> {
