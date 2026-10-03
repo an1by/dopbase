@@ -230,7 +230,7 @@ watch(projectRef, () => {
             </div>
           </header>
 
-          <div class="p-6">
+          <div class="flex min-h-0 flex-1 flex-col overflow-hidden p-6">
             <SecretsPanel
               v-if="activeTab === 'secrets'"
               :environment-id="selectedEnvironment.id"

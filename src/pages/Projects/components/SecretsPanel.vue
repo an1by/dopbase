@@ -253,9 +253,9 @@ async function confirmDelete(): Promise<void> {
 </script>
 
 <template>
-  <div class="flex flex-col gap-4">
+  <div class="flex min-h-0 flex-1 flex-col gap-4">
     <header
-      class="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
+      class="flex shrink-0 flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
       <h3 class="shrink-0 text-sm font-semibold">
         Secrets
         <DbBadge v-if="secrets" class="ml-1">
@@ -492,10 +492,10 @@ async function confirmDelete(): Promise<void> {
     </template>
 
     <!-- Editor view -->
-    <template v-else>
+    <div v-else class="flex min-h-0 flex-1 flex-col gap-2 overflow-hidden">
       <!-- Slim toolbar: state badge + actions. Key/issue counts live in
            the editor's own status bar now. -->
-      <div class="flex items-center gap-2">
+      <div class="flex shrink-0 items-center gap-2">
         <DbBadge v-if="editorDirty" tone="warn">unsaved changes</DbBadge>
         <DbBadge v-else-if="editorContent !== null" tone="ok"> saved </DbBadge>
         <div class="ml-auto flex items-center gap-2">
@@ -521,12 +521,14 @@ async function confirmDelete(): Promise<void> {
 
       <div
         v-if="editorLoading"
-        class="space-y-3"
+        class="flex min-h-0 flex-1 flex-col"
         data-testid="env-editor-skeleton">
-        <DbSkeleton class="h-64 w-full rounded-card" />
+        <DbSkeleton class="min-h-0 flex-1 w-full rounded-card" />
       </div>
 
-      <div v-else-if="editorLoadError" class="flex flex-col items-start gap-3">
+      <div
+        v-else-if="editorLoadError"
+        class="flex shrink-0 flex-col items-start gap-3">
         <DbAlert>{{ editorLoadError }}</DbAlert>
         <DbButton size="sm" variant="secondary" @click="openEditor">
           Try again
@@ -535,7 +537,7 @@ async function confirmDelete(): Promise<void> {
 
       <div
         v-else-if="editorAwaitingReauth"
-        class="flex flex-col items-start gap-3"
+        class="flex shrink-0 flex-col items-start gap-3"
         data-testid="env-editor-awaiting-reauth">
         <DbAlert tone="info">
           Confirm your password in the dialog to load the secrets for editing.
@@ -545,16 +547,19 @@ async function confirmDelete(): Promise<void> {
         </DbButton>
       </div>
 
-      <template v-else-if="editorContent !== null">
+      <div
+        v-else-if="editorContent !== null"
+        class="flex min-h-0 flex-1 flex-col gap-2 overflow-hidden">
         <EnvFileEditor
           v-model="editorContent"
+          fill-height
           :issues="editorIssues"
           :disabled="editorSaving"
           :dirty="editorDirty"
           :subtitle="environmentName"
           @save="saveDraft" />
 
-        <DbAlert v-if="editorError">
+        <DbAlert v-if="editorError" class="shrink-0">
           {{ editorError }}
         </DbAlert>
 
@@ -562,7 +567,7 @@ async function confirmDelete(): Promise<void> {
         <div
           v-if="editorDiff"
           data-testid="env-editor-diff"
-          class="flex flex-col gap-3 rounded-card border border-line bg-panel p-4">
+          class="flex shrink-0 flex-col gap-3 rounded-card border border-line bg-panel p-4">
           <div class="flex items-center gap-2">
             <DbBadge tone="accent">Validate changes is ok</DbBadge>
             <span class="text-xs text-ink-muted">
@@ -599,8 +604,8 @@ async function confirmDelete(): Promise<void> {
             </DbButton>
           </div>
         </div>
-      </template>
-    </template>
+      </div>
+    </div>
 
     <!-- Create / edit secret -->
     <DbModal
