@@ -180,7 +180,8 @@ pub enum Command {
   /// Export secrets as dotenv, JSON, YAML, TOML, or a Docker env file.
   ///
   /// Requires --output <FILE> or --stdout. --force overwrites an existing
-  /// file. Every export requires interactive password confirmation.
+  /// file. Human export requires interactive password confirmation; runner tokens
+/// (`dbs_…`) export via the runtime API for non-interactive CI.
   #[command(after_help = export::HELP)]
   Export(ExportArgs),
   /// Manage CI/runner access tokens for an environment.
