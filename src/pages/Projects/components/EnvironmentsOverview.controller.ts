@@ -7,7 +7,6 @@ import { useReauthentication } from "~/composable";
 import {
   mergeLayoutValues,
   parseEnvFileLines,
-  serializeEnvFile,
   stripLayoutValues,
   type EnvFileIssue,
 } from "~/utils/env-file";
