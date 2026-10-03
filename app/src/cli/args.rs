@@ -8,7 +8,7 @@ use std::{
 use crate::{
   cli::commands::{
     admin, auth, backup, cache, client, docker, environment, export, import, init, project, restore,
-    run, secret, server, token, update,
+    run, secret, server, token, update, workspace,
   },
   constants::help::*,
 };
@@ -28,6 +28,7 @@ pub use run::RunArgs;
 pub use secret::SecretCommand;
 pub use server::{ServerCommand, ServerLaunchArgs, ServerStartArgs};
 pub use token::TokenCommand;
+pub use workspace::WorkspaceCommand;
 pub use docker::DockerCommand;
 
 #[derive(Parser, Debug)]
@@ -163,6 +164,12 @@ pub enum Command {
   Project {
     #[command(subcommand)]
     command: ProjectCommand,
+  },
+  /// Manage workspaces (create, list, show, update, delete).
+  #[command(name = "workspace", after_help = workspace::HELP)]
+  Workspace {
+    #[command(subcommand)]
+    command: WorkspaceCommand,
   },
   /// Manage environments inside a project (create, clone, list, rename, delete).
   #[command(after_help = environment::HELP)]

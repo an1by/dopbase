@@ -1,10 +1,11 @@
 use super::ProjectCommand;
-use crate::cli::{output, prompt};
+use crate::cli::{client::ApiClient, output, prompt};
 use crate::{
   cli::{client, local_config},
   constants::api as api_paths,
+  utils::project_reference,
 };
-use anyhow::Result;
+use anyhow::{Context, Result, bail};
 use reqwest::Method;
 use serde_json::{Value, json};
 
@@ -16,13 +17,34 @@ pub(crate) async fn execute(
   let api = client::human_client(server).await?;
   match command {
     ProjectCommand::Create { name } => {
+      let target = project_reference::parse_create_target(&name)
+        .map_err(|error| anyhow::anyhow!(error))?;
       let data = api
         .request(
           Method::POST,
           api_paths::projects::COLLECTION,
-          Some(json!({"name":name})),
+          Some(json!({"name": target.name})),
         )
         .await?;
+      if let (Some(workspace_name), Some(relative_path)) =
+        (&target.workspace, &target.relative_path)
+      {
+        let workspace_id = resolve_workspace_id(&api, workspace_name).await?;
+        let project_id = data
+          .get("id")
+          .and_then(Value::as_str)
+          .context("project response did not contain an ID")?;
+        api
+          .request(
+            Method::PATCH,
+            &api_paths::projects::location(project_id),
+            Some(json!({
+              "workspaceId": workspace_id,
+              "relativePath": relative_path,
+            })),
+          )
+          .await?;
+      }
       if json_output {
         output::print_json(&data)?;
       } else {
@@ -79,6 +101,7 @@ pub(crate) async fn execute(
       }
     }
     ProjectCommand::Show { project } => {
+      let project = api_project_ref(&project)?;
       let data = api
         .request(Method::GET, &api_paths::projects::item(&project), None)
         .await?;
@@ -94,6 +117,7 @@ pub(crate) async fn execute(
       }
     }
     ProjectCommand::Rename { project, new_name } => {
+      let project = api_project_ref(&project)?;
       let data = api
         .request(
           Method::PATCH,
@@ -112,6 +136,7 @@ pub(crate) async fn execute(
       }
     }
     ProjectCommand::Delete { project, yes } => {
+      let project = api_project_ref(&project)?;
       let detail = api
         .request(Method::GET, &api_paths::projects::item(&project), None)
         .await?;
@@ -155,4 +180,36 @@ pub(crate) async fn execute(
     }
   }
   Ok(0)
+}
+
+fn api_project_ref(reference: &str) -> Result<String> {
+  project_reference::to_api_reference(reference).map_err(|error| anyhow::anyhow!(error))
+}
+
+async fn resolve_workspace_id(
+  api: &ApiClient,
+  reference: &str,
+) -> Result<String> {
+  let workspaces = api
+    .request(Method::GET, api_paths::workspaces::COLLECTION, None)
+    .await?;
+  let reference = reference.trim();
+  let matches = output::array(&workspaces)
+    .iter()
+    .filter(|workspace| {
+      workspace.get("id").and_then(Value::as_str) == Some(reference)
+        || workspace.get("name").and_then(Value::as_str) == Some(reference)
+    })
+    .collect::<Vec<_>>();
+  match matches.len() {
+    0 => bail!("workspace not found: {reference}"),
+    1 => Ok(
+      matches[0]
+        .get("id")
+        .and_then(Value::as_str)
+        .context("workspace response did not contain an ID")?
+        .to_owned(),
+    ),
+    _ => bail!("multiple workspaces match {reference}; use a workspace ID"),
+  }
 }

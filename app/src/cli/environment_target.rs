@@ -5,6 +5,7 @@ use crate::{
 
 const TARGET_EXAMPLE: &str = "payment-service/local";
 const QUALIFIED_EXAMPLE: &str = "workspace1/api/staging";
+const DEFAULT_WORKSPACE_EXAMPLE: &str = "/storefront/staging";
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct EnvironmentTarget {
@@ -63,7 +64,7 @@ pub fn parse_name(value: &str) -> Result<String, String> {
 fn parse_target(value: &str) -> Result<EnvironmentTarget, String> {
   let parsed = parse(value).ok_or_else(|| {
     format!(
-      "environment target must use PROJECT/ENVIRONMENT or WORKSPACE/PROJECT/ENVIRONMENT, for example {TARGET_EXAMPLE} or {QUALIFIED_EXAMPLE}"
+      "environment target must use PROJECT/ENVIRONMENT, WORKSPACE/PROJECT/ENVIRONMENT, or /PROJECT/ENVIRONMENT for the default workspace, for example {TARGET_EXAMPLE}, {QUALIFIED_EXAMPLE}, or {DEFAULT_WORKSPACE_EXAMPLE}"
     )
   })?;
   let target = match parsed {

@@ -603,6 +603,7 @@ fn validates_qualified_environment_creation_targets() {
     "storefront/development",
     "prj_01JTEST/development",
     "workspace1/api/staging",
+    "/api/staging",
   ] {
     Cli::try_parse_from(["dopbase", "env", "create", target]).unwrap();
   }

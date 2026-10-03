@@ -26,6 +26,19 @@ fn parse_workspace_qualified_environment_reference() {
 }
 
 #[test]
+fn parse_default_workspace_shorthand_environment_reference() {
+  let parsed = parse("/api/production").unwrap();
+  assert_eq!(
+    parsed,
+    EnvironmentReference::Qualified {
+      workspace: "default".into(),
+      project_path: "api".into(),
+      environment: "production".into(),
+    }
+  );
+}
+
+#[test]
 fn parse_nested_project_path_environment_reference() {
   let parsed = parse("workspace1/services/api/staging").unwrap();
   assert_eq!(

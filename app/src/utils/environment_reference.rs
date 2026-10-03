@@ -1,4 +1,4 @@
-use crate::constants::tokens::ENVIRONMENT_ID_PREFIX;
+use crate::constants::{tokens::ENVIRONMENT_ID_PREFIX, workspaces::DEFAULT_WORKSPACE_NAME};
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum EnvironmentReference {
@@ -22,6 +22,23 @@ pub fn parse(reference: &str) -> Option<EnvironmentReference> {
   if reference.starts_with(ENVIRONMENT_ID_PREFIX) {
     return Some(EnvironmentReference::Id(reference.to_owned()));
   }
+  let reference = if reference.starts_with('/') {
+    let path = reference.trim_start_matches('/');
+    if path.is_empty() {
+      return None;
+    }
+    let segments = path
+      .split('/')
+      .map(str::trim)
+      .filter(|part| !part.is_empty())
+      .count();
+    if segments < 2 {
+      return None;
+    }
+    format!("{}/{}", DEFAULT_WORKSPACE_NAME, path)
+  } else {
+    reference.to_owned()
+  };
   let parts = reference
     .split('/')
     .map(str::trim)

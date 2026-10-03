@@ -29,5 +29,6 @@ Run 'dopbase help <command>' for details on any command.
 ";
 
 pub(crate) const ENVIRONMENT_ARG_HELP: &str = "Existing environment reference: an environment ID, \
-PROJECT/ENVIRONMENT, or WORKSPACE/PROJECT/ENVIRONMENT. PROJECT matches the project name or workspace directory. \
-For example: payment-service/production or workspace1/api/staging.";
+PROJECT/ENVIRONMENT, WORKSPACE/PROJECT/ENVIRONMENT, or /PROJECT/ENVIRONMENT for the default workspace. \
+PROJECT matches the project name or workspace directory. \
+For example: payment-service/production, workspace1/api/staging, or /api/production.";

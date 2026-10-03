@@ -80,6 +80,8 @@ pub enum EnvCommand {
 pub(crate) const HELP: &str = "\
 Examples:
   dopbase env create payment-service/production
+  dopbase env create /api/production
+  dopbase env create blipsu/api/production
   dopbase env clone payment-service/local production
   dopbase env list payment-service
   dopbase env show payment-service/production
@@ -95,6 +97,7 @@ Examples:
 const CREATE_HELP: &str = "\
 Examples:
   dopbase env create payment-service/production
+  dopbase env create /api/production
 ";
 const CLONE_HELP: &str = "\
 Examples:

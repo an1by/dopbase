@@ -62,6 +62,10 @@ pub mod auth {
 pub mod workspaces {
   pub const COLLECTION: &str = api_path!("/workspaces");
   pub const ITEM: &str = api_path!("/workspaces/{id}");
+
+  pub fn item(id: &str) -> String {
+    super::render(ITEM, &[("id", id)])
+  }
 }
 
 pub mod projects {
@@ -77,6 +81,10 @@ pub mod projects {
 
   pub fn environments(project_ref: &str) -> String {
     super::render(ENVIRONMENTS, &[("project_ref", &super::encode_project_ref(project_ref))])
+  }
+
+  pub fn location(project_ref: &str) -> String {
+    super::render(LOCATION, &[("project_ref", &super::encode_project_ref(project_ref))])
   }
 }
 

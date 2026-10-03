@@ -21,6 +21,7 @@ pub mod secret;
 pub mod server;
 pub mod token;
 pub mod update;
+pub mod workspace;
 
 #[doc(hidden)]
 pub use super::output::{render_fields, render_table};
@@ -98,6 +99,7 @@ async fn execute_client(
   match command {
     Command::Init(args) => init::execute(server, args, json_output).await,
     Command::Project { command } => project::execute(command, server, json_output).await,
+    Command::Workspace { command } => workspace::execute(command, server, json_output).await,
     Command::Env { command } => environment::execute(command, server, json_output).await,
     Command::Secret { command } => secret::execute(command, server, json_output).await,
     Command::Import(args) => import::execute(server, args, json_output).await,
