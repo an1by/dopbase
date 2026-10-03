@@ -54,7 +54,7 @@ describe("useLoginController", () => {
     expect(store.isAuthenticated).toBe(true);
   });
 
-  it.each(["/projects/p/acme/e/env_1", "/audit"])(
+  it.each(["/projects/default/acme/staging", "/audit"])(
     "routes to the safe internal redirect target %s after sign-in",
     async (redirect) => {
       routeQuery.redirect = redirect;

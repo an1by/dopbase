@@ -9,7 +9,7 @@ import { browserSession } from "~/tests/browser-session";
 const { routerPush, routerReplace, route } = vi.hoisted(() => ({
   routerPush: vi.fn(),
   routerReplace: vi.fn(),
-  route: { fullPath: "/projects/p/billing/e/env_1" },
+  route: { fullPath: "/projects/default/billing/staging" },
 }));
 
 vi.mock("vue-router", () => ({
@@ -79,7 +79,7 @@ describe("useDashboardLayoutController", () => {
 
     expect(routerReplace).toHaveBeenCalledWith({
       name: "login",
-      query: { redirect: "/projects/p/billing/e/env_1" },
+      query: { redirect: "/projects/default/billing/staging" },
     });
   });
 });

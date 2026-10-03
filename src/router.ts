@@ -4,10 +4,11 @@ import { installRouterGuards } from "./router.guards";
 /**
  * Route table for the Admin UI.
  *
- * Selection state lives in the URL: a project is addressed by its unique
- * name (`/projects/p/:projectRef`) and an environment by its immutable id
- * (`/projects/p/:projectRef/e/:environmentId`). No global "active
- * environment" is stored anywhere else.
+ * Project selection lives in the URL as
+ * `/projects/:workspaceSlug/:projectRef/:environmentName`, with `all` as the
+ * environment segment for the multi-environment overview. Legacy
+ * `/projects/p/...` routes remain for bookmarks and normalize in the
+ * projects controller.
  */
 export const router = createRouter({
   history: createWebHistory(),
@@ -34,28 +35,53 @@ export const router = createRouter({
       component: () => import("~/pages/Projects/Projects.page.vue"),
     },
     {
-      path: "/projects/p/:projectRef",
+      path: "/projects/:workspaceSlug/:projectRef",
       name: "project",
       component: () => import("~/pages/Projects/Projects.page.vue"),
     },
     {
-      path: "/projects/p/:projectRef/all",
+      path: "/projects/:workspaceSlug/:projectRef/all",
       name: "project-overview",
       component: () => import("~/pages/Projects/Projects.page.vue"),
     },
     {
-      path: "/projects/p/:projectRef/e/:environmentId",
+      path: "/projects/:workspaceSlug/:projectRef/:environmentName",
       name: "environment",
       component: () => import("~/pages/Projects/Projects.page.vue"),
     },
     {
-      path: "/projects/p/:projectRef/e/:environmentId/tokens",
+      path: "/projects/:workspaceSlug/:projectRef/:environmentName/tokens",
       name: "environment-tokens",
       component: () => import("~/pages/Projects/Projects.page.vue"),
     },
     {
-      path: "/projects/p/:projectRef/e/:environmentId/import",
+      path: "/projects/:workspaceSlug/:projectRef/:environmentName/import",
       name: "environment-import",
+      component: () => import("~/pages/Projects/ImportSecrets.page.vue"),
+    },
+    {
+      path: "/projects/p/:projectRef",
+      name: "project-legacy",
+      component: () => import("~/pages/Projects/Projects.page.vue"),
+    },
+    {
+      path: "/projects/p/:projectRef/all",
+      name: "project-overview-legacy",
+      component: () => import("~/pages/Projects/Projects.page.vue"),
+    },
+    {
+      path: "/projects/p/:projectRef/e/:environmentId",
+      name: "environment-legacy",
+      component: () => import("~/pages/Projects/Projects.page.vue"),
+    },
+    {
+      path: "/projects/p/:projectRef/e/:environmentId/tokens",
+      name: "environment-tokens-legacy",
+      component: () => import("~/pages/Projects/Projects.page.vue"),
+    },
+    {
+      path: "/projects/p/:projectRef/e/:environmentId/import",
+      name: "environment-import-legacy",
       component: () => import("~/pages/Projects/ImportSecrets.page.vue"),
     },
     {

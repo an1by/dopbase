@@ -11,11 +11,7 @@ export function useImportSecretsController() {
   const router = useRouter();
   const importStore = useImportStore();
 
-  const environmentId = computed(() =>
-    typeof route.params.environmentId === "string"
-      ? route.params.environmentId
-      : null,
-  );
+  const environmentId = computed(() => importStore.pending?.environmentId ?? null);
   const projectRef = computed(() =>
     typeof route.params.projectRef === "string"
       ? route.params.projectRef
@@ -23,13 +19,20 @@ export function useImportSecretsController() {
   );
   const valid = computed(
     () =>
-      environmentId.value !== null &&
-      importStore.pending?.environmentId === environmentId.value &&
-      (importStore.pending?.entries.length ?? 0) > 0,
+      importStore.pending !== null &&
+      (importStore.pending.entries.length ?? 0) > 0,
   );
 
-  if (!valid.value)
-    void router.replace({ name: "environment", params: route.params });
+  if (!valid.value) {
+    const params = route.params;
+    void router.replace({
+      name:
+        typeof params.environmentName === "string"
+          ? "environment"
+          : "environment-legacy",
+      params,
+    });
+  }
   onUnmounted(() => importStore.clear());
 
   const fileName = computed(() => importStore.pending?.fileName ?? "");

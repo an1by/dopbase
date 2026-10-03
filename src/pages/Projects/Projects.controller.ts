@@ -7,6 +7,11 @@ import * as tokensApi from "~/services/tokens.api";
 import * as workspacesApi from "~/services/workspaces.api";
 import type { AffectedCounts, Environment, Project } from "~/services";
 import { DEFAULT_WORKSPACE_ID } from "~/constants/workspaces";
+import {
+  isLegacyProjectPath,
+  projectLocationParams,
+  projectRouteParams,
+} from "~/router/project-paths";
 
 /**
  * Projects controller: project and environment rail data, URL-derived
@@ -24,11 +29,12 @@ export function useProjectsController() {
   const allProjects = ref<Project[] | null>(null);
   const workspaces = ref<workspacesApi.Workspace[]>([]);
   const workspacesError = ref<string | null>(null);
-  const workspaceId = ref(
-    typeof route.query?.workspace === "string" && route.query.workspace
-      ? route.query.workspace
-      : DEFAULT_WORKSPACE_ID,
+  const workspaceSlugParam = computed(() =>
+    typeof route.params.workspaceSlug === "string"
+      ? route.params.workspaceSlug
+      : null,
   );
+  const workspaceId = ref(DEFAULT_WORKSPACE_ID);
   const projects = computed(
     () =>
       allProjects.value?.filter(
@@ -49,40 +55,122 @@ export function useProjectsController() {
       ? route.params.projectRef
       : null,
   );
-  const environmentId = computed(() =>
+  const environmentNameParam = computed(() =>
+    typeof route.params.environmentName === "string"
+      ? route.params.environmentName
+      : null,
+  );
+  const legacyEnvironmentId = computed(() =>
     typeof route.params.environmentId === "string"
       ? route.params.environmentId
       : null,
   );
-  const isProjectOverview = computed(() => route.name === "project-overview");
+  const isProjectOverview = computed(
+    () =>
+      route.name === "project-overview" ||
+      route.name === "project-overview-legacy",
+  );
   const activeTab = computed(() =>
-    route.name === "environment-tokens" ? "tokens" : "secrets",
+    route.name === "environment-tokens" ||
+    route.name === "environment-tokens-legacy"
+      ? "tokens"
+      : "secrets",
   );
 
   const project = computed(() => {
     const ref = projectRef.value;
     const list = allProjects.value;
     if (!ref || !list) return null;
-    if (ref.startsWith("prj_")) {
-      return list.find((candidate) => candidate.id === ref) ?? null;
-    }
-    const inWorkspace = list.filter(
+    const scoped = list.filter(
       (candidate) =>
-        candidate.name === ref &&
         (candidate.workspaceId ?? DEFAULT_WORKSPACE_ID) === workspaceId.value,
     );
+    if (ref.startsWith("prj_")) {
+      return scoped.find((candidate) => candidate.id === ref) ?? null;
+    }
+    const inWorkspace = scoped.filter((candidate) => candidate.name === ref);
     if (inWorkspace.length === 1) return inWorkspace[0];
     const matches = list.filter(
       (candidate) => candidate.name === ref || candidate.id === ref,
     );
     return matches.length === 1 ? matches[0] : null;
   });
-  const selectedEnvironment = computed(
-    () =>
-      environments.value?.find(
-        (candidate) => candidate.id === environmentId.value,
-      ) ?? null,
+  const selectedEnvironment = computed(() => {
+    const list = environments.value;
+    if (!list) return null;
+    const byName = environmentNameParam.value;
+    if (byName) {
+      return list.find((candidate) => candidate.name === byName) ?? null;
+    }
+    const legacyId = legacyEnvironmentId.value;
+    if (legacyId) {
+      return list.find((candidate) => candidate.id === legacyId) ?? null;
+    }
+    return null;
+  });
+  const environmentId = computed(
+    () => selectedEnvironment.value?.id ?? null,
   );
+
+  function locationParams(environmentName?: string) {
+    const slug = workspace.value?.name ?? workspaceSlugParam.value;
+    const ref = projectRef.value;
+    if (!slug || !ref) {
+      throw new Error("workspace and project must be selected");
+    }
+    return projectLocationParams(slug, ref, environmentName);
+  }
+
+  function environmentRouteName(
+    tab: "secrets" | "tokens" = "secrets",
+  ): "environment" | "environment-tokens" {
+    return tab === "tokens" ? "environment-tokens" : "environment";
+  }
+
+  function canonicalizeLegacyRoute(): void {
+    if (!isLegacyProjectPath(route.path)) return;
+    const slug = workspace.value?.name;
+    const ref = projectRef.value;
+    if (!slug || !ref) return;
+    if (isProjectOverview.value) {
+      router.replace({
+        name: "project-overview",
+        params: projectRouteParams(locationParams()),
+      });
+      return;
+    }
+    const env =
+      selectedEnvironment.value ??
+      (legacyEnvironmentId.value
+        ? environments.value?.find(
+            (item) => item.id === legacyEnvironmentId.value,
+          )
+        : null);
+    if (!env) return;
+    const target =
+      route.name === "environment-tokens-legacy"
+        ? "environment-tokens"
+        : route.name === "environment-import-legacy"
+          ? "environment-import"
+          : route.name === "environment-legacy"
+            ? "environment"
+            : route.name === "project-legacy"
+              ? "project"
+              : null;
+    if (!target || target === "project") {
+      if (route.name === "project-legacy") {
+        router.replace({
+          name: "project",
+          params: projectRouteParams(locationParams()),
+        });
+      }
+      return;
+    }
+    router.replace({
+      name: target,
+      params: projectRouteParams(locationParams(env.name)),
+    });
+  }
 
   async function loadProjects(): Promise<void> {
     projectsRequest?.abort();
@@ -93,9 +181,19 @@ export function useProjectsController() {
       const result = await projectsApi.listProjects(request.signal);
       if (!request.signal.aborted) {
         allProjects.value = result;
-        const active = result.find((item) => item.id === projectRef.value || item.name === projectRef.value);
-        if (active) {
-          workspaceId.value = active.workspaceId ?? DEFAULT_WORKSPACE_ID;
+        if (workspaceSlugParam.value) {
+          const match = workspaces.value.find(
+            (item) => item.name === workspaceSlugParam.value,
+          );
+          if (match) workspaceId.value = match.id;
+        } else {
+          const active = result.find(
+            (item) =>
+              item.id === projectRef.value || item.name === projectRef.value,
+          );
+          if (active) {
+            workspaceId.value = active.workspaceId ?? DEFAULT_WORKSPACE_ID;
+          }
         }
       }
     } catch {
@@ -139,6 +237,20 @@ export function useProjectsController() {
   }
 
   watch(projectRef, loadEnvironments, { immediate: true });
+  watch(
+    [workspaceSlugParam, workspaces],
+    () => {
+      const slug = workspaceSlugParam.value;
+      if (!slug) return;
+      const match = workspaces.value.find((item) => item.name === slug);
+      if (match) workspaceId.value = match.id;
+    },
+    { immediate: true },
+  );
+  watch(
+    [project, environments, selectedEnvironment, () => route.fullPath],
+    () => canonicalizeLegacyRoute(),
+  );
   onMounted(loadProjects);
   onMounted(loadWorkspaces);
   onUnmounted(() => {
@@ -148,31 +260,46 @@ export function useProjectsController() {
 
   // Landing on /projects with existing projects opens the first project.
   watch(projects, (list) => {
-    if (list && list.length > 0 && !projectRef.value) {
-      router.replace({
-        name: "project",
-        params: { projectRef: list[0].name },
-      });
-    }
+    if (!list || list.length === 0 || projectRef.value) return;
+    const slug = workspace.value?.name;
+    if (!slug) return;
+    router.replace({
+      name: "project",
+      params: projectRouteParams(
+        projectLocationParams(slug, list[0].name),
+      ),
+    });
   });
 
   // Opening a project without an environment selects its first one.
-  watch([environments, environmentId], ([list, id]) => {
-    if (isProjectOverview.value) return;
-    if (route.name === "project" && list && list.length > 0 && !id) {
-      router.replace({
-        name: "environment",
-        params: {
-          projectRef: projectRef.value as string,
-          environmentId: list[0].id,
-        },
-      });
-    }
-  });
+  watch(
+    [environments, environmentNameParam, legacyEnvironmentId, project],
+    ([list, , , activeProject]) => {
+      if (isProjectOverview.value) return;
+      const onProject =
+        route.name === "project" || route.name === "project-legacy";
+      if (!onProject || !list || list.length === 0 || !activeProject) return;
+      if (list[0].projectId !== activeProject.id) return;
+      if (environmentNameParam.value || legacyEnvironmentId.value) return;
+      try {
+        router.replace({
+          name: "environment",
+          params: projectRouteParams(locationParams(list[0].name)),
+        });
+      } catch {
+        // Workspace or project not ready yet.
+      }
+    },
+  );
 
   function selectProject(refName: string): void {
     if (refName === projectRef.value) return;
-    router.push({ name: "project", params: { projectRef: refName } });
+    const slug = workspace.value?.name;
+    if (!slug) return;
+    router.push({
+      name: "project",
+      params: projectRouteParams(projectLocationParams(slug, refName)),
+    });
   }
 
   function ensureWorkspaceSelected(): void {
@@ -200,8 +327,18 @@ export function useProjectsController() {
 
   function selectWorkspace(id: string): void {
     workspaceId.value = id;
+    const ws = workspaces.value.find((item) => item.id === id);
     const first = projects.value?.[0];
-    router.push(first ? { name: "project", params: { projectRef: first.name } } : { name: "projects", query: { workspace: id } });
+    if (ws && first) {
+      router.push({
+        name: "project",
+        params: projectRouteParams(
+          projectLocationParams(ws.name, first.name),
+        ),
+      });
+      return;
+    }
+    router.push({ name: "projects" });
   }
 
   watch(project, (value) => {
@@ -210,7 +347,7 @@ export function useProjectsController() {
   watch(
     () => route.query?.workspace,
     (value) => {
-      if (projectRef.value) return;
+      if (projectRef.value || workspaceSlugParam.value) return;
       workspaceId.value =
         typeof value === "string" && value ? value : DEFAULT_WORKSPACE_ID;
       ensureWorkspaceSelected();
@@ -240,25 +377,29 @@ export function useProjectsController() {
   }
 
   function showAllEnvironments(): void {
-    if (projectRef.value) router.push({ name: "project-overview", params: { projectRef: projectRef.value } });
+    if (!projectRef.value) return;
+    router.push({
+      name: "project-overview",
+      params: projectRouteParams(locationParams()),
+    });
   }
 
   function selectEnvironment(id: string): void {
     if (!projectRef.value || id === environmentId.value) return;
+    const env = environments.value?.find((item) => item.id === id);
+    if (!env) return;
     router.push({
       name: "environment",
-      params: { projectRef: projectRef.value, environmentId: id },
+      params: projectRouteParams(locationParams(env.name)),
     });
   }
 
   function switchTab(tab: "secrets" | "tokens"): void {
-    if (!projectRef.value || !environmentId.value) return;
+    const env = selectedEnvironment.value;
+    if (!projectRef.value || !env) return;
     router.push({
-      name: tab === "tokens" ? "environment-tokens" : "environment",
-      params: {
-        projectRef: projectRef.value,
-        environmentId: environmentId.value,
-      },
+      name: environmentRouteName(tab),
+      params: projectRouteParams(locationParams(env.name)),
     });
   }
 
@@ -266,7 +407,14 @@ export function useProjectsController() {
     const created = await projectsApi.createProject(name);
     if (workspaceId.value) await projectsApi.setProjectLocation(created.id, workspaceId.value, name);
     await loadProjects();
-    router.push({ name: "project", params: { projectRef: created.name } });
+    const slug = workspace.value?.name;
+    if (!slug) return;
+    router.push({
+      name: "project",
+      params: projectRouteParams(
+        projectLocationParams(slug, created.name),
+      ),
+    });
   }
 
   async function renameProject(projectId: string, name: string): Promise<void> {
@@ -274,18 +422,22 @@ export function useProjectsController() {
     const updated = await projectsApi.renameProject(projectId, name);
     await loadProjects();
     if (!renamingActiveProject) return;
-    if (environmentId.value) {
+    const slug = workspace.value?.name;
+    if (!slug) return;
+    const env = selectedEnvironment.value;
+    if (env) {
       router.replace({
-        name: "environment",
-        params: {
-          projectRef: updated.name,
-          environmentId: environmentId.value,
-        },
+        name: environmentRouteName(
+          route.name === "environment-tokens" ? "tokens" : "secrets",
+        ),
+        params: projectRouteParams(
+          projectLocationParams(slug, updated.name, env.name),
+        ),
       });
     } else {
       router.replace({
         name: "project",
-        params: { projectRef: updated.name },
+        params: projectRouteParams(projectLocationParams(slug, updated.name)),
       });
     }
   }
@@ -307,13 +459,23 @@ export function useProjectsController() {
     await loadEnvironments();
     router.push({
       name: "environment",
-      params: { projectRef: projectRef.value, environmentId: created.id },
+      params: projectRouteParams(locationParams(created.name)),
     });
   }
 
   async function renameEnvironment(id: string, name: string): Promise<void> {
-    await environmentsApi.renameEnvironment(id, name);
+    const updated = await environmentsApi.renameEnvironment(id, name);
     await loadEnvironments();
+    if (environmentId.value !== id) return;
+    const routeName =
+      route.name === "environment-tokens" ||
+      route.name === "environment-tokens-legacy"
+        ? "environment-tokens"
+        : "environment";
+    router.replace({
+      name: routeName,
+      params: projectRouteParams(locationParams(updated.name)),
+    });
   }
 
   async function deleteEnvironment(id: string): Promise<AffectedCounts> {
@@ -322,7 +484,7 @@ export function useProjectsController() {
     if (environmentId.value === id && projectRef.value) {
       router.replace({
         name: "project",
-        params: { projectRef: projectRef.value },
+        params: projectRouteParams(locationParams()),
       });
     }
     return affected;
@@ -353,6 +515,7 @@ export function useProjectsController() {
     environmentsLoading,
     environmentsError,
     projectRef,
+    workspaceSlug: workspaceSlugParam,
     environmentId,
     activeTab,
     project,

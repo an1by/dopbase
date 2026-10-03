@@ -688,6 +688,7 @@ async function confirmDelete(): Promise<void> {
     <ImportSecretsDialog
       :open="showImport"
       :environment-id="environmentId"
+      :environment-name="environmentName"
       @close="showImport = false" />
     <ExportSecretsDialog
       :open="showExport"
