@@ -24,9 +24,19 @@ On macOS or Linux, install to `~/.local/bin`:
 curl -fsSL https://dopbase.com/install.sh | sh
 ```
 
-On Windows, run Dopbase in a Linux container with Docker. Dopbase does not
-provide a native Windows binary or PowerShell installer. See
-[Run Dopbase in Docker](/self-hosting/docker).
+On Windows, use PowerShell or Git Bash (MinGW):
+
+```powershell
+irm https://dopbase.com/install.ps1 | iex
+```
+
+```bash
+curl -fsSL https://dopbase.com/install.sh | sh
+```
+
+The default install directory is `%LOCALAPPDATA%\Dopbase\bin` on Windows. You
+can also install from the repository scripts in `scripts/install.ps1` and
+`scripts/install.sh`; see the [README install section](https://github.com/dopbase/dopbase#install-from-this-repository).
 
 Add the reported installation directory to `PATH` if the installer asks you
 to, then confirm the installation:
@@ -39,6 +49,10 @@ Set `DOPBASE_INSTALL_DIR` to choose another directory and
 `DOPBASE_VERSION` to install a specific release. Mirrors can set
 `DOPBASE_REPOSITORY_URL`. An explicit
 `DOPBASE_DOWNLOAD_BASE_URL` still overrides the complete release download path.
+
+On Windows, use `dopbase server start` in the foreground. Background server
+commands (`server up`, `down`, and `logs`) are available on macOS and Linux
+only.
 
 ## 2. Start the server
 
