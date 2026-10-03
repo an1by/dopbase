@@ -4,6 +4,7 @@ import { useProjectsController } from "./Projects.controller";
 import ProjectRail from "./components/ProjectRail.vue";
 import SecretsPanel from "./components/SecretsPanel.vue";
 import TokensPanel from "./components/TokensPanel.vue";
+import EnvironmentsOverviewPanel from "./components/EnvironmentsOverviewPanel.vue";
 import NameDialog from "./components/NameDialog.vue";
 import { DashboardLayout } from "~/layouts";
 import {
@@ -107,6 +108,24 @@ const { projects, project, selectedEnvironment, activeTab, selectProject } =
             </div>
           </div>
         </div>
+
+        <!-- All environments overview -->
+        <template v-else-if="controller.isProjectOverview && project">
+          <header
+            class="flex flex-wrap items-center gap-x-3 gap-y-2 border-b border-line px-6 py-4">
+            <nav
+              class="flex items-center gap-1.5 font-mono text-sm text-ink-muted">
+              <span class="text-ink-strong">{{ project.name }}</span>
+              <span class="text-ink-faint">/</span>
+              <span class="text-accent-strong">all environments</span>
+            </nav>
+          </header>
+          <div class="p-6">
+            <EnvironmentsOverviewPanel
+              :controller="controller"
+              :project-name="project.name" />
+          </div>
+        </template>
 
         <!-- Project selected but has no environments -->
         <div v-else-if="project && !selectedEnvironment" class="p-10">

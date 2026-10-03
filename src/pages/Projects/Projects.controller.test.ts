@@ -36,6 +36,9 @@ vi.mock("~/services/projects.api");
 vi.mock("~/services/environments.api");
 vi.mock("~/services/secrets.api");
 vi.mock("~/services/tokens.api");
+vi.mock("~/services/workspaces.api", () => ({
+  listWorkspaces: vi.fn().mockResolvedValue([]),
+}));
 
 const project = {
   id: "prj_1",

@@ -3,7 +3,9 @@ pub mod args;
 pub mod client;
 #[doc(hidden)]
 pub mod commands;
+mod container;
 mod docker_env;
+mod project_resolve;
 pub mod dotenv;
 #[doc(hidden)]
 pub mod environment_target;

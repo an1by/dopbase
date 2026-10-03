@@ -711,6 +711,7 @@ pub async fn restore_database_from_archive(
     sqlx::query("DELETE FROM environment_env_layout").execute(&mut *tx).await?;
     sqlx::query("DELETE FROM environments").execute(&mut *tx).await?;
     sqlx::query("DELETE FROM projects").execute(&mut *tx).await?;
+    sqlx::query("DELETE FROM workspaces").execute(&mut *tx).await?;
     sqlx::query("DELETE FROM sessions").execute(&mut *tx).await?;
     sqlx::query("DELETE FROM admins").execute(&mut *tx).await?;
     sqlx::query("DELETE FROM instance_metadata").execute(&mut *tx).await?;
@@ -724,7 +725,9 @@ pub async fn restore_database_from_archive(
     }
     sqlx::query("INSERT INTO service_accounts SELECT * FROM backup_db.service_accounts").execute(&mut *tx).await?;
     sqlx::query("INSERT INTO agent_tokens SELECT * FROM backup_db.agent_tokens").execute(&mut *tx).await?;
+    sqlx::query("INSERT INTO workspaces SELECT * FROM backup_db.workspaces").execute(&mut *tx).await?;
     sqlx::query("INSERT INTO projects SELECT * FROM backup_db.projects").execute(&mut *tx).await?;
+    sqlx::query("INSERT INTO project_locations SELECT * FROM backup_db.project_locations").execute(&mut *tx).await?;
     sqlx::query("INSERT INTO environments SELECT * FROM backup_db.environments").execute(&mut *tx).await?;
     sqlx::query("INSERT OR REPLACE INTO environment_env_layout SELECT * FROM backup_db.environment_env_layout").execute(&mut *tx).await?;
     sqlx::query("INSERT INTO secrets SELECT * FROM backup_db.secrets").execute(&mut *tx).await?;

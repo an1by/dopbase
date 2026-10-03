@@ -1,7 +1,7 @@
 use super::model::ProjectResponse;
 use sqlx::{Sqlite, SqlitePool, Transaction};
 pub async fn list(pool: &SqlitePool) -> Result<Vec<ProjectResponse>, sqlx::Error> {
-  sqlx::query_as("SELECT id,name,created_at,updated_at FROM projects ORDER BY name")
+  sqlx::query_as("SELECT p.id,p.name,l.workspace_id,l.relative_path,p.created_at,p.updated_at FROM projects p LEFT JOIN project_locations l ON l.project_id=p.id ORDER BY p.name")
     .fetch_all(pool)
     .await
 }
@@ -9,7 +9,7 @@ pub async fn find(
   pool: &SqlitePool,
   reference: &str,
 ) -> Result<Option<ProjectResponse>, sqlx::Error> {
-  sqlx::query_as("SELECT id,name,created_at,updated_at FROM projects WHERE id=? OR name=?")
+  sqlx::query_as("SELECT p.id,p.name,l.workspace_id,l.relative_path,p.created_at,p.updated_at FROM projects p LEFT JOIN project_locations l ON l.project_id=p.id WHERE p.id=? OR p.name=?")
     .bind(reference)
     .bind(reference)
     .fetch_optional(pool)
@@ -31,6 +31,8 @@ pub async fn insert(
   Ok(ProjectResponse {
     id: id.into(),
     name: name.into(),
+    workspace_id: None,
+    relative_path: None,
     created_at: now.into(),
     updated_at: now.into(),
   })

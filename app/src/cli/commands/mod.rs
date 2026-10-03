@@ -9,6 +9,7 @@ pub mod auth;
 pub mod backup;
 pub mod cache;
 pub mod client;
+pub mod docker;
 pub mod environment;
 pub mod export;
 pub mod import;
@@ -39,6 +40,9 @@ pub async fn execute(cli: Cli) -> Result<i32> {
   let server_argument = cli.server.clone();
   let data_dir = cli.data_dir.clone();
   let json_output = cli.json;
+  if let Some(container) = cli.container.clone() {
+    return crate::cli::container::execute_in_container(&container, cli);
+  }
   match cli.command {
     Command::Server { command } => {
       if server_argument.is_some() {
@@ -103,6 +107,7 @@ async fn execute_client(
     Command::Cache { command } => cache::execute(command, server, json_output),
     Command::Backup(args) => backup::execute(server, args, json_output).await,
     Command::Restore(args) => restore::execute(server, args, json_output).await,
+    Command::Docker { command } => docker::execute(server, command, json_output).await,
     _ => bail!("unsupported command"),
   }
 }

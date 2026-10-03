@@ -2,9 +2,12 @@
 import { ref } from "vue";
 import type { ProjectsController } from "~/pages/Projects/Projects.controller";
 import NameDialog from "./NameDialog.vue";
+import WorkspaceControls from "./WorkspaceControls.vue";
+import DirectoryDialog from "./DirectoryDialog.vue";
 import { DbConfirmDialog, DbSkeleton } from "~/components/ui";
 import {
   BoxIcon,
+  FolderIcon,
   LayersIcon,
   PencilIcon,
   PlusIcon,
@@ -38,6 +41,7 @@ type EnvDialogState =
 const projectDialog = ref<ProjectDialogState>(null);
 const envDialog = ref<EnvDialogState>(null);
 const projectDelete = ref<Project | null>(null);
+const projectLocation = ref<Project | null>(null);
 const envDelete = ref<Environment | null>(null);
 const deleteLoading = ref(false);
 const deleteError = ref<string | null>(null);
@@ -94,6 +98,7 @@ async function confirmEnvDelete(): Promise<void> {
 <template>
   <aside
     class="sticky top-0 flex h-svh w-72 shrink-0 flex-col border-r border-line bg-panel/60">
+    <WorkspaceControls :controller="controller" />
     <header class="flex items-center justify-between px-4 py-3.5">
       <h2 class="font-mono text-xs uppercase tracking-wider text-ink-faint">
         projects
@@ -154,6 +159,7 @@ async function confirmEnvDelete(): Promise<void> {
             </button>
             <span
               class="flex shrink-0 items-center opacity-0 transition-opacity group-hover:opacity-100 focus-within:opacity-100">
+              <button type="button" class="cursor-pointer rounded p-1 text-ink-faint hover:text-ink-strong" :aria-label="`Directory for ${project.name}`" @click="projectLocation = project"><FolderIcon class="h-3 w-3" /></button>
               <button
                 type="button"
                 class="cursor-pointer rounded p-1 text-ink-faint hover:text-ink-strong"
@@ -175,6 +181,8 @@ async function confirmEnvDelete(): Promise<void> {
           <ul
             v-if="isProjectActive(project)"
             class="mb-1 ml-4 flex flex-col gap-0.5 border-l border-line-soft pl-2 pt-0.5">
+            <li><button type="button" class="w-full cursor-pointer rounded-control px-2 py-1.5 text-left font-mono text-xs text-accent-strong hover:bg-raised" @click="controller.showAllEnvironments">All environments</button></li>
+            <li v-if="project.relativePath" class="break-all px-2 py-1 text-xs text-ink-faint">{{ project.relativePath }}</li>
             <li v-for="environment in environments ?? []" :key="environment.id">
               <div
                 class="group flex items-center gap-1 rounded-control px-2 py-1.5"
@@ -256,6 +264,7 @@ async function confirmEnvDelete(): Promise<void> {
     </div>
 
     <!-- Create / rename project -->
+    <DirectoryDialog :open="projectLocation !== null" kind="project" :title="`Directory for ${projectLocation?.name ?? ''}`" :workspaces="controller.workspaces?.value ?? []" :initial-workspace-id="projectLocation?.workspaceId ?? ''" :initial-path="projectLocation?.relativePath ?? projectLocation?.name" :action="(_name, path, workspaceId) => controller.setProjectLocation(projectLocation!.id, workspaceId || null, workspaceId ? path : null)" @close="projectLocation = null" />
     <NameDialog
       :open="projectDialog !== null"
       :title="

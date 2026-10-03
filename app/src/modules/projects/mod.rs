@@ -11,6 +11,7 @@ mod repository;
 pub mod service;
 pub fn routes() -> Router<AppState> {
   Router::new()
+    .route("/api/v1/projects/{project_ref}/location", axum::routing::patch(controller::location))
     .route(
       crate::constants::api::projects::COLLECTION,
       get(controller::list).post(controller::create),

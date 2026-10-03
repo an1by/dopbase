@@ -33,6 +33,26 @@ pub(crate) async fn execute(
         ));
       }
     }
+    ProjectCommand::Current => {
+      let location = crate::cli::project_resolve::resolve_project_from_cwd(&api).await?;
+      if json_output {
+        output::print_json(&serde_json::json!({
+          "project": location.as_ref().map(|item| &item.name),
+          "workspaceRoot": location.as_ref().map(|item| &item.workspace_root),
+          "relativePath": location.as_ref().map(|item| &item.relative_path),
+        }))?;
+      } else if let Some(location) = location {
+        output::print_fields(&[
+          ("Project:", location.name),
+          ("Workspace root:", location.workspace_root),
+          ("Directory:", location.relative_path),
+        ]);
+      } else {
+        output::print_text(
+          "No project is mapped to the current directory. Assign one in the Admin UI.",
+        );
+      }
+    }
     ProjectCommand::List => {
       let data = api
         .request(Method::GET, api_paths::projects::COLLECTION, None)

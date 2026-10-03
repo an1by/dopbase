@@ -39,6 +39,11 @@ export const router = createRouter({
       component: () => import("~/pages/Projects/Projects.page.vue"),
     },
     {
+      path: "/projects/p/:projectRef/all",
+      name: "project-overview",
+      component: () => import("~/pages/Projects/Projects.page.vue"),
+    },
+    {
       path: "/projects/p/:projectRef/e/:environmentId",
       name: "environment",
       component: () => import("~/pages/Projects/Projects.page.vue"),

@@ -25,6 +25,8 @@ const props = withDefaults(
     subtitle?: string;
     /** Marks the buffer as modified — drives the tab's dirty dot. */
     dirty?: boolean;
+    /** When set, highlights this line in every synced editor column. */
+    peerActiveLine?: number;
   }>(),
   {
     issues: () => [],
@@ -41,6 +43,8 @@ const emit = defineEmits<{
   "update:modelValue": [value: string];
   /** Cmd/Ctrl+S pressed — the parent owns the save flow. */
   save: [];
+  /** 1-based line index of the caret — used to sync multi-env editors. */
+  "caret-line": [line: number];
 }>();
 
 /** Gutter width in `ch` units. The textarea's left padding must match. */
@@ -78,10 +82,16 @@ const tokenClass: Record<EnvTokenType, string> = {
 const caretLine = ref(1);
 const caretCol = ref(1);
 
+function activeHighlightLine(line: number): boolean {
+  const peer = props.peerActiveLine;
+  return line + 1 === (peer && peer > 0 ? peer : caretLine.value);
+}
+
 function syncCaret(el: HTMLTextAreaElement): void {
   const lines = el.value.slice(0, el.selectionStart).split("\n");
   caretLine.value = lines.length;
   caretCol.value = (lines[lines.length - 1]?.length ?? 0) + 1;
+  emit("caret-line", caretLine.value);
 }
 
 function onCaretMove(event: Event): void {
@@ -160,14 +170,14 @@ defineExpose({ focus });
               :class="
                 errorLines.has(line + 1)
                   ? 'font-semibold text-crit'
-                  : line + 1 === caretLine
+                  : activeHighlightLine(line)
                     ? 'text-ink-strong'
                     : 'text-ink-faint'
               "
               >{{ line + 1 }}</span
             ><span
               class="min-w-0 flex-1 whitespace-pre-wrap break-words pr-[1ch]"
-              :class="line + 1 === caretLine ? 'bg-raised' : ''"
+              :class="activeHighlightLine(line) ? 'bg-raised' : ''"
               ><template v-if="tokens.length === 0">&#8203;</template
               ><span
                 v-for="(token, tokenIndex) in tokens"

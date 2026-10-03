@@ -7,8 +7,8 @@ use std::{
 
 use crate::{
   cli::commands::{
-    admin, auth, backup, cache, client, environment, export, import, init, project, restore, run,
-    secret, server, token, update,
+    admin, auth, backup, cache, client, docker, environment, export, import, init, project, restore,
+    run, secret, server, token, update,
   },
   constants::help::*,
 };
@@ -28,6 +28,7 @@ pub use run::RunArgs;
 pub use secret::SecretCommand;
 pub use server::{ServerCommand, ServerLaunchArgs, ServerStartArgs};
 pub use token::TokenCommand;
+pub use docker::DockerCommand;
 
 #[derive(Parser, Debug)]
 #[command(
@@ -58,6 +59,9 @@ pub struct Cli {
   /// Print machine-readable JSON instead of human-readable output, where supported.
   #[arg(long, global = true)]
   pub json: bool,
+  /// Run a local `admin` or `server` command inside a Docker container via `docker exec`.
+  #[arg(long, global = true, value_name = "CONTAINER", help = "Forward the command to `docker exec <CONTAINER> dopbase ...`")]
+  pub container: Option<String>,
   #[command(subcommand)]
   pub command: Command,
 }
@@ -218,6 +222,12 @@ pub enum Command {
   /// default. Specify -o/--output to also download and save locally.
   #[command(after_help = backup::HELP)]
   Backup(BackupArgs),
+  /// Inject secrets into Docker workflows (`run`, `compose`, `exec`, `env-file`).
+  #[command(after_help = docker::HELP)]
+  Docker {
+    #[command(subcommand)]
+    command: DockerCommand,
+  },
   /// Restore the instance from an encrypted .dop backup file.
   ///
   /// Restores all projects, environments, secrets, runner tokens, and admin

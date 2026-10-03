@@ -16,6 +16,10 @@ const LIST_HELP: &str = "\
 Examples:
   dopbase project list
 ";
+const CURRENT_HELP: &str = "\
+Examples:
+  dopbase project current
+";
 const SHOW_HELP: &str = "\
 Examples:
   dopbase project show payment-service
@@ -42,6 +46,9 @@ pub enum ProjectCommand {
   /// List accessible projects.
   #[command(after_help = LIST_HELP)]
   List,
+  /// Show the project mapped to the current working directory.
+  #[command(after_help = CURRENT_HELP)]
+  Current,
   /// Show project metadata.
   #[command(after_help = SHOW_HELP)]
   Show {

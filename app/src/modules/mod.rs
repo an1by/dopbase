@@ -16,6 +16,7 @@ pub mod secrets;
 pub mod service_accounts;
 pub mod tokens;
 pub mod users;
+pub mod workspaces;
 
 pub fn routes() -> Router<AppState> {
   Router::new()
@@ -23,6 +24,7 @@ pub fn routes() -> Router<AppState> {
     .merge(bootstrap::routes())
     .merge(auth::routes())
     .merge(projects::routes())
+    .merge(workspaces::routes())
     .merge(environments::routes())
     .merge(secrets::routes())
     .merge(service_accounts::routes())
@@ -38,6 +40,7 @@ pub fn openapi() -> OpenApi {
   doc.merge(bootstrap::doc::build());
   doc.merge(auth::doc::build());
   doc.merge(projects::doc::build());
+  doc.merge(workspaces::openapi());
   doc.merge(environments::doc::build());
   doc.merge(secrets::doc::build());
   doc.merge(service_accounts::doc::build());

@@ -4,6 +4,7 @@ import * as projectsApi from "~/services/projects.api";
 import * as environmentsApi from "~/services/environments.api";
 import * as secretsApi from "~/services/secrets.api";
 import * as tokensApi from "~/services/tokens.api";
+import * as workspacesApi from "~/services/workspaces.api";
 import type { AffectedCounts, Environment, Project } from "~/services";
 
 /**
@@ -19,7 +20,12 @@ export function useProjectsController() {
   const route = useRoute();
   const router = useRouter();
 
-  const projects = ref<Project[] | null>(null);
+  const allProjects = ref<Project[] | null>(null);
+  const workspaces = ref<workspacesApi.Workspace[]>([]);
+  const workspacesError = ref<string | null>(null);
+  const workspaceId = ref(typeof route.query?.workspace === "string" ? route.query.workspace : "");
+  const projects = computed(() => allProjects.value?.filter((item) => (item.workspaceId ?? "") === workspaceId.value) ?? null);
+  const workspace = computed(() => workspaces.value.find((item) => item.id === workspaceId.value) ?? null);
   const projectsError = ref<string | null>(null);
   const environments = ref<Environment[] | null>(null);
   const environmentsLoading = ref(false);
@@ -37,13 +43,14 @@ export function useProjectsController() {
       ? route.params.environmentId
       : null,
   );
+  const isProjectOverview = computed(() => route.name === "project-overview");
   const activeTab = computed(() =>
     route.name === "environment-tokens" ? "tokens" : "secrets",
   );
 
   const project = computed(
     () =>
-      projects.value?.find(
+      allProjects.value?.find(
         (candidate) =>
           candidate.name === projectRef.value ||
           candidate.id === projectRef.value,
@@ -63,11 +70,15 @@ export function useProjectsController() {
     projectsError.value = null;
     try {
       const result = await projectsApi.listProjects(request.signal);
-      if (!request.signal.aborted) projects.value = result;
+      if (!request.signal.aborted) {
+        allProjects.value = result;
+        const active = result.find((item) => item.id === projectRef.value || item.name === projectRef.value);
+        if (active) workspaceId.value = active.workspaceId ?? "";
+      }
     } catch {
       if (request.signal.aborted) return;
       projectsError.value = "Could not load projects.";
-      projects.value = null;
+      allProjects.value = null;
     }
   }
 
@@ -106,6 +117,7 @@ export function useProjectsController() {
 
   watch(projectRef, loadEnvironments, { immediate: true });
   onMounted(loadProjects);
+  onMounted(loadWorkspaces);
   onUnmounted(() => {
     projectsRequest?.abort();
     environmentsRequest?.abort();
@@ -123,6 +135,7 @@ export function useProjectsController() {
 
   // Opening a project without an environment selects its first one.
   watch([environments, environmentId], ([list, id]) => {
+    if (isProjectOverview.value) return;
     if (route.name === "project" && list && list.length > 0 && !id) {
       router.replace({
         name: "environment",
@@ -137,6 +150,39 @@ export function useProjectsController() {
   function selectProject(refName: string): void {
     if (refName === projectRef.value) return;
     router.push({ name: "project", params: { projectRef: refName } });
+  }
+
+  async function loadWorkspaces(): Promise<void> {
+    workspacesError.value = null;
+    try { workspaces.value = await workspacesApi.listWorkspaces(); }
+    catch { workspacesError.value = "Could not load workspaces."; }
+  }
+
+  function selectWorkspace(id: string): void {
+    workspaceId.value = id;
+    const first = projects.value?.[0];
+    router.push(first ? { name: "project", params: { projectRef: first.name } } : { name: "projects", query: { workspace: id } });
+  }
+
+  watch(project, (value) => { if (value) workspaceId.value = value.workspaceId ?? ""; });
+  watch(() => route.query?.workspace, (value) => { if (!projectRef.value) workspaceId.value = typeof value === "string" ? value : ""; });
+
+  async function createWorkspace(input: workspacesApi.WorkspaceInput): Promise<void> {
+    const created = await workspacesApi.createWorkspace(input);
+    await loadWorkspaces(); selectWorkspace(created.id);
+  }
+  async function updateWorkspace(id: string, input: workspacesApi.WorkspaceInput): Promise<void> {
+    await workspacesApi.updateWorkspace(id, input); await loadWorkspaces();
+  }
+  async function deleteWorkspace(id: string): Promise<void> {
+    await workspacesApi.deleteWorkspace(id); await loadWorkspaces(); selectWorkspace("");
+  }
+  async function setProjectLocation(id: string, workspaceId: string | null, path: string | null): Promise<void> {
+    await projectsApi.setProjectLocation(id, workspaceId, path); await loadProjects();
+  }
+
+  function showAllEnvironments(): void {
+    if (projectRef.value) router.push({ name: "project-overview", params: { projectRef: projectRef.value } });
   }
 
   function selectEnvironment(id: string): void {
@@ -160,6 +206,7 @@ export function useProjectsController() {
 
   async function createProject(name: string): Promise<void> {
     const created = await projectsApi.createProject(name);
+    if (workspaceId.value) await projectsApi.setProjectLocation(created.id, workspaceId.value, name);
     await loadProjects();
     router.push({ name: "project", params: { projectRef: created.name } });
   }
@@ -238,6 +285,9 @@ export function useProjectsController() {
   }
 
   return {
+    isProjectOverview,
+    workspaces, workspacesError, workspaceId, workspace, loadWorkspaces,
+    selectWorkspace, createWorkspace, updateWorkspace, deleteWorkspace, setProjectLocation, showAllEnvironments,
     projects,
     projectsError,
     loadProjects,
