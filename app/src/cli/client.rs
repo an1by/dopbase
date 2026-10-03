@@ -507,11 +507,19 @@ where
 }
 
 pub fn validate_runner_token(token: &str) -> Result<()> {
-  use crate::constants::tokens::RUNNER_TOKEN_PREFIX;
+  use crate::constants::tokens::{RUNNER_TOKEN_PREFIX, WORKSPACE_TOKEN_PREFIX};
+
+  let (prefix, label) = if token.starts_with(RUNNER_TOKEN_PREFIX) {
+    (RUNNER_TOKEN_PREFIX, "dbs_")
+  } else if token.starts_with(WORKSPACE_TOKEN_PREFIX) {
+    (WORKSPACE_TOKEN_PREFIX, "dbw_")
+  } else {
+    anyhow::bail!("Enter a Dopbase runner token beginning with dbs_ or dbw_.");
+  };
 
   let encoded = token
-    .strip_prefix(RUNNER_TOKEN_PREFIX)
-    .context("Enter a Dopbase runner token beginning with dbs_.")?;
+    .strip_prefix(prefix)
+    .context(format!("Enter a Dopbase runner token beginning with {label}."))?;
   if encoded.len() != 43
     || encoded
       .bytes()

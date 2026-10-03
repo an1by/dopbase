@@ -7,4 +7,6 @@ pub const ENVIRONMENT_ID_PREFIX: &str = "env_";
 pub const PROJECT_ID_PREFIX: &str = "prj_";
 pub const RUNNER_TOKEN_ID_PREFIX: &str = "tok_";
 pub const RUNNER_TOKEN_PREFIX: &str = "dbs_";
+pub const WORKSPACE_TOKEN_ID_PREFIX: &str = "wtk_";
+pub const WORKSPACE_TOKEN_PREFIX: &str = "dbw_";
 pub const SESSION_ID_PREFIX: &str = "ses_";

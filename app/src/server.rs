@@ -53,6 +53,7 @@ pub async fn build_state(config: ServerConfig) -> Result<AppState> {
     for table in [
       "audit_events",
       "runner_tokens",
+      "workspace_tokens",
       "agent_tokens",
       "secrets",
       "environment_env_layout",

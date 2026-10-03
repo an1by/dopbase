@@ -1,7 +1,7 @@
 use super::{model::*, repository};
 use crate::modules::common;
 use crate::{
-  constants::errors::{ENVIRONMENT_NAME_INVALID, TOKEN_SCOPE_INVALID},
+  constants::errors::ENVIRONMENT_NAME_INVALID,
   http::HttpError,
   models::{AffectedCounts, AuthIdentity},
   state::AppState,
@@ -89,13 +89,13 @@ pub async fn resolve(
       ));
     }
   };
-  if let AuthIdentity::Runner { environment_id, .. } = identity
-    && *environment_id != environment.id
-  {
-    return Err(HttpError::forbidden(
-      TOKEN_SCOPE_INVALID,
-      "The runner token cannot access this environment.",
-    ));
+  if matches!(identity, AuthIdentity::Runner { .. }) {
+    crate::modules::tokens::access::runner_may_access_environment(
+      state.db.pool(),
+      identity,
+      &environment.id,
+    )
+    .await?;
   }
   Ok(environment)
 }

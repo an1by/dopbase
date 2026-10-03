@@ -705,6 +705,7 @@ pub async fn restore_database_from_archive(
     // Wipe existing data
     sqlx::query("DELETE FROM audit_events").execute(&mut *tx).await?;
     sqlx::query("DELETE FROM runner_tokens").execute(&mut *tx).await?;
+    sqlx::query("DELETE FROM workspace_tokens").execute(&mut *tx).await?;
     sqlx::query("DELETE FROM agent_tokens").execute(&mut *tx).await?;
     sqlx::query("DELETE FROM service_accounts").execute(&mut *tx).await?;
     sqlx::query("DELETE FROM secrets").execute(&mut *tx).await?;
@@ -732,6 +733,9 @@ pub async fn restore_database_from_archive(
     sqlx::query("INSERT OR REPLACE INTO environment_env_layout SELECT * FROM backup_db.environment_env_layout").execute(&mut *tx).await?;
     sqlx::query("INSERT INTO secrets SELECT * FROM backup_db.secrets").execute(&mut *tx).await?;
     sqlx::query("INSERT INTO runner_tokens SELECT * FROM backup_db.runner_tokens").execute(&mut *tx).await?;
+    let _ = sqlx::query("INSERT INTO workspace_tokens SELECT * FROM backup_db.workspace_tokens")
+      .execute(&mut *tx)
+      .await;
     sqlx::query("INSERT INTO audit_events SELECT * FROM backup_db.audit_events").execute(&mut *tx).await?;
 
     let mut effective_admin_id = preserve_admin.map(|(id, _, _)| id.to_string());

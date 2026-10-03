@@ -1,10 +1,11 @@
 <script setup lang="ts">
 import { computed, ref } from "vue";
 import type { ProjectsController } from "../Projects.controller";
-import { DbConfirmDialog, DbSelect } from "~/components/ui";
+import { DbConfirmDialog, DbModal, DbSelect } from "~/components/ui";
 import DirectoryDialog from "./DirectoryDialog.vue";
+import WorkspaceTokensPanel from "./WorkspaceTokensPanel.vue";
 import { workspaceLabel } from "~/constants/workspaces";
-import { PencilIcon, PlusIcon, TrashIcon } from "~/assets/icons";
+import { KeyIcon, PencilIcon, PlusIcon, TrashIcon } from "~/assets/icons";
 
 const props = defineProps<{ controller: ProjectsController }>();
 
@@ -16,6 +17,7 @@ const options = computed(() =>
 );
 
 const dialog = ref<"create" | "edit" | null>(null);
+const tokensOpen = ref(false);
 const deleting = ref(false);
 const busy = ref(false);
 const error = ref<string | null>(null);
@@ -65,6 +67,15 @@ async function remove(): Promise<void> {
           v-if="controller.workspace?.value"
           type="button"
           :class="iconButtonClass"
+          aria-label="Workspace tokens"
+          data-testid="workspace-tokens"
+          @click="tokensOpen = true">
+          <KeyIcon class="h-4 w-4" />
+        </button>
+        <button
+          v-if="controller.workspace?.value"
+          type="button"
+          :class="iconButtonClass"
           aria-label="Workspace settings"
           @click="dialog = 'edit'">
           <PencilIcon class="h-4 w-4" />
@@ -107,6 +118,14 @@ async function remove(): Promise<void> {
           : controller.createWorkspace({ name })
     "
     @close="dialog = null" />
+  <DbModal
+    :open="tokensOpen && !!controller.workspace?.value"
+    title="Workspace tokens"
+    @close="tokensOpen = false">
+    <WorkspaceTokensPanel
+      v-if="controller.workspace?.value"
+      :workspace-id="controller.workspace.value.id" />
+  </DbModal>
   <DbConfirmDialog
     :open="deleting"
     title="Delete workspace"

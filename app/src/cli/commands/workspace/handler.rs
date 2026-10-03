@@ -146,6 +146,13 @@ async fn resolve_workspace(
   }
 }
 
+pub(crate) async fn resolve_workspace_id(
+  api: &client::ApiClient,
+  reference: &str,
+) -> Result<String> {
+  workspace_id(&resolve_workspace(api, reference).await?).map(str::to_owned)
+}
+
 fn workspace_id(value: &Value) -> Result<&str> {
   value
     .get("id")

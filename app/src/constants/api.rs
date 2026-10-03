@@ -155,10 +155,15 @@ pub mod secrets {
 
 pub mod tokens {
   pub const COLLECTION: &str = api_path!("/environments/{environment_id}/tokens");
+  pub const WORKSPACE_COLLECTION: &str = api_path!("/workspaces/{workspace_id}/tokens");
   pub const REVOKE: &str = api_path!("/tokens/{token_id}/revoke");
 
   pub fn collection(environment_id: &str) -> String {
     super::render(COLLECTION, &[("environment_id", environment_id)])
+  }
+
+  pub fn workspace_collection(workspace_id: &str) -> String {
+    super::render(WORKSPACE_COLLECTION, &[("workspace_id", workspace_id)])
   }
 
   pub fn revoke(token_id: &str) -> String {

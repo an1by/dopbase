@@ -21,6 +21,7 @@ version. The current pre-release schema is assembled in this order:
 0014_workspaces.up.sql
 0015_default_workspace.up.sql
 0016_project_names_per_workspace.up.sql
+0017_workspace_tokens.up.sql
 ```
 
 The up file applies the change. The down file removes only that version's
