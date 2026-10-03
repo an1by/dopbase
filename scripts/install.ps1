@@ -50,6 +50,19 @@ function Install-BuiltBinary {
   $pathEntries = $env:PATH -split ';'
   if ($InstallDir -notin $pathEntries) {
     Write-Host "Add $InstallDir to PATH before running dopbase."
+    Write-Host ""
+    Write-Host "PowerShell (this session):"
+    Write-Host "  `$env:Path = `"$InstallDir;`$env:Path`""
+    Write-Host ""
+    Write-Host "Persist for your user account:"
+    Write-Host "  [Environment]::SetEnvironmentVariable('Path', `$env:Path + ';$InstallDir', 'User')"
+    if ($env:DOPBASE_INSTALL_ADD_PATH -eq '1') {
+      $userPath = [Environment]::GetEnvironmentVariable('Path', 'User')
+      if ($userPath -notlike "*$InstallDir*") {
+        [Environment]::SetEnvironmentVariable('Path', "$userPath;$InstallDir", 'User')
+        Write-Host "dopbase installer: appended $InstallDir to the user PATH"
+      }
+    }
   }
 }
 

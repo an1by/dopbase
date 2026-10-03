@@ -78,10 +78,42 @@ install_built_binary() {
   chmod 755 "$temporary_target" 2>/dev/null || true
   mv -f "$temporary_target" "${install_dir}/${binary_name}"
   echo "Installed Dopbase to ${install_dir}/${binary_name}"
-  case ":${PATH}:" in
-    *":${install_dir}:"*) ;;
-    *) echo "Add ${install_dir} to PATH before running dopbase." ;;
+  print_path_instructions
+}
+
+print_path_instructions() {
+  normalized_install_dir=$install_dir
+  if command -v cygpath >/dev/null 2>&1; then
+    normalized_install_dir=$(cygpath -u "$install_dir")
+  else
+    normalized_install_dir=$(printf '%s' "$install_dir" | tr '\\' '/')
+  fi
+
+  path_entry=":${PATH}:"
+  case "$path_entry" in
+    *":${install_dir}:"* | *":${normalized_install_dir}:"*) return 0 ;;
   esac
+
+  echo "Add ${install_dir} to PATH before running dopbase."
+  if [ "$asset_os" = "windows" ]; then
+    path_line="export PATH=\"${normalized_install_dir}:\$PATH\""
+    echo ""
+    echo "Git Bash (this session):"
+    echo "  ${path_line}"
+    echo ""
+    echo "Persist in Git Bash:"
+    echo "  echo '${path_line}' >> ~/.bashrc && source ~/.bashrc"
+    echo ""
+    echo "PowerShell (User PATH):"
+    echo "  [Environment]::SetEnvironmentVariable('Path', \$env:Path + ';${install_dir}', 'User')"
+    if [ "${DOPBASE_INSTALL_ADD_PATH:-}" = 1 ]; then
+      bashrc="${HOME}/.bashrc"
+      if ! [ -f "$bashrc" ] || ! grep -Fq "$normalized_install_dir" "$bashrc" 2>/dev/null; then
+        printf '%s\n' "$path_line" >>"$bashrc"
+        echo "dopbase installer: appended PATH to ${bashrc}"
+      fi
+    fi
+  fi
 }
 
 install_from_source() {
