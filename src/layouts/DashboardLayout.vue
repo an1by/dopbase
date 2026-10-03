@@ -86,7 +86,7 @@ const consoleLabel = computed(() =>
 <template>
   <div class="flex min-h-svh">
     <aside
-      class="sticky top-0 flex h-svh w-60 shrink-0 flex-col border-r border-line bg-panel">
+      class="sticky top-0 hidden h-svh w-60 shrink-0 flex-col border-r border-line bg-panel md:flex">
       <!-- Brand -->
       <div
         class="flex items-center gap-2.5 border-b border-line-soft px-5 py-4">
@@ -144,7 +144,26 @@ const consoleLabel = computed(() =>
       </div>
     </aside>
 
-    <main class="min-w-0 flex-1">
+    <nav
+      class="fixed inset-x-0 bottom-0 z-50 flex items-center justify-around border-t border-line-soft bg-panel px-2 py-2 md:hidden"
+      aria-label="Primary">
+      <RouterLink
+        v-for="item in visibleNavItems"
+        :key="item.name"
+        :to="{ name: item.name }"
+        class="flex flex-col items-center gap-0.5 rounded-control px-3 py-1.5 text-[10px] uppercase tracking-wide transition-colors"
+        :class="
+          isActive(item)
+            ? 'text-accent-strong'
+            : 'text-ink-muted hover:text-ink-strong'
+        "
+        :aria-current="isActive(item) ? 'page' : undefined">
+        <component :is="item.icon" class="h-5 w-5" />
+        <span>{{ item.label }}</span>
+      </RouterLink>
+    </nav>
+
+    <main class="min-w-0 flex-1 pb-[4.5rem] md:pb-0">
       <slot />
     </main>
 

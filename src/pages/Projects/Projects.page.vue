@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { ref } from "vue";
+import { ref, watch } from "vue";
 import { useProjectsController } from "./Projects.controller";
 import ProjectRail from "./components/ProjectRail.vue";
 import SecretsPanel from "./components/SecretsPanel.vue";
@@ -14,7 +14,7 @@ import {
   DbEmptyState,
   DbSkeleton,
 } from "~/components/ui";
-import { BoxIcon, FolderIcon, LayersIcon } from "~/assets/icons";
+import { BoxIcon, FolderIcon, LayersIcon, SlidersHorizontalIcon } from "~/assets/icons";
 
 /**
  * Projects is the authenticated project and environment screen.
@@ -25,17 +25,53 @@ import { BoxIcon, FolderIcon, LayersIcon } from "~/assets/icons";
  */
 const controller = useProjectsController();
 const showCreateProject = ref(false);
+const projectRailOpen = ref(false);
 // Destructure so refs auto-unwrap in the template.
-const { projects, project, selectedEnvironment, activeTab, selectProject } =
-  controller;
+const {
+  projects,
+  project,
+  selectedEnvironment,
+  activeTab,
+  selectProject,
+  isProjectOverview,
+  projectRef,
+} = controller;
+
+watch(projectRef, () => {
+  projectRailOpen.value = false;
+});
 </script>
 
 <template>
   <DashboardLayout>
-    <div class="flex min-h-svh">
-      <ProjectRail :controller="controller" />
+    <div class="relative flex min-h-svh flex-col md:flex-row">
+      <button
+        v-if="projectRailOpen"
+        type="button"
+        class="fixed inset-0 z-50 bg-ink/40 md:hidden"
+        aria-label="Close projects menu"
+        @click="projectRailOpen = false" />
 
-      <section class="min-w-0 flex-1">
+      <ProjectRail
+        :controller="controller"
+        :mobile-open="projectRailOpen"
+        @close="projectRailOpen = false" />
+
+      <section class="flex min-h-0 min-w-0 flex-1 flex-col overflow-hidden">
+        <header
+          class="flex shrink-0 items-center gap-2 border-b border-line-soft px-4 py-3 md:hidden">
+          <button
+            type="button"
+            class="cursor-pointer rounded-control bg-raised p-1.5 text-ink-muted transition-colors hover:bg-line hover:text-ink-strong"
+            aria-label="Open projects"
+            data-testid="open-project-rail"
+            @click="projectRailOpen = true">
+            <SlidersHorizontalIcon class="h-4 w-4" />
+          </button>
+          <span class="min-w-0 truncate font-mono text-sm text-ink-strong">
+            {{ project?.name ?? "Projects" }}
+          </span>
+        </header>
         <!-- No projects yet: explain the model -->
         <div v-if="projects && projects.length === 0" class="p-10">
           <DbEmptyState
@@ -110,9 +146,9 @@ const { projects, project, selectedEnvironment, activeTab, selectProject } =
         </div>
 
         <!-- All environments overview -->
-        <template v-else-if="controller.isProjectOverview && project">
+        <template v-else-if="isProjectOverview && project">
           <header
-            class="flex flex-wrap items-center gap-x-3 gap-y-2 border-b border-line px-6 py-4">
+            class="flex shrink-0 flex-wrap items-center gap-x-3 gap-y-2 border-b border-line px-6 py-4">
             <nav
               class="flex items-center gap-1.5 font-mono text-sm text-ink-muted">
               <span class="text-ink-strong">{{ project.name }}</span>
@@ -120,7 +156,7 @@ const { projects, project, selectedEnvironment, activeTab, selectProject } =
               <span class="text-accent-strong">all environments</span>
             </nav>
           </header>
-          <div class="p-6">
+          <div class="flex min-h-0 flex-1 flex-col overflow-hidden p-6">
             <EnvironmentsOverviewPanel
               :controller="controller"
               :project-name="project.name" />

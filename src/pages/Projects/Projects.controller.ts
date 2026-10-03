@@ -6,6 +6,7 @@ import * as secretsApi from "~/services/secrets.api";
 import * as tokensApi from "~/services/tokens.api";
 import * as workspacesApi from "~/services/workspaces.api";
 import type { AffectedCounts, Environment, Project } from "~/services";
+import { DEFAULT_WORKSPACE_ID } from "~/constants/workspaces";
 
 /**
  * Projects controller: project and environment rail data, URL-derived
@@ -23,8 +24,18 @@ export function useProjectsController() {
   const allProjects = ref<Project[] | null>(null);
   const workspaces = ref<workspacesApi.Workspace[]>([]);
   const workspacesError = ref<string | null>(null);
-  const workspaceId = ref(typeof route.query?.workspace === "string" ? route.query.workspace : "");
-  const projects = computed(() => allProjects.value?.filter((item) => (item.workspaceId ?? "") === workspaceId.value) ?? null);
+  const workspaceId = ref(
+    typeof route.query?.workspace === "string" && route.query.workspace
+      ? route.query.workspace
+      : DEFAULT_WORKSPACE_ID,
+  );
+  const projects = computed(
+    () =>
+      allProjects.value?.filter(
+        (item) =>
+          (item.workspaceId ?? DEFAULT_WORKSPACE_ID) === workspaceId.value,
+      ) ?? null,
+  );
   const workspace = computed(() => workspaces.value.find((item) => item.id === workspaceId.value) ?? null);
   const projectsError = ref<string | null>(null);
   const environments = ref<Environment[] | null>(null);
@@ -73,7 +84,9 @@ export function useProjectsController() {
       if (!request.signal.aborted) {
         allProjects.value = result;
         const active = result.find((item) => item.id === projectRef.value || item.name === projectRef.value);
-        if (active) workspaceId.value = active.workspaceId ?? "";
+        if (active) {
+          workspaceId.value = active.workspaceId ?? DEFAULT_WORKSPACE_ID;
+        }
       }
     } catch {
       if (request.signal.aborted) return;
@@ -152,10 +165,27 @@ export function useProjectsController() {
     router.push({ name: "project", params: { projectRef: refName } });
   }
 
+  function ensureWorkspaceSelected(): void {
+    if (
+      workspaceId.value &&
+      workspaces.value.some((item) => item.id === workspaceId.value)
+    ) {
+      return;
+    }
+    const fallback =
+      workspaces.value.find((item) => item.id === DEFAULT_WORKSPACE_ID) ??
+      workspaces.value[0];
+    if (fallback) workspaceId.value = fallback.id;
+  }
+
   async function loadWorkspaces(): Promise<void> {
     workspacesError.value = null;
-    try { workspaces.value = await workspacesApi.listWorkspaces(); }
-    catch { workspacesError.value = "Could not load workspaces."; }
+    try {
+      workspaces.value = await workspacesApi.listWorkspaces();
+      ensureWorkspaceSelected();
+    } catch {
+      workspacesError.value = "Could not load workspaces.";
+    }
   }
 
   function selectWorkspace(id: string): void {
@@ -164,8 +194,18 @@ export function useProjectsController() {
     router.push(first ? { name: "project", params: { projectRef: first.name } } : { name: "projects", query: { workspace: id } });
   }
 
-  watch(project, (value) => { if (value) workspaceId.value = value.workspaceId ?? ""; });
-  watch(() => route.query?.workspace, (value) => { if (!projectRef.value) workspaceId.value = typeof value === "string" ? value : ""; });
+  watch(project, (value) => {
+    if (value) workspaceId.value = value.workspaceId ?? DEFAULT_WORKSPACE_ID;
+  });
+  watch(
+    () => route.query?.workspace,
+    (value) => {
+      if (projectRef.value) return;
+      workspaceId.value =
+        typeof value === "string" && value ? value : DEFAULT_WORKSPACE_ID;
+      ensureWorkspaceSelected();
+    },
+  );
 
   async function createWorkspace(input: workspacesApi.WorkspaceInput): Promise<void> {
     const created = await workspacesApi.createWorkspace(input);
@@ -175,7 +215,10 @@ export function useProjectsController() {
     await workspacesApi.updateWorkspace(id, input); await loadWorkspaces();
   }
   async function deleteWorkspace(id: string): Promise<void> {
-    await workspacesApi.deleteWorkspace(id); await loadWorkspaces(); selectWorkspace("");
+    await workspacesApi.deleteWorkspace(id);
+    await loadWorkspaces();
+    ensureWorkspaceSelected();
+    selectWorkspace(workspaceId.value);
   }
   async function setProjectLocation(id: string, workspaceId: string | null, path: string | null): Promise<void> {
     await projectsApi.setProjectLocation(id, workspaceId, path); await loadProjects();

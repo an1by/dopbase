@@ -69,7 +69,7 @@ async function saveKey(key: string): Promise<void> {
 </script>
 
 <template>
-  <div class="flex flex-col gap-4">
+  <div class="flex min-h-0 flex-1 flex-col gap-4">
     <header class="flex flex-wrap items-center gap-2">
       <h3 class="text-sm font-semibold">
         All environments
@@ -154,7 +154,7 @@ async function saveKey(key: string): Promise<void> {
               <th
                 v-for="row in overview.rows.value"
                 :key="row.environment.id"
-                class="px-4 py-2.5 font-medium">
+                class="px-4 py-2.5 text-center font-medium">
                 <button
                   type="button"
                   class="cursor-pointer font-mono text-ink hover:text-ink-strong"
@@ -258,44 +258,47 @@ async function saveKey(key: string): Promise<void> {
     </template>
 
     <template v-else>
-      <DbAlert v-if="overview.editorAwaitingReauth.value" tone="info">
-        Confirm your password to load secret values for editing.
-      </DbAlert>
-      <DbAlert v-else-if="overview.editorLoadError.value">
-        {{ overview.editorLoadError.value }}
-      </DbAlert>
-      <div
-        v-else-if="overview.editorLoading.value"
-        class="grid gap-3 md:grid-cols-2 xl:grid-cols-3">
-        <DbSkeleton
-          v-for="row in environments ?? []"
-          :key="row.id"
-          class="h-64 rounded-card" />
-      </div>
-      <DbAlert v-else-if="overview.editorError.value">
-        {{ overview.editorError.value }}
-      </DbAlert>
-      <div
-        v-else
-        class="flex gap-3 overflow-x-auto pb-2"
-        data-testid="multi-env-editor">
+      <div class="flex min-h-0 flex-1 flex-col gap-2 overflow-hidden">
+        <DbAlert v-if="overview.editorAwaitingReauth.value" tone="info">
+          Confirm your password to load secret values for editing.
+        </DbAlert>
+        <DbAlert v-else-if="overview.editorLoadError.value">
+          {{ overview.editorLoadError.value }}
+        </DbAlert>
         <div
-          v-for="editor in overview.editors.value"
-          :key="editor.environmentId"
-          class="min-w-[min(100%,22rem)] w-[22rem] shrink-0">
-          <EnvFileEditor
-            :model-value="editor.content"
-            :issues="editor.issues"
-            :disabled="overview.editorSaving.value || editor.loading"
-            :subtitle="editor.environmentName"
-            :dirty="editor.content !== editor.baseline"
-            :peer-active-line="overview.sharedCaretLine.value"
-            @update:model-value="
-              (value) =>
-                overview.updateEditorContent(editor.environmentId, value)
-            "
-            @caret-line="(line) => (overview.sharedCaretLine.value = line)"
-            @save="overview.saveEditors()" />
+          v-else-if="overview.editorLoading.value"
+          class="flex min-h-0 flex-1 gap-3">
+          <DbSkeleton
+            v-for="row in environments ?? []"
+            :key="row.id"
+            class="min-h-0 flex-1 rounded-card" />
+        </div>
+        <DbAlert v-else-if="overview.editorError.value">
+          {{ overview.editorError.value }}
+        </DbAlert>
+        <div
+          v-else
+          class="flex min-h-0 flex-1 gap-3 overflow-hidden"
+          data-testid="multi-env-editor">
+          <div
+            v-for="editor in overview.editors.value"
+            :key="editor.environmentId"
+            class="flex min-h-0 min-w-0 flex-1 flex-col">
+            <EnvFileEditor
+              fill-height
+              :model-value="editor.content"
+              :issues="editor.issues"
+              :disabled="overview.editorSaving.value || editor.loading"
+              :subtitle="editor.environmentName"
+              :dirty="editor.content !== editor.baseline"
+              :peer-active-line="overview.sharedCaretLine.value"
+              @update:model-value="
+                (value) =>
+                  overview.updateEditorContent(editor.environmentId, value)
+              "
+              @caret-line="(line) => (overview.sharedCaretLine.value = line)"
+              @save="overview.saveEditors()" />
+          </div>
         </div>
       </div>
     </template>

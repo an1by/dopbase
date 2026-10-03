@@ -27,6 +27,8 @@ const props = withDefaults(
     dirty?: boolean;
     /** When set, highlights this line in every synced editor column. */
     peerActiveLine?: number;
+    /** Grow to fill a flex parent instead of using a fixed max height. */
+    fillHeight?: boolean;
   }>(),
   {
     issues: () => [],
@@ -36,6 +38,7 @@ const props = withDefaults(
     filename: ".env",
     subtitle: "",
     dirty: false,
+    fillHeight: false,
   },
 );
 
@@ -138,7 +141,10 @@ defineExpose({ focus });
   <div
     data-testid="env-editor"
     class="flex flex-col overflow-hidden rounded-card border bg-panel transition-colors focus-within:border-accent"
-    :class="issues.length > 0 ? 'border-crit/60' : 'border-line'">
+    :class="[
+      issues.length > 0 ? 'border-crit/60' : 'border-line',
+      fillHeight ? 'min-h-0 flex-1' : '',
+    ]">
     <!-- Editor tab bar: filename + dirty dot + context, editor chrome. -->
     <div
       class="flex items-center gap-2 border-b border-line-soft bg-panel px-3 py-2">
@@ -157,7 +163,11 @@ defineExpose({ focus });
 
     <!-- Code area: gutter column + tokenized highlight overlay, on the
          darker canvas so the editor reads as a distinct surface. -->
-    <div class="max-h-[26rem] min-h-[12rem] overflow-y-auto bg-canvas">
+    <div
+      class="overflow-y-auto bg-canvas"
+      :class="
+        fillHeight ? 'min-h-0 flex-1' : 'max-h-[26rem] min-h-[12rem]'
+      ">
       <div class="relative">
         <!-- Highlight overlay: gutter number + tokens per logical line. -->
         <div

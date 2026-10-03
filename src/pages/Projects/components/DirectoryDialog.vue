@@ -2,6 +2,7 @@
 import { ref, watch } from "vue";
 import { DbAlert, DbButton, DbInput, DbModal, DbSelect } from "~/components/ui";
 import type { Workspace } from "~/services/workspaces.api";
+import { DEFAULT_WORKSPACE_ID, workspaceLabel } from "~/constants/workspaces";
 const props = defineProps<{
   open: boolean; title: string; kind: "workspace" | "project";
   initialName?: string; initialPath?: string; initialWorkspaceId?: string;
@@ -14,7 +15,8 @@ const saving = ref(false); const error = ref<string | null>(null);
 watch(() => props.open, (open) => {
   if (!open) return;
   name.value = props.initialName ?? ""; path.value = props.initialPath ?? "";
-  workspaceId.value = props.initialWorkspaceId ?? ""; error.value = null;
+  workspaceId.value = props.initialWorkspaceId ?? DEFAULT_WORKSPACE_ID;
+  error.value = null;
 }, { immediate: true });
 async function submit(): Promise<void> {
   saving.value = true; error.value = null;
@@ -27,7 +29,17 @@ async function submit(): Promise<void> {
   <DbModal :open="open" :title="title" :persistent="saving" @close="emit('close')">
     <form class="flex flex-col gap-4" @submit.prevent="submit">
       <DbInput v-if="kind === 'workspace'" v-model="name" label="Workspace name" placeholder="e.g. allior" :disabled="saving" autofocus />
-      <DbSelect v-else v-model="workspaceId" label="Workspace" :disabled="saving" :options="[{ value: '', label: 'Unassigned' }, ...(workspaces ?? []).map(item => ({ value: item.id, label: item.name }))]" />
+      <DbSelect
+        v-else
+        v-model="workspaceId"
+        label="Workspace"
+        :disabled="saving"
+        :options="
+          (workspaces ?? []).map((item) => ({
+            value: item.id,
+            label: workspaceLabel(item),
+          }))
+        " />
       <DbInput v-if="kind === 'workspace' || workspaceId" v-model="path" :label="kind === 'workspace' ? 'Root directory' : 'Project directory (relative to workspace)'" :placeholder="kind === 'workspace' ? 'D:/Programming/Allior or /home/me/projects' : 'services/api or .'" :disabled="saving" />
       <p class="text-xs text-ink-muted">{{ kind === 'workspace' ? 'The root path is on the machine where you run the CLI.' : 'The CLI selects the most specific project directory containing its current working directory.' }}</p>
       <DbAlert v-if="error" variant="error">{{ error }}</DbAlert>

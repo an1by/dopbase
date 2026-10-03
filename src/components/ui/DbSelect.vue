@@ -12,6 +12,8 @@ const props = defineProps<{
   label?: string;
   options: Array<{ label: string; value: string }>;
   disabled?: boolean;
+  /** Single-line control; label is exposed via aria-label only. */
+  compact?: boolean;
 }>();
 
 const emit = defineEmits<{ "update:modelValue": [value: string] }>();
@@ -86,10 +88,11 @@ onUnmounted(() => { removeListeners(); clearTimeout(searchTimer); });
 </script>
 
 <template>
-  <div class="flex flex-col gap-1.5">
+  <div :class="compact ? '' : 'flex flex-col gap-1.5'">
     <button ref="trigger" type="button" :disabled="disabled" role="combobox" aria-haspopup="listbox" :aria-expanded="open" :aria-controls="`${id}-list`" :aria-activedescendant="open ? `${id}-${active}` : undefined" :aria-label="label" class="w-full cursor-pointer rounded-control bg-raised text-left transition-colors hover:bg-line focus-visible:bg-line disabled:cursor-default disabled:opacity-50" @click="open ? close() : show()" @keydown="keydown">
-      <span v-if="label" class="block px-3.5 pb-0.5 pt-2 text-xs font-semibold text-ink-muted">{{ label }}</span>
-      <span class="flex items-center justify-between gap-3 px-3.5 text-sm text-ink-strong" :class="label ? 'h-9' : 'h-10'">
+      <span v-if="label && !compact" class="block px-3.5 pb-0.5 pt-2 text-xs font-semibold text-ink-muted">{{ label }}</span>
+      <span
+        class="flex h-9 items-center justify-between gap-3 px-3.5 text-sm text-ink-strong">
         <span class="truncate">{{ selected?.label ?? modelValue }}</span>
         <ChevronDownIcon class="h-4 w-4 shrink-0 text-ink-faint transition-transform" :class="open ? 'rotate-180' : ''" />
       </span>

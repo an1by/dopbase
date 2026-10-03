@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { ref } from "vue";
+import { computed, ref } from "vue";
 import type { ProjectsController } from "~/pages/Projects/Projects.controller";
 import NameDialog from "./NameDialog.vue";
 import WorkspaceControls from "./WorkspaceControls.vue";
@@ -22,7 +22,12 @@ import type { Environment, Project } from "~/services";
  * create, rename, and delete interactions. Destructive dialogs require
  * typing the resource name. Environment deletion lists affected counts.
  */
-const props = defineProps<{ controller: ProjectsController }>();
+const props = defineProps<{
+  controller: ProjectsController;
+  mobileOpen?: boolean;
+}>();
+
+const emit = defineEmits<{ close: [] }>();
 
 // Destructure so refs auto-unwrap in the template.
 const {
@@ -50,7 +55,11 @@ const envDeleteCounts = ref<Array<{ label: string; count: number }>>([]);
 const isProjectActive = (project: Project): boolean =>
   props.controller.projectRef.value === project.name ||
   props.controller.projectRef.value === project.id;
+const isProjectOverview = computed(
+  () => props.controller.isProjectOverview.value,
+);
 const isEnvActive = (environment: Environment): boolean =>
+  !isProjectOverview.value &&
   props.controller.environmentId.value === environment.id;
 
 async function openEnvDelete(environment: Environment): Promise<void> {
@@ -97,7 +106,9 @@ async function confirmEnvDelete(): Promise<void> {
 
 <template>
   <aside
-    class="sticky top-0 flex h-svh w-72 shrink-0 flex-col border-r border-line bg-panel/60">
+    class="fixed inset-y-0 left-0 z-[60] flex h-svh w-[min(100%,18rem)] shrink-0 flex-col border-r border-line bg-panel/95 shadow-xl transition-transform duration-200 ease-out md:sticky md:z-auto md:w-72 md:translate-x-0 md:bg-panel/60 md:shadow-none"
+    :class="mobileOpen ? 'translate-x-0' : '-translate-x-full md:translate-x-0'"
+    aria-label="Projects">
     <WorkspaceControls :controller="controller" />
     <header class="flex items-center justify-between px-4 py-3.5">
       <h2 class="font-mono text-xs uppercase tracking-wider text-ink-faint">
@@ -141,7 +152,10 @@ async function confirmEnvDelete(): Promise<void> {
             <button
               type="button"
               class="flex min-w-0 flex-1 cursor-pointer items-center gap-2 text-left"
-              @click="controller.selectProject(project.name)">
+              @click="
+                controller.selectProject(project.name);
+                emit('close');
+              ">
               <BoxIcon
                 class="h-3.5 w-3.5 shrink-0"
                 :class="
@@ -181,7 +195,22 @@ async function confirmEnvDelete(): Promise<void> {
           <ul
             v-if="isProjectActive(project)"
             class="mb-1 ml-4 flex flex-col gap-0.5 border-l border-line-soft pl-2 pt-0.5">
-            <li><button type="button" class="w-full cursor-pointer rounded-control px-2 py-1.5 text-left font-mono text-xs text-accent-strong hover:bg-raised" @click="controller.showAllEnvironments">All environments</button></li>
+            <li>
+              <button
+                type="button"
+                class="w-full cursor-pointer rounded-control px-2 py-1.5 text-left font-mono text-xs"
+                :class="
+                  isProjectOverview
+                    ? 'bg-accent-soft text-ink-strong'
+                    : 'text-accent-strong hover:bg-raised'
+                "
+                @click="
+                  controller.showAllEnvironments();
+                  emit('close');
+                ">
+                All environments
+              </button>
+            </li>
             <li v-if="project.relativePath" class="break-all px-2 py-1 text-xs text-ink-faint">{{ project.relativePath }}</li>
             <li v-for="environment in environments ?? []" :key="environment.id">
               <div
@@ -194,7 +223,10 @@ async function confirmEnvDelete(): Promise<void> {
                 <button
                   type="button"
                   class="flex min-w-0 flex-1 cursor-pointer items-center gap-2 text-left"
-                  @click="controller.selectEnvironment(environment.id)">
+                  @click="
+                    controller.selectEnvironment(environment.id);
+                    emit('close');
+                  ">
                   <LayersIcon
                     class="h-3 w-3 shrink-0"
                     :class="
