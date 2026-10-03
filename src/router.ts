@@ -6,9 +6,7 @@ import { installRouterGuards } from "./router.guards";
  *
  * Project selection lives in the URL as
  * `/projects/:workspaceSlug/:projectRef/:environmentName`, with `all` as the
- * environment segment for the multi-environment overview. Legacy
- * `/projects/p/...` routes remain for bookmarks and normalize in the
- * projects controller.
+ * environment segment for the multi-environment overview.
  */
 export const router = createRouter({
   history: createWebHistory(),
@@ -35,6 +33,26 @@ export const router = createRouter({
       component: () => import("~/pages/Projects/Projects.page.vue"),
     },
     {
+      path: "/projects/p/:projectRef",
+      redirect: { name: "projects" },
+    },
+    {
+      path: "/projects/p/:projectRef/all",
+      redirect: { name: "projects" },
+    },
+    {
+      path: "/projects/p/:projectRef/e/:environmentId",
+      redirect: { name: "projects" },
+    },
+    {
+      path: "/projects/p/:projectRef/e/:environmentId/tokens",
+      redirect: { name: "projects" },
+    },
+    {
+      path: "/projects/p/:projectRef/e/:environmentId/import",
+      redirect: { name: "projects" },
+    },
+    {
       path: "/projects/:workspaceSlug/:projectRef",
       name: "project",
       component: () => import("~/pages/Projects/Projects.page.vue"),
@@ -57,31 +75,6 @@ export const router = createRouter({
     {
       path: "/projects/:workspaceSlug/:projectRef/:environmentName/import",
       name: "environment-import",
-      component: () => import("~/pages/Projects/ImportSecrets.page.vue"),
-    },
-    {
-      path: "/projects/p/:projectRef",
-      name: "project-legacy",
-      component: () => import("~/pages/Projects/Projects.page.vue"),
-    },
-    {
-      path: "/projects/p/:projectRef/all",
-      name: "project-overview-legacy",
-      component: () => import("~/pages/Projects/Projects.page.vue"),
-    },
-    {
-      path: "/projects/p/:projectRef/e/:environmentId",
-      name: "environment-legacy",
-      component: () => import("~/pages/Projects/Projects.page.vue"),
-    },
-    {
-      path: "/projects/p/:projectRef/e/:environmentId/tokens",
-      name: "environment-tokens-legacy",
-      component: () => import("~/pages/Projects/Projects.page.vue"),
-    },
-    {
-      path: "/projects/p/:projectRef/e/:environmentId/import",
-      name: "environment-import-legacy",
       component: () => import("~/pages/Projects/ImportSecrets.page.vue"),
     },
     {

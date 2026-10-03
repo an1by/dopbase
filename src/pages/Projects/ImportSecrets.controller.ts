@@ -24,14 +24,7 @@ export function useImportSecretsController() {
   );
 
   if (!valid.value) {
-    const params = route.params;
-    void router.replace({
-      name:
-        typeof params.environmentName === "string"
-          ? "environment"
-          : "environment-legacy",
-      params,
-    });
+    void router.replace({ name: "environment", params: route.params });
   }
   onUnmounted(() => importStore.clear());
 

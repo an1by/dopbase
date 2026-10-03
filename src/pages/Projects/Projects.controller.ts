@@ -8,7 +8,6 @@ import * as workspacesApi from "~/services/workspaces.api";
 import type { AffectedCounts, Environment, Project } from "~/services";
 import { DEFAULT_WORKSPACE_ID } from "~/constants/workspaces";
 import {
-  isLegacyProjectPath,
   projectLocationParams,
   projectRouteParams,
 } from "~/router/project-paths";
@@ -60,21 +59,11 @@ export function useProjectsController() {
       ? route.params.environmentName
       : null,
   );
-  const legacyEnvironmentId = computed(() =>
-    typeof route.params.environmentId === "string"
-      ? route.params.environmentId
-      : null,
-  );
   const isProjectOverview = computed(
-    () =>
-      route.name === "project-overview" ||
-      route.name === "project-overview-legacy",
+    () => route.name === "project-overview",
   );
   const activeTab = computed(() =>
-    route.name === "environment-tokens" ||
-    route.name === "environment-tokens-legacy"
-      ? "tokens"
-      : "secrets",
+    route.name === "environment-tokens" ? "tokens" : "secrets",
   );
 
   const project = computed(() => {
@@ -99,14 +88,8 @@ export function useProjectsController() {
     const list = environments.value;
     if (!list) return null;
     const byName = environmentNameParam.value;
-    if (byName) {
-      return list.find((candidate) => candidate.name === byName) ?? null;
-    }
-    const legacyId = legacyEnvironmentId.value;
-    if (legacyId) {
-      return list.find((candidate) => candidate.id === legacyId) ?? null;
-    }
-    return null;
+    if (!byName) return null;
+    return list.find((candidate) => candidate.name === byName) ?? null;
   });
   const environmentId = computed(
     () => selectedEnvironment.value?.id ?? null,
@@ -125,51 +108,6 @@ export function useProjectsController() {
     tab: "secrets" | "tokens" = "secrets",
   ): "environment" | "environment-tokens" {
     return tab === "tokens" ? "environment-tokens" : "environment";
-  }
-
-  function canonicalizeLegacyRoute(): void {
-    if (!isLegacyProjectPath(route.path)) return;
-    const slug = workspace.value?.name;
-    const ref = projectRef.value;
-    if (!slug || !ref) return;
-    if (isProjectOverview.value) {
-      router.replace({
-        name: "project-overview",
-        params: projectRouteParams(locationParams()),
-      });
-      return;
-    }
-    const env =
-      selectedEnvironment.value ??
-      (legacyEnvironmentId.value
-        ? environments.value?.find(
-            (item) => item.id === legacyEnvironmentId.value,
-          )
-        : null);
-    if (!env) return;
-    const target =
-      route.name === "environment-tokens-legacy"
-        ? "environment-tokens"
-        : route.name === "environment-import-legacy"
-          ? "environment-import"
-          : route.name === "environment-legacy"
-            ? "environment"
-            : route.name === "project-legacy"
-              ? "project"
-              : null;
-    if (!target || target === "project") {
-      if (route.name === "project-legacy") {
-        router.replace({
-          name: "project",
-          params: projectRouteParams(locationParams()),
-        });
-      }
-      return;
-    }
-    router.replace({
-      name: target,
-      params: projectRouteParams(locationParams(env.name)),
-    });
   }
 
   async function loadProjects(): Promise<void> {
@@ -247,10 +185,6 @@ export function useProjectsController() {
     },
     { immediate: true },
   );
-  watch(
-    [project, environments, selectedEnvironment, () => route.fullPath],
-    () => canonicalizeLegacyRoute(),
-  );
   onMounted(loadProjects);
   onMounted(loadWorkspaces);
   onUnmounted(() => {
@@ -273,14 +207,13 @@ export function useProjectsController() {
 
   // Opening a project without an environment selects its first one.
   watch(
-    [environments, environmentNameParam, legacyEnvironmentId, project],
-    ([list, , , activeProject]) => {
+    [environments, environmentNameParam, project],
+    ([list, , activeProject]) => {
       if (isProjectOverview.value) return;
-      const onProject =
-        route.name === "project" || route.name === "project-legacy";
-      if (!onProject || !list || list.length === 0 || !activeProject) return;
+      if (route.name !== "project") return;
+      if (!list || list.length === 0 || !activeProject) return;
       if (list[0].projectId !== activeProject.id) return;
-      if (environmentNameParam.value || legacyEnvironmentId.value) return;
+      if (environmentNameParam.value) return;
       try {
         router.replace({
           name: "environment",
@@ -468,10 +401,7 @@ export function useProjectsController() {
     await loadEnvironments();
     if (environmentId.value !== id) return;
     const routeName =
-      route.name === "environment-tokens" ||
-      route.name === "environment-tokens-legacy"
-        ? "environment-tokens"
-        : "environment";
+      route.name === "environment-tokens" ? "environment-tokens" : "environment";
     router.replace({
       name: routeName,
       params: projectRouteParams(locationParams(updated.name)),

@@ -26,7 +26,3 @@ export function projectRouteParams(
 ): RouteParamsRawGeneric {
   return params as RouteParamsRawGeneric;
 }
-
-export function isLegacyProjectPath(path: string): boolean {
-  return path.startsWith("/projects/p/");
-}

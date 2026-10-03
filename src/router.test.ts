@@ -9,12 +9,13 @@ describe("project routes", () => {
     ["/projects/default/billing/staging", "environment"],
     ["/projects/default/billing/staging/tokens", "environment-tokens"],
     ["/projects/default/billing/staging/import", "environment-import"],
-    ["/projects/p/billing", "project-legacy"],
-    ["/projects/p/billing/e/env_1", "environment-legacy"],
-    ["/projects/p/billing/e/env_1/tokens", "environment-tokens-legacy"],
-    ["/projects/p/billing/e/env_1/import", "environment-import-legacy"],
     ["/workspace", "not-found"],
   ])("resolves %s", (path, routeName) => {
     expect(router.resolve(path).name).toBe(routeName);
+  });
+
+  it("redirects removed /projects/p/... URLs to the projects index", () => {
+    const location = router.resolve("/projects/p/billing");
+    expect(location.matched[0]?.redirect).toEqual({ name: "projects" });
   });
 });
