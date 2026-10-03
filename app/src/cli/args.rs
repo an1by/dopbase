@@ -59,9 +59,14 @@ pub struct Cli {
   /// Print machine-readable JSON instead of human-readable output, where supported.
   #[arg(long, global = true)]
   pub json: bool,
-  /// Run a local `admin` or `server` command inside a Docker container via `docker exec`.
-  #[arg(long, global = true, value_name = "CONTAINER", help = "Forward the command to `docker exec <CONTAINER> dopbase ...`")]
-  pub container: Option<String>,
+  /// Run a local `admin` or `server` command inside the Dopbase Docker container.
+  #[arg(
+    long,
+    global = true,
+    action = ArgAction::SetTrue,
+    help = "Forward the command to `docker exec` in the Dopbase container (name from DOPBASE_CONTAINER, default `dopbase`)"
+  )]
+  pub container: bool,
   #[command(subcommand)]
   pub command: Command,
 }

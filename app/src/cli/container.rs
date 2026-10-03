@@ -5,12 +5,17 @@ use std::{
   process::{Command as ProcessCommand, Stdio},
 };
 
-pub fn execute_in_container(container: &str, cli: Cli) -> Result<i32> {
+/// Docker container name for `--container` and `dopbase docker exec`.
+pub fn container_name() -> String {
+  std::env::var("DOPBASE_CONTAINER").unwrap_or_else(|_| "dopbase".to_string())
+}
+
+pub fn execute_in_container(cli: Cli) -> Result<i32> {
   let mut arguments = vec!["exec".to_string()];
   if std::io::stdin().is_terminal() {
     arguments.push("-it".to_string());
   }
-  arguments.push(container.to_string());
+  arguments.push(container_name());
   arguments.push("dopbase".to_string());
   if let Some(data_dir) = &cli.data_dir {
     arguments.push("--data-dir".to_string());

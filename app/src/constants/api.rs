@@ -28,6 +28,14 @@ fn with_query(
   format!("{path}?{name}={value}")
 }
 
+fn encode_project_ref(project_ref: &str) -> String {
+  project_ref
+    .split('/')
+    .map(|segment| url::form_urlencoded::byte_serialize(segment.as_bytes()).collect::<String>())
+    .collect::<Vec<_>>()
+    .join("%2F")
+}
+
 pub mod docs {
   pub const UI: &str = "/api/docs";
   pub const OPENAPI: &str = api_path!("/openapi.json");
@@ -51,18 +59,24 @@ pub mod auth {
   pub const CHANGE_PASSWORD: &str = api_path!("/auth/change-password");
 }
 
+pub mod workspaces {
+  pub const COLLECTION: &str = api_path!("/workspaces");
+  pub const ITEM: &str = api_path!("/workspaces/{id}");
+}
+
 pub mod projects {
   pub const COLLECTION: &str = api_path!("/projects");
   pub const INIT: &str = api_path!("/projects/init");
   pub const ITEM: &str = api_path!("/projects/{project_ref}");
   pub const ENVIRONMENTS: &str = api_path!("/projects/{project_ref}/environments");
+  pub const LOCATION: &str = api_path!("/projects/{project_ref}/location");
 
   pub fn item(project_ref: &str) -> String {
-    super::render(ITEM, &[("project_ref", project_ref)])
+    super::render(ITEM, &[("project_ref", &super::encode_project_ref(project_ref))])
   }
 
   pub fn environments(project_ref: &str) -> String {
-    super::render(ENVIRONMENTS, &[("project_ref", project_ref)])
+    super::render(ENVIRONMENTS, &[("project_ref", &super::encode_project_ref(project_ref))])
   }
 }
 

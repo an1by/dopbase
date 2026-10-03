@@ -2,6 +2,7 @@ use super::DockerCommand;
 use crate::cli::{
   client,
   commands::environment,
+  container,
   docker_env,
   local_config,
   output,
@@ -54,11 +55,7 @@ pub(crate) async fn execute(
     DockerCommand::Compose { environment, command } => {
       run_with_env_file(server, &environment, "compose", command, json_output).await
     }
-    DockerCommand::Exec {
-      container,
-      environment,
-      command,
-    } => {
+    DockerCommand::Exec { environment, command } => {
       let api = client::recently_authenticated_client(server).await?;
       let reference = complete_environment_reference(&api, &environment).await?;
       let entries = load_entries(&api, &reference).await?;
@@ -69,8 +66,8 @@ pub(crate) async fn execute(
       }
       arguments.push("--env-file".to_string());
       arguments.push(env_file.display().to_string());
-      arguments.push(container);
-      arguments.extend(command);
+      arguments.push(container::container_name());
+      arguments.extend(exec_argv(&command));
       let status = ProcessCommand::new("docker")
         .args(&arguments)
         .stdin(Stdio::inherit())
@@ -124,6 +121,23 @@ async fn run_with_env_file(
   Ok(status.code().unwrap_or(1))
 }
 
+/// argv for `docker exec …`: prepend `dopbase` when the user passes
+/// `admin` or `server` subcommands without repeating the binary name.
+fn exec_argv(command: &[String]) -> Vec<String> {
+  if command.is_empty() {
+    return vec!["dopbase".into()];
+  }
+  if command[0] == "dopbase" {
+    return command.to_vec();
+  }
+  if matches!(command[0].as_str(), "admin" | "server") {
+    return std::iter::once("dopbase".into())
+      .chain(command.iter().cloned())
+      .collect();
+  }
+  command.to_vec()
+}
+
 async fn load_entries(api: &client::ApiClient, reference: &str) -> Result<Vec<SecretInput>> {
   let env = environment::resolve_environment(api, reference).await?;
   let data = api
@@ -169,4 +183,28 @@ fn write_temp_env(entries: &[SecretInput]) -> Result<std::path::PathBuf> {
     .map_err(|error| error.error)
     .context("could not persist the temporary Docker env file")?;
   Ok(path)
+}
+
+#[cfg(test)]
+mod tests {
+  use super::exec_argv;
+
+  #[test]
+  fn prepends_dopbase_for_admin_and_server() {
+    let command = exec_argv(&[
+      "admin".to_string(),
+      "reset-password".to_string(),
+      "a@example.com".to_string(),
+    ]);
+    assert_eq!(command[0], "dopbase");
+    assert_eq!(command[1], "admin");
+  }
+
+  #[test]
+  fn leaves_other_commands_unchanged() {
+    assert_eq!(
+      exec_argv(&["printenv".to_string(), "API_KEY".to_string()]),
+      vec!["printenv".to_string(), "API_KEY".to_string()],
+    );
+  }
 }

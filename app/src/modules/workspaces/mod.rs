@@ -39,14 +39,14 @@ fn database_error(error: sqlx::Error) -> HttpError {
   if error.to_string().contains("UNIQUE") { HttpError::conflict("WORKSPACE_ALREADY_EXISTS", "A workspace with this name already exists.") } else { error.into() }
 }
 
-#[utoipa::path(get, path="/api/v1/workspaces", tag="workspaces", responses((status=200, description="Workspaces fetched")), security(("bearerAuth"=[]), ("cookieAuth"=[])))]
+#[utoipa::path(get, path=crate::constants::api::workspaces::COLLECTION, tag="workspaces", responses((status=200, description="Workspaces fetched")), security(("bearerAuth"=[]), ("cookieAuth"=[])))]
 pub async fn list(State(state): State<AppState>, identity: AuthIdentity) -> Result<HttpResponse<Vec<Workspace>>, HttpError> {
   require_read_access(&identity)?;
   let rows = sqlx::query_as("SELECT * FROM workspaces ORDER BY name").fetch_all(state.db.pool()).await?;
   Ok(HttpResponse::ok(rows, "WORKSPACES_FETCHED"))
 }
 
-#[utoipa::path(post, path="/api/v1/workspaces", tag="workspaces", request_body=WorkspaceInput, responses((status=201, description="Workspace created")), security(("bearerAuth"=[]), ("cookieAuth"=[])))]
+#[utoipa::path(post, path=crate::constants::api::workspaces::COLLECTION, tag="workspaces", request_body=WorkspaceInput, responses((status=201, description="Workspace created")), security(("bearerAuth"=[]), ("cookieAuth"=[])))]
 pub async fn create(State(state): State<AppState>, headers: HeaderMap, identity: AuthIdentity, Json(input): Json<WorkspaceInput>) -> Result<HttpResponse<Workspace>, HttpError> {
   require_mutation(&identity, &headers)?;
   let (admin_id, email) = require_project_manager(&identity)?;
@@ -61,7 +61,7 @@ pub async fn create(State(state): State<AppState>, headers: HeaderMap, identity:
   Ok(HttpResponse::created(row, "WORKSPACE_CREATED"))
 }
 
-#[utoipa::path(patch, path="/api/v1/workspaces/{id}", tag="workspaces", request_body=WorkspaceInput, params(("id"=String, Path)), responses((status=200, description="Workspace updated")), security(("bearerAuth"=[]), ("cookieAuth"=[])))]
+#[utoipa::path(patch, path=crate::constants::api::workspaces::ITEM, tag="workspaces", request_body=WorkspaceInput, params(("id"=String, Path)), responses((status=200, description="Workspace updated")), security(("bearerAuth"=[]), ("cookieAuth"=[])))]
 pub async fn update(State(state): State<AppState>, headers: HeaderMap, identity: AuthIdentity, Path(id): Path<String>, Json(input): Json<WorkspaceInput>) -> Result<HttpResponse<Workspace>, HttpError> {
   require_mutation(&identity, &headers)?;
   let (admin_id, email) = require_project_manager(&identity)?;
@@ -74,7 +74,7 @@ pub async fn update(State(state): State<AppState>, headers: HeaderMap, identity:
   Ok(HttpResponse::ok(row, "WORKSPACE_UPDATED"))
 }
 
-#[utoipa::path(delete, path="/api/v1/workspaces/{id}", tag="workspaces", params(("id"=String, Path)), responses((status=200, description="Empty workspace deleted")), security(("bearerAuth"=[]), ("cookieAuth"=[])))]
+#[utoipa::path(delete, path=crate::constants::api::workspaces::ITEM, tag="workspaces", params(("id"=String, Path)), responses((status=200, description="Empty workspace deleted")), security(("bearerAuth"=[]), ("cookieAuth"=[])))]
 pub async fn delete(State(state): State<AppState>, headers: HeaderMap, identity: AuthIdentity, Path(id): Path<String>) -> Result<HttpResponse<serde_json::Value>, HttpError> {
   require_mutation(&identity, &headers)?;
   let (admin_id, email) = require_project_manager(&identity)?;
@@ -88,7 +88,9 @@ pub async fn delete(State(state): State<AppState>, headers: HeaderMap, identity:
 }
 
 pub fn routes() -> Router<AppState> {
-  Router::new().route("/api/v1/workspaces", get(list).post(create)).route("/api/v1/workspaces/{id}", axum::routing::patch(update).delete(delete))
+  Router::new()
+    .route(crate::constants::api::workspaces::COLLECTION, get(list).post(create))
+    .route(crate::constants::api::workspaces::ITEM, axum::routing::patch(update).delete(delete))
 }
 
 #[derive(OpenApi)]

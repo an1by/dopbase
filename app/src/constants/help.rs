@@ -10,6 +10,7 @@ Environment variables:
   DOPBASE_DOCS                    Enable or disable Swagger UI (true or false)
   DOPBASE_MASTER_KEY_PATH         Path to the server master key file `./path/to/your.key`
   DOPBASE_SHUTDOWN_GRACE_SECONDS  Seconds allowed for graceful shutdown
+  DOPBASE_CONTAINER               Docker container name for --container and dopbase docker exec (default: dopbase)
 
 Quickstart:
   dopbase server start                     # run a server on http://localhost:8840
@@ -27,5 +28,6 @@ Common server options:
 Run 'dopbase help <command>' for details on any command.
 ";
 
-pub(crate) const ENVIRONMENT_ARG_HELP: &str = "Existing environment reference: an environment ID or \
-PROJECT_REF/ENVIRONMENT_NAME. PROJECT_REF can be a project ID or name. For example: payment-service/production.";
+pub(crate) const ENVIRONMENT_ARG_HELP: &str = "Existing environment reference: an environment ID, \
+PROJECT/ENVIRONMENT, or WORKSPACE/PROJECT/ENVIRONMENT. PROJECT matches the project name or workspace directory. \
+For example: payment-service/production or workspace1/api/staging.";

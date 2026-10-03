@@ -208,7 +208,7 @@ async fn project_and_environment_conflicts_leave_existing_data_unchanged() {
   assert_eq!(status, 201);
   let project_id = initialized["data"]["project"]["id"].as_str().unwrap();
 
-  let (status, conflict, _) = call(
+  let (status, second_init, _) = call(
     &router,
     "POST",
     "/api/v1/projects/init",
@@ -216,14 +216,14 @@ async fn project_and_environment_conflicts_leave_existing_data_unchanged() {
     Some(json!({
       "projectName":"conflict-test",
       "environmentName":"staging",
-      "entries":[{"key":"SHOULD_NOT_EXIST","value":"private"}]
+      "entries":[{"key":"SECOND_APP","value":"allowed"}]
     })),
   )
   .await;
-  assert_eq!(status, 409);
-  assert_eq!(
-    conflict["error"]["PROJECT_ALREADY_EXISTS"],
-    "A project with this name already exists."
+  assert_eq!(status, 201);
+  assert_ne!(
+    second_init["data"]["project"]["id"].as_str().unwrap(),
+    project_id
   );
 
   let (status, conflict, _) = call(

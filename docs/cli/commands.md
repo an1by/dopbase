@@ -119,17 +119,22 @@ Commands accept these forms:
 
 ```text
 env_482731                       # Immutable environment ID
-payment-service/production      # Project name and environment name
-prj_01JABCDEF1234/production    # Project ID and environment name
+payment-service/production       # Project name and environment name
+prj_01JABCDEF1234/production     # Project ID and environment name
+workspace1/api/staging           # Workspace, project name or directory, environment
 ```
 
 Use readable references interactively. Use immutable IDs in CI and deployment
 configuration because an environment ID does not change when its project or
 environment is renamed.
 
-Project names are unique within one Dopbase server. Environment names are
-unique within their project. IDs belong to the Dopbase server that created
-them. An ID from one server cannot address a resource on another server.
+When several workspaces contain a project with the same name, use the
+three-part form `WORKSPACE/PROJECT/ENVIRONMENT` or the environment ID.
+Environment names are unique within their project. IDs belong to the Dopbase
+server that created them. An ID from one server cannot address a resource on
+another server.
+
+For Docker workflows, see [Docker integration](./docker).
 
 ## Bootstrap a project
 

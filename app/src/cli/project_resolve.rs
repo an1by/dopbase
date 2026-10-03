@@ -8,6 +8,7 @@ use std::{env, path::Path};
 #[derive(Clone, Debug)]
 pub struct ResolvedProjectLocation {
   pub name: String,
+  pub workspace_name: String,
   pub workspace_root: String,
   pub relative_path: String,
 }
@@ -26,7 +27,10 @@ pub async fn complete_environment_reference(
         "could not resolve project from the current directory for environment name '{reference}'"
       )
     })?;
-  Ok(format!("{}/{}", project.name, reference))
+  Ok(format!(
+    "{}/{}/{}",
+    project.workspace_name, project.name, reference
+  ))
 }
 
 pub async fn resolve_project_from_cwd(
@@ -37,7 +41,7 @@ pub async fn resolve_project_from_cwd(
     .request(Method::GET, api_paths::projects::COLLECTION, None)
     .await?;
   let workspaces = api
-    .request(Method::GET, "/api/v1/workspaces", None)
+    .request(Method::GET, api_paths::workspaces::COLLECTION, None)
     .await?;
   let cwd = normalize_path(&cwd);
   let mut best: Option<(usize, ResolvedProjectLocation)> = None;
@@ -62,6 +66,10 @@ pub async fn resolve_project_from_cwd(
     let Some(workspace) = workspace else {
       continue;
     };
+    let workspace_name = workspace
+      .get("name")
+      .and_then(Value::as_str)
+      .context("workspace response did not contain a name")?;
     let root = workspace
       .get("rootPath")
       .and_then(Value::as_str)
@@ -76,6 +84,7 @@ pub async fn resolve_project_from_cwd(
         score,
         ResolvedProjectLocation {
           name: name.into(),
+          workspace_name: workspace_name.into(),
           workspace_root: normalize_path_string(root),
           relative_path: relative.replace('\\', "/"),
         },

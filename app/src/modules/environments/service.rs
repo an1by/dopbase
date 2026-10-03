@@ -73,14 +73,22 @@ pub async fn resolve(
   identity: &AuthIdentity,
   reference: &str,
 ) -> Result<EnvironmentResponse, HttpError> {
-  let environment = repository::resolve(state.db.pool(), reference)
-    .await?
-    .ok_or_else(|| {
-      HttpError::not_found(
+  let matches = repository::resolve_all(state.db.pool(), reference).await?;
+  let environment = match matches.len() {
+    0 => {
+      return Err(HttpError::not_found(
         "ENVIRONMENT_NOT_FOUND",
         "The requested environment was not found.",
-      )
-    })?;
+      ));
+    }
+    1 => matches[0].clone(),
+    _ => {
+      return Err(HttpError::conflict(
+        "ENVIRONMENT_REFERENCE_AMBIGUOUS",
+        "Multiple environments match this reference. Use WORKSPACE/PROJECT/ENVIRONMENT, for example workspace1/api/staging.",
+      ));
+    }
+  };
   if let AuthIdentity::Runner { environment_id, .. } = identity
     && *environment_id != environment.id
   {

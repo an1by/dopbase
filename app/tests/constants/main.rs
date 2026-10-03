@@ -110,8 +110,11 @@ fn path_builders_match_the_previous_format_output() {
     "/api/v1/backups/snapshot.dop/restore"
   );
 
-  // Path parameters remain unencoded to preserve the existing format! behavior.
-  assert_eq!(api::projects::item("a/b"), "/api/v1/projects/a/b");
+  assert_eq!(api::projects::item("a/b"), "/api/v1/projects/a%2Fb");
+  assert_eq!(
+    api::projects::environments("workspace1/api"),
+    "/api/v1/projects/workspace1%2Fapi/environments"
+  );
 }
 
 #[test]

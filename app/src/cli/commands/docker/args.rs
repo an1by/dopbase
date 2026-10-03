@@ -7,7 +7,7 @@ Examples:
   dopbase docker env-file payment-service/production -o staging.env
   dopbase docker run payment-service/production -- docker run --rm my-image
   dopbase docker compose payment-service/production -- docker compose up
-  dopbase docker exec my-container payment-service/production -- printenv API_KEY
+  dopbase docker exec payment-service/production -- admin reset-password admin@example.com
 ";
 
 const ENV_FILE_HELP: &str = "\
@@ -25,7 +25,7 @@ Examples:
 ";
 const EXEC_HELP: &str = "\
 Examples:
-  dopbase docker exec dopbase payment-service/production -- dopbase admin reset-password admin@example.com
+  dopbase docker exec workspace1/api/staging -- admin reset-password admin@example.com
 ";
 
 #[derive(Subcommand, Debug)]
@@ -55,14 +55,16 @@ pub enum DockerCommand {
     #[arg(last = true, required = true, help = "Full Docker command after `--`, starting with `docker compose`")]
     command: Vec<String>,
   },
-  /// Run a command in a container with secrets injected through --env-file.
+  /// Run a command in the Dopbase container with secrets injected through --env-file.
   #[command(after_help = EXEC_HELP)]
   Exec {
-    #[arg(value_name = "CONTAINER", help = "Docker container name or ID")]
-    container: String,
     #[arg(value_name = "ENVIRONMENT_REF", help = ENVIRONMENT_ARG_HELP)]
     environment: String,
-    #[arg(last = true, required = true, help = "Command to run inside the container after `--`")]
+    #[arg(
+      last = true,
+      required = true,
+      help = "Command inside the container after `--` (use `admin` or `server` without a leading `dopbase`)"
+    )]
     command: Vec<String>,
   },
 }

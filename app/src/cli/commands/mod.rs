@@ -40,8 +40,8 @@ pub async fn execute(cli: Cli) -> Result<i32> {
   let server_argument = cli.server.clone();
   let data_dir = cli.data_dir.clone();
   let json_output = cli.json;
-  if let Some(container) = cli.container.clone() {
-    return crate::cli::container::execute_in_container(&container, cli);
+  if cli.container {
+    return crate::cli::container::execute_in_container(cli);
   }
   match cli.command {
     Command::Server { command } => {

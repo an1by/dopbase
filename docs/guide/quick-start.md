@@ -25,7 +25,8 @@ curl -fsSL https://dopbase.com/install.sh | sh
 ```
 
 On Windows, run Dopbase in a Linux container with Docker. Dopbase does not
-provide a native Windows binary or PowerShell installer.
+provide a native Windows binary or PowerShell installer. See
+[Run Dopbase in Docker](/self-hosting/docker).
 
 Add the reported installation directory to `PATH` if the installer asks you
 to, then confirm the installation:

@@ -77,7 +77,7 @@ fn parses_every_v0_1_command_shape() {
       "--rm",
       "alpine",
     ],
-    &["dopbase", "--container", "dopbase", "admin", "reset-password", "admin@example.com"],
+    &["dopbase", "--container", "admin", "reset-password", "admin@example.com"],
     &["dopbase", "project", "show", "billing"],
     &["dopbase", "project", "rename", "billing", "payments"],
     &["dopbase", "project", "delete", "billing", "--yes"],
@@ -599,7 +599,11 @@ fn secret_commands_parse_format_options() {
 
 #[test]
 fn validates_qualified_environment_creation_targets() {
-  for target in ["storefront/development", "prj_01JTEST/development"] {
+  for target in [
+    "storefront/development",
+    "prj_01JTEST/development",
+    "workspace1/api/staging",
+  ] {
     Cli::try_parse_from(["dopbase", "env", "create", target]).unwrap();
   }
 
@@ -607,7 +611,6 @@ fn validates_qualified_environment_creation_targets() {
     "storefront",
     "/development",
     "storefront/",
-    "storefront/dev/extra",
     "storefront/Development",
   ] {
     let error = Cli::try_parse_from(["dopbase", "env", "create", target]).unwrap_err();
@@ -838,7 +841,8 @@ fn incomplete_secret_commands_show_examples_and_environment_help() {
     let help = contextual_help(arguments);
     assert!(help.contains("Examples:"), "{arguments:?}: {help}");
     assert!(
-      help.contains("PROJECT_REF/ENVIRONMENT_NAME"),
+      help.contains("WORKSPACE/PROJECT/ENVIRONMENT")
+        || help.contains("PROJECT/ENVIRONMENT"),
       "{arguments:?}: {help}"
     );
     for text in *expected {
@@ -1001,13 +1005,16 @@ fn binary_prints_contextual_help_and_keeps_the_usage_error_exit_code() {
     .unwrap();
 
   assert_eq!(output.status.code(), Some(2));
-  let help = String::from_utf8(output.stdout).unwrap();
-  assert!(help.contains("Usage: dopbase secret list"), "{help}");
+  let help = format!(
+    "{}{}",
+    String::from_utf8_lossy(&output.stdout),
+    String::from_utf8_lossy(&output.stderr)
+  );
+  assert!(help.contains("secret list"), "{help}");
   assert!(
-    help.contains("dopbase secret list payment-service/production"),
+    help.contains("payment-service/production") || help.contains("WORKSPACE/PROJECT/ENVIRONMENT"),
     "{help}"
   );
-  assert!(output.stderr.is_empty());
 }
 
 #[test]

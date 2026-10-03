@@ -59,14 +59,24 @@ export function useProjectsController() {
     route.name === "environment-tokens" ? "tokens" : "secrets",
   );
 
-  const project = computed(
-    () =>
-      allProjects.value?.find(
-        (candidate) =>
-          candidate.name === projectRef.value ||
-          candidate.id === projectRef.value,
-      ) ?? null,
-  );
+  const project = computed(() => {
+    const ref = projectRef.value;
+    const list = allProjects.value;
+    if (!ref || !list) return null;
+    if (ref.startsWith("prj_")) {
+      return list.find((candidate) => candidate.id === ref) ?? null;
+    }
+    const inWorkspace = list.filter(
+      (candidate) =>
+        candidate.name === ref &&
+        (candidate.workspaceId ?? DEFAULT_WORKSPACE_ID) === workspaceId.value,
+    );
+    if (inWorkspace.length === 1) return inWorkspace[0];
+    const matches = list.filter(
+      (candidate) => candidate.name === ref || candidate.id === ref,
+    );
+    return matches.length === 1 ? matches[0] : null;
+  });
   const selectedEnvironment = computed(
     () =>
       environments.value?.find(

@@ -21,6 +21,7 @@ precedence over values in `server.toml`.
 | `DOPBASE_DOCS`                   | `true`                        | Enables or disables Swagger UI and the OpenAPI document. Accepted values are `true` and `false`. The default is `false`.                                                                   |
 | `DOPBASE_MASTER_KEY_PATH`        | `/srv/dopbase/master.key`     | Reads the server master key from the given file instead of `<data-dir>/master.key`.                                                                                                        |
 | `DOPBASE_SHUTDOWN_GRACE_SECONDS` | `30`                          | Sets how long the server waits for in-flight requests during shutdown. The default is `10` seconds.                                                                                        |
+| `DOPBASE_CONTAINER`              | `dopbase`                     | Names the running Dopbase server container for `dopbase --container …` and `dopbase docker exec …`. The default is `dopbase`.                                                            |
 
 ## Examples
 

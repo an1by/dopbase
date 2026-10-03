@@ -269,6 +269,7 @@ const config = defineConfig({
           items: [
             { text: "Server lifecycle", link: "/cli/serve" },
             { text: "Client connect", link: "/cli/client-connect" },
+            { text: "Docker integration", link: "/cli/docker" },
           ],
         },
       ],
@@ -306,6 +307,7 @@ const config = defineConfig({
           text: "Deployment & Storage",
           items: [
             { text: "Overview", link: "/self-hosting/" },
+            { text: "Docker", link: "/self-hosting/docker" },
             {
               text: "Storage and backups",
               link: "/self-hosting/storage-backups",

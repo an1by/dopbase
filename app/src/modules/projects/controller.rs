@@ -10,7 +10,7 @@ use axum::{
   http::HeaderMap,
 };
 
-#[utoipa::path(patch, path="/api/v1/projects/{project_ref}/location", tag="projects", request_body=ProjectLocationRequest, params(("project_ref"=String, Path)), responses((status=200, description="Project directory updated")), security(("bearerAuth"=[]), ("cookieAuth"=[])))]
+#[utoipa::path(patch, path=crate::constants::api::projects::LOCATION, tag="projects", request_body=ProjectLocationRequest, params(("project_ref"=String, Path)), responses((status=200, description="Project directory updated")), security(("bearerAuth"=[]), ("cookieAuth"=[])))]
 pub async fn location(
   State(state): State<AppState>, headers: HeaderMap, identity: AuthIdentity,
   Path(reference): Path<String>, axum::Json(request): axum::Json<ProjectLocationRequest>,
@@ -24,6 +24,9 @@ pub async fn location(
     crate::modules::workspaces::validate_relative(path)?;
     let exists: bool = sqlx::query_scalar("SELECT EXISTS(SELECT 1 FROM workspaces WHERE id=?)").bind(workspace_id).fetch_one(&mut *tx).await.map_err(crate::http::HttpError::from)?;
     if !exists { return Err(crate::http::HttpError::not_found("WORKSPACE_NOT_FOUND", "Workspace not found.").into()); }
+    if crate::modules::projects::repository::name_taken_in_workspace(state.db.pool(), workspace_id, &project.name, Some(&project.id)).await.map_err(crate::http::HttpError::from)? {
+      return Err(crate::http::HttpError::conflict("PROJECT_ALREADY_EXISTS", "A project with this name already exists in the workspace.").into());
+    }
     sqlx::query("INSERT INTO project_locations(project_id,workspace_id,relative_path) VALUES(?,?,?) ON CONFLICT(project_id) DO UPDATE SET workspace_id=excluded.workspace_id,relative_path=excluded.relative_path").bind(&project.id).bind(workspace_id).bind(path.replace('\\', "/")).execute(&mut *tx).await.map_err(|error| {
       if error.to_string().contains("UNIQUE") { crate::http::HttpError::conflict("PROJECT_PATH_IN_USE", "This workspace directory is already assigned to a project.") } else { error.into() }
     })?;
