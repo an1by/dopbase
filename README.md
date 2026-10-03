@@ -48,6 +48,8 @@
 
 Dopbase keeps application secrets organized by project and environment on infrastructure you control. Runtime data stays separate from the executable: its SQLite database, configuration, and master key live under `~/.dopbase` by default.
 
+Every push to `main` builds and publishes a multi-arch container image to GitHub Container Registry at `ghcr.io/<repository>` with tags `main`, `latest`, the `package.json` version, and the short commit SHA (workflow: `.github/workflows/container.yml`).
+
 ## Quick start
 
 Install the latest release on macOS or Linux, then start a local server:
