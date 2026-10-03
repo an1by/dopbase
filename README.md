@@ -82,7 +82,9 @@ SHA-256 checksum, and place the `dopbase` binary on your `PATH`. They accept the
 same environment variables as the hosted installers (`DOPBASE_VERSION`,
 `DOPBASE_INSTALL_DIR`, `DOPBASE_REPOSITORY_URL`, and `DOPBASE_DOWNLOAD_BASE_URL`).
 
-From a clone of this repository:
+From a clone of this repository, the script installs a published release when the
+archive exists. If a Windows archive is not published yet (for example before the
+first Windows release), the installer builds from the checkout instead:
 
 ```bash
 ./scripts/install.sh
@@ -90,6 +92,16 @@ From a clone of this repository:
 
 ```powershell
 .\scripts\install.ps1
+```
+
+Force a local build at any time:
+
+```bash
+./scripts/install.sh --from-source
+```
+
+```powershell
+.\scripts\install.ps1 -FromSource
 ```
 
 Without cloning, point the script at this repository (replace `main` with a
