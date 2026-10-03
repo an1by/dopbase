@@ -254,14 +254,15 @@ async function confirmDelete(): Promise<void> {
 
 <template>
   <div class="flex flex-col gap-4">
-    <header class="flex flex-wrap items-center gap-2">
-      <h3 class="text-sm font-semibold">
+    <header
+      class="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
+      <h3 class="shrink-0 text-sm font-semibold">
         Secrets
         <DbBadge v-if="secrets" class="ml-1">
           {{ secrets.length }}
         </DbBadge>
       </h3>
-      <div class="ml-auto flex items-center gap-2">
+      <div class="flex min-w-0 flex-wrap items-center gap-2 sm:justify-end">
         <div
           class="flex rounded-control border border-line bg-canvas p-0.5"
           role="tablist"

@@ -142,8 +142,9 @@ function tokenStatus(token: RunnerToken): {
 
 <template>
   <div class="flex flex-col gap-4">
-    <header class="flex flex-wrap items-center gap-2">
-      <div>
+    <header
+      class="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
+      <div class="min-w-0">
         <h3 class="text-sm font-semibold">
           Runner tokens
           <DbBadge v-if="tokens" class="ml-1">{{ tokens.length }}</DbBadge>
@@ -152,7 +153,11 @@ function tokenStatus(token: RunnerToken): {
           Scoped to this environment only.
         </p>
       </div>
-      <DbButton class="ml-auto" size="sm" variant="primary" @click="openCreate">
+      <DbButton
+        class="w-fit shrink-0 self-start sm:self-auto"
+        size="sm"
+        variant="primary"
+        @click="openCreate">
         New token
       </DbButton>
     </header>

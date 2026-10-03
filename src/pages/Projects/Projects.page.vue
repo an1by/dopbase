@@ -177,30 +177,26 @@ watch(projectRef, () => {
         <!-- Selected environment -->
         <template v-else-if="selectedEnvironment">
           <header
-            class="flex flex-wrap items-center gap-x-3 gap-y-2 border-b border-line px-6 py-4">
-            <nav
-              class="flex items-center gap-1.5 font-mono text-sm text-ink-muted">
-              <button
-                type="button"
-                class="cursor-pointer transition-colors hover:text-ink-strong"
-                @click="selectProject(project!.name)">
-                {{ project!.name }}
-              </button>
-              <span class="text-ink-faint">/</span>
-              <span class="text-ink-strong">
-                {{ selectedEnvironment.name }}
-              </span>
-            </nav>
-
-            <div class="flex items-center gap-2">
-              <DbBadge data-testid="environment-id">
-                {{ selectedEnvironment.id }}
-              </DbBadge>
-              <DbCopyButton :value="selectedEnvironment.id" label="Copy ID" />
-            </div>
-
+            class="flex flex-col gap-3 border-b border-line px-4 py-4 sm:px-6"
+            data-testid="environment-header">
             <div
-              class="ml-auto flex items-center gap-1 rounded-control border border-line bg-panel p-1">
+              class="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+              <nav
+                class="flex min-w-0 items-center gap-1.5 font-mono text-sm text-ink-muted">
+                <button
+                  type="button"
+                  class="min-w-0 shrink cursor-pointer truncate transition-colors hover:text-ink-strong"
+                  @click="selectProject(project!.name)">
+                  {{ project!.name }}
+                </button>
+                <span class="shrink-0 text-ink-faint">/</span>
+                <span class="min-w-0 truncate text-ink-strong">
+                  {{ selectedEnvironment.name }}
+                </span>
+              </nav>
+
+              <div
+                class="flex w-fit shrink-0 items-center gap-1 self-start rounded-control border border-line bg-panel p-1 sm:self-auto">
               <button
                 type="button"
                 class="cursor-pointer rounded px-3 py-1 font-mono text-xs transition-colors"
@@ -223,6 +219,14 @@ watch(projectRef, () => {
                 @click="controller.switchTab('tokens')">
                 tokens
               </button>
+              </div>
+            </div>
+
+            <div class="flex flex-wrap items-center gap-2">
+              <DbBadge data-testid="environment-id" class="max-w-full truncate">
+                {{ selectedEnvironment.id }}
+              </DbBadge>
+              <DbCopyButton :value="selectedEnvironment.id" label="Copy ID" />
             </div>
           </header>
 
