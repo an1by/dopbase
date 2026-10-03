@@ -231,6 +231,10 @@ const config = defineConfig({
               text: "Server and client",
               link: "/guide/server-client",
             },
+            {
+              text: "Workspace paths (design)",
+              link: "/guide/workspace-paths",
+            },
           ],
         },
         {
