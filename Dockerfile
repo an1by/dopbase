@@ -48,7 +48,8 @@ COPY --from=admin-ui /workspace/dist /workspace/dist
 RUN --mount=type=cache,target=/usr/local/cargo/registry \
   --mount=type=cache,target=/usr/local/cargo/git \
   --mount=type=cache,target=/workspace/app/target \
-  cargo build --profile docker --locked --bin dopbase
+  cargo build --profile docker --locked --bin dopbase && \
+  install -Dm755 /workspace/app/target/docker/dopbase /workspace/dopbase
 
 FROM debian:bookworm-slim
 
@@ -56,7 +57,7 @@ RUN apt-get update \
   && apt-get install -y --no-install-recommends ca-certificates \
   && rm -rf /var/lib/apt/lists/*
 
-COPY --from=builder /workspace/app/target/docker/dopbase /usr/local/bin/dopbase
+COPY --from=builder /workspace/dopbase /usr/local/bin/dopbase
 RUN chmod 755 /usr/local/bin/dopbase
 
 WORKDIR /data
