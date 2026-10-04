@@ -506,6 +506,12 @@ where
   })
 }
 
+pub fn token_uses_runtime_secrets(token: &str) -> bool {
+  use crate::constants::tokens::{RUNNER_TOKEN_PREFIX, WORKSPACE_TOKEN_PREFIX};
+
+  token.starts_with(RUNNER_TOKEN_PREFIX) || token.starts_with(WORKSPACE_TOKEN_PREFIX)
+}
+
 pub fn validate_runner_token(token: &str) -> Result<()> {
   use crate::constants::tokens::{RUNNER_TOKEN_PREFIX, WORKSPACE_TOKEN_PREFIX};
 

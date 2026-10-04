@@ -8,6 +8,11 @@ All notable changes to Dopbase are documented in this file.
 
 - Community discussion forms, starter tutorials with verified CLI output, and
   links from the README, documentation, and issue chooser.
+
+### Fixed
+
+- `dopbase export --stdout` with a workspace access token (`dbw_…`) now uses
+  the runtime secrets API, matching environment runner tokens (`dbs_…`).
 - A discussion publication manifest and a maintainer checklist for categories,
   pins, and the first month of community follow-up.
 

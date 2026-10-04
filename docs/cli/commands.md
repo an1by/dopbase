@@ -329,7 +329,12 @@ and dry-run summary before anything is stored. See
 
 ## Runner tokens
 
-Create a different token for each deployed environment:
+Two token kinds read secret **values** through the runtime API (`dopbase run`,
+`dopbase export --stdout` with `DOPBASE_TOKEN`). Prefixes: `dbs_` (one
+environment) and `dbw_` (whole workspace).
+
+**Environment runner** — one deployed environment (application server or narrow
+CI job):
 
 ```bash
 dopbase token create payment-service/production \
@@ -338,21 +343,35 @@ dopbase token create payment-service/production \
   --name deploy-job --expires-in 12h
 ```
 
-| Command                                                                                        | Purpose               |
-| ---------------------------------------------------------------------------------------------- | --------------------- |
-| `dopbase token create <ENVIRONMENT_REF> --name <NAME> --role runner [--expires-in <DURATION>]` | Create a runner token |
-| `dopbase token list <ENVIRONMENT_REF>`                                                         | List token metadata   |
-| `dopbase token revoke <token-id>`                                                              | Revoke a token        |
+**Workspace runner** — every environment whose project is linked to the
+workspace (typical GitLab group CI for many repos):
+
+```bash
+dopbase token create --workspace default --name gitlab-production --role workspace
+dopbase token list --workspace default
+```
+
+| Command | Purpose |
+| --- | --- |
+| `dopbase token create <ENVIRONMENT_REF> --name <NAME> --role runner [--expires-in <DURATION>]` | Environment runner (`dbs_…`) |
+| `dopbase token create --workspace <WORKSPACE_REF> --name <NAME> --role workspace [--expires-in <DURATION>]` | Workspace runner (`dbw_…`) |
+| `dopbase token list <ENVIRONMENT_REF>` | List environment tokens |
+| `dopbase token list --workspace <WORKSPACE_REF>` | List workspace tokens |
+| `dopbase token revoke <token-id>` | Revoke a token (`tok_…` or `wtk_…`) |
 
 The plaintext token is displayed only once. Tokens can also be created and
-revoked on an environment's Tokens tab in the [Admin UI](/ui/projects-environments).
-Without `--expires-in`, a runner token does not expire. Use `never` or a whole
-number followed by `h` or `d`, up to `26280h` or `1095d`. The server rejects
-expired tokens even if the client's clock is wrong. The list shows each token's
-expiry and status.
-A runner token can retrieve values
-for its assigned environment so `dopbase run` can inject them, but it cannot
-modify, export, or access another environment.
+revoked in the [Admin UI](/ui/projects-environments) (environment) or workspace
+settings (workspace).
+
+Without `--expires-in`, runner and workspace tokens do not expire. Use `never`
+or a whole number followed by `h` or `d`, up to `26280h` or `1095d`. The server
+rejects expired tokens even if the client's clock is wrong.
+
+An environment runner can read values only for its environment. A workspace
+runner can read values for any environment in linked projects; the CLI still
+requires an explicit environment reference on each command (for example
+`blipsu/api/staging`). Neither token type can modify secrets or use admin
+export over the browser API.
 
 ## Run a process
 

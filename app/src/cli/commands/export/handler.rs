@@ -1,7 +1,7 @@
 use crate::cli::{commands::environment, commands::run::cache as runtime_cache, output};
 use crate::{
   cli::{client, local_config, secret_format},
-  constants::{api, tokens::RUNNER_TOKEN_PREFIX},
+  constants::api,
   models::SecretInput,
 };
 use anyhow::{Context, Result, bail};
@@ -29,11 +29,11 @@ pub(crate) async fn execute(
   }
   let format = ExportFormat::for_output(output.as_deref(), format);
   let credential = client::credential(server)?;
-  let runner_token = credential
+  let runtime_token = credential
     .token
     .as_ref()
-    .is_some_and(|token| token.starts_with(RUNNER_TOKEN_PREFIX));
-  let entries = if runner_token {
+    .is_some_and(|token| client::token_uses_runtime_secrets(token));
+  let entries = if runtime_token {
     let api = client::any_authenticated_client(server, credential.token).await?;
     runtime_cache::load(server, &api, &environment)
       .await?

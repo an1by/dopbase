@@ -1,6 +1,7 @@
 <script setup lang="ts">
 import { onBeforeUnmount, onMounted, ref, watch } from "vue";
 import { XIcon } from "~/assets/icons";
+import { acquireModalLayer, releaseModalLayer } from "./modalLayer";
 
 /**
  * DbModal — the single dialog primitive. Renders via Teleport, closes on
@@ -13,13 +14,16 @@ const props = withDefaults(
     title: string;
     size?: "sm" | "md" | "lg";
     persistent?: boolean;
+    /** Keeps the dialog above routine stacked modals (e.g. session expired). */
+    priority?: boolean;
   }>(),
-  { size: "md" },
+  { size: "md", priority: false },
 );
 
 const emit = defineEmits<{ close: [] }>();
 
 const panel = ref<HTMLElement | null>(null);
+const layerZ = ref(70);
 
 const widthClass = {
   sm: "max-w-sm",
@@ -55,31 +59,34 @@ function focusPanel(): void {
   });
 }
 
-watch(
-  () => props.open,
-  (open) => {
-    if (open) {
-      document.addEventListener("keydown", onKeydown);
-      acquireScrollLock();
-      focusPanel();
-    } else {
-      document.removeEventListener("keydown", onKeydown);
-      releaseScrollLock();
-    }
-  },
-);
-
-onMounted(() => {
-  if (props.open) {
+function setOpen(open: boolean): void {
+  if (open) {
+    layerZ.value = acquireModalLayer(props.priority);
     document.addEventListener("keydown", onKeydown);
     acquireScrollLock();
     focusPanel();
+  } else {
+    document.removeEventListener("keydown", onKeydown);
+    releaseScrollLock();
+    releaseModalLayer();
   }
+}
+
+watch(
+  () => props.open,
+  (open) => setOpen(open),
+);
+
+onMounted(() => {
+  if (props.open) setOpen(true);
 });
 
 onBeforeUnmount(() => {
   document.removeEventListener("keydown", onKeydown);
-  if (props.open) releaseScrollLock();
+  if (props.open) {
+    releaseScrollLock();
+    releaseModalLayer();
+  }
 });
 </script>
 
@@ -87,7 +94,8 @@ onBeforeUnmount(() => {
   <Teleport to="body">
     <div
       v-if="open"
-      class="fixed inset-0 z-50 flex items-center justify-center bg-black/60 p-4"
+      class="fixed inset-0 flex items-center justify-center bg-black/60 p-4"
+      :style="{ zIndex: layerZ }"
       @mousedown.self="!persistent && emit('close')">
       <div
         ref="panel"
