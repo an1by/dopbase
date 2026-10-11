@@ -2,8 +2,7 @@ use super::model::ProjectResponse;
 use crate::utils::environment_reference::normalize_path;
 use sqlx::{Sqlite, SqlitePool, Transaction};
 
-const SELECT: &str =
-  "SELECT p.id,p.name,l.workspace_id,l.relative_path,p.created_at,p.updated_at FROM projects p LEFT JOIN project_locations l ON l.project_id=p.id";
+const SELECT: &str = "SELECT p.id,p.name,l.workspace_id,l.relative_path,p.created_at,p.updated_at FROM projects p LEFT JOIN project_locations l ON l.project_id=p.id";
 
 pub async fn list(pool: &SqlitePool) -> Result<Vec<ProjectResponse>, sqlx::Error> {
   sqlx::query_as(&format!("{SELECT} ORDER BY p.name"))
@@ -45,27 +44,31 @@ pub async fn name_taken_in_workspace(
   exclude_project_id: Option<&str>,
 ) -> Result<bool, sqlx::Error> {
   let taken: bool = match exclude_project_id {
-    Some(project_id) => sqlx::query_scalar(
-      "SELECT EXISTS(
+    Some(project_id) => {
+      sqlx::query_scalar(
+        "SELECT EXISTS(
          SELECT 1 FROM projects p
          INNER JOIN project_locations l ON l.project_id = p.id
          WHERE l.workspace_id = ? AND p.name = ? AND p.id != ?)",
-    )
-    .bind(workspace_id)
-    .bind(name)
-    .bind(project_id)
-    .fetch_one(pool)
-    .await?,
-    None => sqlx::query_scalar(
-      "SELECT EXISTS(
+      )
+      .bind(workspace_id)
+      .bind(name)
+      .bind(project_id)
+      .fetch_one(pool)
+      .await?
+    }
+    None => {
+      sqlx::query_scalar(
+        "SELECT EXISTS(
          SELECT 1 FROM projects p
          INNER JOIN project_locations l ON l.project_id = p.id
          WHERE l.workspace_id = ? AND p.name = ?)",
-    )
-    .bind(workspace_id)
-    .bind(name)
-    .fetch_one(pool)
-    .await?,
+      )
+      .bind(workspace_id)
+      .bind(name)
+      .fetch_one(pool)
+      .await?
+    }
   };
   Ok(taken)
 }

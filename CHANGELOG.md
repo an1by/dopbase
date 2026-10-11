@@ -6,15 +6,174 @@ All notable changes to Dopbase are documented in this file.
 
 ### Added
 
+- Workspaces group projects, with workspace-qualified references
+  (`workspace/project/environment`) in the CLI and Admin UI.
+- Workspace runner tokens (`dbw_`) can read secrets for linked projects.
+- `dopbase docker` injects an environment into `docker run`, Compose, and
+  `docker exec`. `dopbase --container` runs `server status`, `server logs`, and
+  `admin` in the Dopbase container. Docker Compose starts and stops that
+  container; background server commands stay outside it.
+- Windows installs through `scripts/install.ps1`, and release builds publish a
+  Windows zip alongside the macOS and Linux tar.gz archives.
+
+### Fixed
+
+- `dopbase export --stdout` with a workspace access token (`dbw_…`) uses the
+  runtime secrets API. Environment runner tokens (`dbs_…`) keep the scoped
+  export API from 0.1.9.
+
+## 0.1.9 - 2026-10-07
+
+[Dopbase](https://dopbase.com) 0.1.9 adds guided server setup, optional web UI,
+background server management, terminal secret editing, and runner exports for
+pipelines. AI agent tokens can read CLI metadata. Run token arguments, legacy
+server commands, and some setup responses change in this release.
+
+### Added
+
+- Runner tokens can export their assigned environment with `dopbase export`,
+  using `DOPBASE_TOKEN` or an encrypted credential saved by `login --token`.
+  Pipeline exports need no terminal or password prompt and require a live server
+  response. Export formats, private files, and overwrite protection remain
+  unchanged. Added an AWS CodeBuild example using Secrets Manager.
+
+- `dopbase env edit <ENVIRONMENT_REF>` opens an environment in Vim, Neovim,
+  Helix, nano, or a custom terminal editor. It checks the target before password
+  confirmation and offers to add secrets when an environment is empty. It
+  validates edits, previews key changes, removes editor files, and saves only
+  after confirmation. Prints "Checking changes..." and "Saving..." while
+  waiting for the server.
+  Comments and ordering persist across CLI and UI sessions. `--editor` selects
+  a command and `--dry-run` previews without saving. Protected editor profiles,
+  private files, revision checks, and session cleanup reduce plaintext exposure.
+  Custom commands require acknowledgement; comments remain unencrypted metadata.
+
+- Disable the web UI with `web_ui = false` in `server.toml`,
+  `DOPBASE_WEB_UI=false`, or `server start --no-web-ui`. It stays enabled by
+  default. CLI and REST API access remain available, and API documentation uses
+  its own setting. Background restart preserves launch overrides.
+  `server setup --web` explicitly enables the UI for that run without changing
+  saved configuration.
+
+- `DOPBASE_ROOT_EMAIL` supplies the root email for `server setup`, with explicit
+  `--email` taking precedence. CLI setup generates a password without prompts;
+  web setup includes the email in its link and prefills the editable form.
+  `server setup --web --email` is now supported. Invalid email defaults fail
+  before setup writes files. On fresh `server start`, the variable creates root
+  with a generated password shown once; initialized startup ignores it.
+
+- `dopbase server setup` initializes a local instance through guided root-account
+  prompts or `--email` with a generated password shown once. `--json` supports
+  generated-password setup. `server setup --web` runs the existing web claim
+  and backup-restoration flow.
+
+- `dopbase server start --background` (or `-b`) starts a managed background
+  server. `server restart` restarts it with the saved CLI and server environment
+  overrides while rereading configuration.
+
+- Server startup now creates missing server and client configuration files with
+  commented examples for every supported setting. Client saves include the
+  reference above active settings.
+
 - Community discussion forms, starter tutorials with verified CLI output, and
   links from the README, documentation, and issue chooser.
 
 ### Fixed
 
-- `dopbase export --stdout` with a workspace access token (`dbw_…`) now uses
-  the runtime secrets API, matching environment runner tokens (`dbs_…`).
 - A discussion publication manifest and a maintainer checklist for categories,
   pins, and the first month of community follow-up.
+
+### Improvement
+
+- Linux and macOS release downloads use tar.gz archives with gzip level 9.
+  Release steps run through tested Bash scripts, cache dependencies, and support
+  a manual build run without publishing. Releases stay drafts until uploads are
+  verified; reruns preserve published assets.
+
+- The public shell installer shows download progress, verifies SHA-256, and
+  checks the new binary with `--version` before replacing an existing install.
+  It reports the installed path and current server commands. It requires
+  tar/gzip and supports tar.gz releases only.
+
+- `dopbase env list` and the list printed after `env clone` show a single
+  `ENVIRONMENT` column with `project/environment` values. IDs, update times,
+  and JSON output keep their existing format.
+
+- CLI tests now cover every public command and subcommand, with shared fixtures
+  for real server and terminal workflows. Removed repeated cases and duplicate
+  backend test runs.
+
+- `server start` initializes fresh instances automatically through the existing
+  protected web setup flow or a root email with generated credentials. Foreground
+  and background modes keep serving after setup. Background credentials return
+  only to the launching command, including an optional `setup` object in JSON.
+  Disabled UI settings are respected; interrupted factory resets still require
+  explicit setup. Credential-output failure stops the new server and preserves
+  the initialized account for offline password recovery.
+
+### Security
+
+- Runner exports enforce environment scope and record the runner token ID and
+  secret count in the audit log without secret values. Human password
+  confirmation, browser CSRF checks, and AI agent restrictions remain in place.
+
+### Note
+
+- **Breaking:** Removed `dopbase run -t <TOKEN>` and `--token <TOKEN>`.
+  Inject `DOPBASE_TOKEN` through a CI secret store or deployment platform, or
+  save a runner credential with `dopbase login --token`. Authentication now
+  resolves `DOPBASE_TOKEN`, then the encrypted saved credential. An invalid
+  environment credential never falls back to saved credentials. Arguments
+  after `--` still belong to the child command.
+
+- **Breaking:** With the web UI disabled and no bootstrap root email, background
+  startup with `--json` writes
+  `success = false` and `info.code = "SETUP_REQUIRED"` to stdout, replacing
+  `error.SETUP_REQUIRED` on stderr. The notice includes `message`, `data_dir`,
+  and `config_file`. Update scripts that read the previous response.
+
+- Existing initialized installations preserve accounts and credentials. No
+  database migration is required. Explicit terminal setup, web setup, and backup
+  restoration keep their existing behavior. `dopbase init` retains its project
+  and environment workflow.
+
+- **Breaking:** `dopbase server up` and `dopbase server down` have been replaced by
+  `server start --background` or `server start -b` and `server stop`.
+  The old commands show an informational migration notice and exit with
+  status 1 without changing server state. JSON mode returns `COMMAND_REPLACED`
+  information on stdout. Servers started before this change need one manual
+  stop/start before restart is available. Update scripts that use the previous commands.
+
+### Fixed
+
+- AI agent tokens now work with `project list`, `project show`, `env list`,
+  `env show`, `secret list`, and `secret get` without `--reveal`. Metadata reads
+  validate the token through the API instead of requiring a human session.
+  Invalid, expired, and revoked tokens fail without falling back to saved
+  credentials. Secret values and writes remain restricted.
+
+- CLI documentation now lists the `env edit` fallback order correctly:
+  `nvim`, `vim`, `hx`, then `nano`.
+
+- Secret exports include values, layout, and a revision from one snapshot.
+  Imports check supplied revisions during dry runs as well as apply, protecting
+  edits from concurrent changes. Layout imports reject slots containing values.
+  CLI response buffers are cleared after parsing, and exported JSON values are
+  moved out of the response instead of copied.
+
+- Background startup shows the short `dopbase server stop` and
+  `dopbase server restart` commands. JSON output includes both
+  `stop_command` and `restart_command`.
+
+- Direct invocation of the internal supervised server mode no longer claims a
+  runtime-owned file descriptor. Readiness reporting attaches only to an
+  inherited write pipe, preventing reactor failures during startup rejection.
+
+- Remote CLI exports now send an explicit content length for empty POST
+  requests, avoiding HTML errors from hosts that require it. The fix also
+  applies to other CLI commands that send empty POST requests.
+- CLI errors now report the HTTP status when a server returns a non-JSON error
+  response.
 
 ## 0.1.8 - 2026-09-26
 

@@ -39,7 +39,10 @@ pub fn execute_in_container(cli: Cli) -> Result<i32> {
   Ok(status.code().unwrap_or(1))
 }
 
-fn push_command(arguments: &mut Vec<String>, command: Command) -> Result<()> {
+fn push_command(
+  arguments: &mut Vec<String>,
+  command: Command,
+) -> Result<()> {
   match command {
     Command::Admin { command } => {
       arguments.push("admin".to_string());
@@ -87,21 +90,22 @@ fn push_server_command(
 ) -> Result<()> {
   use crate::cli::args::ServerCommand;
   match command {
-    ServerCommand::Start(args) => {
-      arguments.push("start".to_string());
-      push_launch(arguments, &args.launch)?;
-    }
-    ServerCommand::Up(args) => {
-      arguments.push("up".to_string());
-      push_launch(arguments, &args)?;
-    }
-    ServerCommand::Down { timeout } => {
-      arguments.push("down".to_string());
-      arguments.push("--timeout".to_string());
-      arguments.push(timeout.to_string());
+    ServerCommand::Setup(_)
+    | ServerCommand::Start(_)
+    | ServerCommand::Stop { .. }
+    | ServerCommand::Restart { .. }
+    | ServerCommand::Up(_)
+    | ServerCommand::Down { .. } => {
+      bail!(
+        "Docker controls the Dopbase server process. Use `docker compose up`, `stop`, or `restart`. `dopbase --container` can run `server status`, `server logs`, and `admin` commands."
+      );
     }
     ServerCommand::Status => arguments.push("status".to_string()),
-    ServerCommand::Logs { lines, clean, watch } => {
+    ServerCommand::Logs {
+      lines,
+      clean,
+      watch,
+    } => {
       arguments.push("logs".to_string());
       arguments.push("--lines".to_string());
       arguments.push(lines.to_string());
@@ -112,42 +116,6 @@ fn push_server_command(
         arguments.push("--watch".to_string());
       }
     }
-  }
-  Ok(())
-}
-
-fn push_launch(
-  arguments: &mut Vec<String>,
-  args: &crate::cli::args::ServerLaunchArgs,
-) -> Result<()> {
-  if let Some(path) = &args.config {
-    arguments.push("--config".to_string());
-    arguments.push(path.display().to_string());
-  }
-  if let Some(path) = &args.master_key_file {
-    arguments.push("--master-key-file".to_string());
-    arguments.push(path.display().to_string());
-  }
-  if let Some(host) = &args.host {
-    arguments.push("--host".to_string());
-    arguments.push(host.clone());
-  }
-  if let Some(port) = args.port {
-    arguments.push("--port".to_string());
-    arguments.push(port.to_string());
-  }
-  if let Some(url) = &args.public_url {
-    arguments.push("--public-url".to_string());
-    arguments.push(url.clone());
-  }
-  if let Some(seconds) = args.shutdown_grace_seconds {
-    arguments.push("--shutdown-grace-seconds".to_string());
-    arguments.push(seconds.to_string());
-  }
-  match args.docs() {
-    Some(true) => arguments.push("--docs".to_string()),
-    Some(false) => arguments.push("--no-docs".to_string()),
-    None => {}
   }
   Ok(())
 }

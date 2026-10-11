@@ -503,9 +503,17 @@ async fn env_clone_human_output_lists_every_environment_in_the_project() {
   let stdout = String::from_utf8_lossy(&output.stdout);
   assert!(stdout.contains("Cloned 2 secrets from payment-service/local"));
   assert!(stdout.contains("ENVIRONMENT"));
-  assert!(stdout.contains("local"));
-  assert!(stdout.contains("staging"));
-  assert!(stdout.contains("production"));
+  assert!(stdout.contains("payment-service/local"));
+  assert!(stdout.contains("payment-service/staging"));
+  assert!(stdout.contains("payment-service/production"));
+  let header = stdout
+    .lines()
+    .find(|line| line.starts_with("ENVIRONMENT"))
+    .unwrap();
+  assert_eq!(
+    header.split_whitespace().collect::<Vec<_>>(),
+    ["ENVIRONMENT", "ID", "UPDATED"]
+  );
   assert!(stdout.contains("3 environment(s)"));
   assert!(!stdout.contains("\"projectName\""));
   assert_redacted(&output);
@@ -638,4 +646,128 @@ async fn env_clone_keeps_a_completed_clone_when_the_final_list_fails() {
   assert!(state.recorded().contains(&"import:env_100003".into()));
   assert!(!state.recorded().contains(&"delete:env_100003".into()));
   assert_redacted(&output);
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn environment_commands_resolve_references_and_save_the_default() {
+  use super::support::{Fixture, failure};
+  let fixture = Fixture::new().await;
+  let id = fixture.environment().await;
+  let all = fixture.json(&["env", "list"]).await;
+  assert_eq!(all.as_array().unwrap().len(), 1);
+  assert_eq!(all[0]["id"], id);
+  assert_eq!(fixture.json(&["env", "list", "fixture"]).await, all);
+  assert_eq!(all[0]["projectName"], "fixture");
+  assert_eq!(all[0]["name"], "local");
+  let project_id = all[0]["projectId"].as_str().unwrap();
+  fixture.json(&["project", "create", "other"]).await;
+  let other = fixture.json(&["env", "create", "other/local"]).await;
+  for (arguments, expected_names) in [
+    (vec!["env", "list"], vec!["fixture/local", "other/local"]),
+    (vec!["env", "list", "fixture"], vec!["fixture/local"]),
+    (vec!["env", "list", project_id], vec!["fixture/local"]),
+  ] {
+    let output = fixture.run(&arguments).await;
+    assert!(output.status.success(), "{output:?}");
+    let stdout = String::from_utf8(output.stdout).unwrap();
+    let mut lines = stdout.lines();
+    assert_eq!(
+      lines.next().unwrap().split_whitespace().collect::<Vec<_>>(),
+      ["ENVIRONMENT", "ID", "UPDATED"]
+    );
+    let actual_names = lines
+      .take_while(|line| !line.is_empty())
+      .map(|line| line.split_whitespace().next().unwrap())
+      .collect::<Vec<_>>();
+    assert_eq!(actual_names, expected_names);
+    assert!(stdout.contains(&id));
+    assert!(stdout.contains(" UTC"));
+    assert!(stdout.contains(&format!("{} environment(s)", expected_names.len())));
+  }
+  fixture
+    .json(&["env", "delete", other["id"].as_str().unwrap(), "--yes"])
+    .await;
+  assert_eq!(
+    fixture.json(&["env", "show", "fixture/local"]).await["id"],
+    id
+  );
+  let default = fixture.json(&["env", "default", "fixture/local"]).await;
+  assert_eq!(default["environment"]["id"], id);
+  let config = app::cli::local_config::read(&fixture.client_dir.join("config.toml")).unwrap();
+  assert_eq!(config.default_environment.unwrap().environment_id, id);
+  let renamed = fixture.json(&["env", "rename", &id, "production"]).await;
+  assert_eq!(renamed["id"], id);
+  assert_eq!(renamed["name"], "production");
+  failure(
+    &fixture.run(&["env", "delete", "fixture/production"]).await,
+    "Pass --yes",
+  );
+  assert_eq!(
+    fixture.json(&["env", "show", &id]).await["name"],
+    "production"
+  );
+  assert_eq!(
+    fixture.json(&["env", "default", "--clear"]).await["cleared"],
+    true
+  );
+  assert!(
+    app::cli::local_config::read(&fixture.client_dir.join("config.toml"))
+      .unwrap()
+      .default_environment
+      .is_none()
+  );
+  fixture.json(&["env", "delete", &id, "--yes"]).await;
+  assert!(
+    fixture
+      .json(&["env", "list"])
+      .await
+      .as_array()
+      .unwrap()
+      .is_empty()
+  );
+  for (arguments, expected) in [
+    (vec!["env", "list"], "No environments found."),
+    (
+      vec!["env", "list", "fixture"],
+      "No environments found for fixture.",
+    ),
+  ] {
+    let output = fixture.run(&arguments).await;
+    assert!(output.status.success(), "{output:?}");
+    assert_eq!(String::from_utf8(output.stdout).unwrap().trim(), expected);
+  }
+}
+
+#[cfg(unix)]
+mod edit;
+
+#[tokio::test(flavor = "multi_thread")]
+async fn agent_metadata_environment_commands_return_names_and_ids() {
+  use super::support::{Fixture, output, success};
+  let fixture = Fixture::new().await;
+  let id = fixture.environment().await;
+  let created = fixture.agent_token().await;
+  let token = created["plaintextToken"].as_str().unwrap();
+  for arguments in [
+    vec!["env", "list"],
+    vec!["env", "list", "fixture"],
+    vec!["env", "show", "fixture/local"],
+  ] {
+    let mut command = fixture.command();
+    command
+      .env("DOPBASE_TOKEN", token)
+      .args(["--json"])
+      .args(arguments);
+    let result = output(command, None).await;
+    let value = success(&result);
+    assert_eq!(
+      if value.is_array() {
+        &value[0]["id"]
+      } else {
+        &value["id"]
+      },
+      id.as_str()
+    );
+    assert!(!String::from_utf8_lossy(&result.stdout).contains(token));
+  }
 }

@@ -105,9 +105,15 @@ During restoration:
 
 ## Restoring on first-run setup
 
-When initializing a brand-new Dopbase instance:
+On fresh storage, `dopbase server start` without `DOPBASE_ROOT_EMAIL` opens
+the same protected setup flow. Explicit `server setup --web` remains useful
+when an email is set or the web UI is disabled. During restoration, avoid
+automatic root creation so the backup supplies the original accounts.
 
-1. Open `http://localhost:8840` in your browser.
+When initializing a brand-new Dopbase instance, start the existing web setup
+listener with `dopbase server setup --web`. It prints a setup link and token.
+
+1. Open the setup link in your browser.
 2. Select the **Restore from Backup** tab.
 3. Enter the one-time setup token printed by the server.
 4. Choose your `.dop` backup file.

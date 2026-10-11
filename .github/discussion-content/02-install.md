@@ -1,5 +1,23 @@
 # Install Dopbase and claim your local server
 
+## Current setup commands
+
+Fresh instances enter existing web setup during startup:
+
+```bash
+dopbase --data-dir "$HOME/.dopbase-discussion-server" server start --port 18840
+```
+
+Open the printed setup link to create root or restore a backup. The process
+keeps serving afterward. Existing instances start normally. Supplying
+`DOPBASE_ROOT_EMAIL` creates root with a generated password instead; omit it
+when following the browser exercise. Explicit `server setup` commands remain
+available, and pending factory resets still require explicit setup.
+`dopbase init` creates application projects and environments.
+
+See the [current setup guide](https://dopbase.com/docs/cli/setup). The following
+transcript records version 0.1.8, which performed web setup during startup.
+
 Tested with Dopbase **0.1.8 on macOS ARM64**, using separate local demo instances on ports 18840 and 19000. Linux uses the same CLI commands but was not replayed for this guide. Generated IDs, timestamps, and file paths will differ. Paths and setup tokens are redacted below.
 
 This walkthrough starts a local server, creates your first administrator account, and connects the CLI. The demo uses separate data directories so it can run alongside an existing installation.

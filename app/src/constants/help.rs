@@ -3,18 +3,23 @@ Environment variables:
   DOPBASE_TOKEN                   Bearer token for a machine runner or AI agent. Overrides the saved login
   DOPBASE_URL                     Server URL for client commands when --server is not set
   DOPBASE_ENV                     Environment for dopbase run when its argument is omitted
+  DOPBASE_ROOT_EMAIL              Root email for first startup or setup; setup --email overrides it
   DOPBASE_DATA_DIR                State and configuration directory (default: ~/.dopbase)
   DOPBASE_HOST                    Server bind host
   DOPBASE_PORT                    Server port (default: 8840)
   DOPBASE_PUBLIC_URL              Public URL
   DOPBASE_DOCS                    Enable or disable Swagger UI (true or false)
+  DOPBASE_WEB_UI                  Enable or disable the web UI (default: true)
   DOPBASE_MASTER_KEY_PATH         Path to the server master key file `./path/to/your.key`
   DOPBASE_SHUTDOWN_GRACE_SECONDS  Seconds allowed for graceful shutdown
   DOPBASE_CONTAINER               Docker container name for --container and dopbase docker exec (default: dopbase)
 
 Quickstart:
-  dopbase server start                     # run a server on http://localhost:8840
-  dopbase server up                        # run the server in the background
+  dopbase server setup                     # initialize the local instance once
+  dopbase server start                     # start on http://localhost:8840; fresh instances enter setup
+  dopbase server start --background        # run the server in the background (also -b)
+  dopbase server stop                      # stop the background server
+  dopbase server restart                   # restart with saved launch settings
   dopbase login                            # authenticate with the active server
   dopbase init                             # create a project + environment from ./.env
   dopbase init myapp/dev --from .env       # create a project + environment from a secrets file
@@ -24,6 +29,7 @@ Quickstart:
 Common server options:
   --host <HOST>    Bind host (default: 127.0.0.1)
   --port <PORT>    Listen port (default: 8840)
+  --no-web-ui      Disable the web UI for server start
 
 Run 'dopbase help <command>' for details on any command.
 ";

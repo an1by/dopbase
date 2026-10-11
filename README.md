@@ -52,7 +52,7 @@ Every push to `main` builds and publishes a `linux/amd64` container image to Git
 
 ## Quick start
 
-Install the latest release, then start a local server:
+Install the latest release on macOS or Linux and start it:
 
 ```bash
 curl -fsSL https://dopbase.com/install.sh | sh
@@ -66,12 +66,24 @@ irm https://dopbase.com/install.ps1 | iex
 dopbase server start
 ```
 
-```bash
-curl -fsSL https://dopbase.com/install.sh | sh
-dopbase server start
-```
+On fresh storage, startup prints the existing protected web setup link. Open it
+to create root or restore a backup. The server continues running after setup.
+An initialized instance starts normally.
 
-Open `http://localhost:8840` to finish setup in the Admin UI. The [quick-start guide](./docs/guide/quick-start.md) covers sign-in, importing a `.env` file, and running an application with its secrets.
+To create root without browser setup, run
+`DOPBASE_ROOT_EMAIL=admin@example.com dopbase server start`. Save the generated
+password shown once, then sign in. Later starts ignore this bootstrap input and
+preserve credentials. Background startup returns credentials to the launching
+command; Docker or redirected foreground output can retain them in logs.
+
+`dopbase server setup` remains available for guided terminal setup;
+`server setup --email` generates a password and exits, while
+`server setup --web --email` prefills the existing browser form. With the web UI
+disabled, supply a root email or complete CLI setup first. Interrupted factory
+resets still require explicit setup.
+
+The [quick-start guide](./docs/guide/quick-start.md)
+covers sign-in, importing a `.env` file, and running an application with its secrets.
 
 Native release archives are available for macOS and Linux on AMD64 and ARM64, and for Windows on AMD64.
 
@@ -123,8 +135,10 @@ Default install locations:
 | Windows PowerShell (`install.ps1`) | `%LOCALAPPDATA%\Dopbase\bin\dopbase.exe` |
 | Git Bash / MinGW (`install.sh`) | `%LOCALAPPDATA%\Dopbase\bin\dopbase.exe` |
 
-On Windows, run `dopbase server start` in the foreground. Background helpers
-(`dopbase server up`, `down`, and `logs`) are available on macOS and Linux only.
+On Windows, run `dopbase server start` in the foreground. Background
+`server start --background`, `server stop`, and `server restart` are available
+on macOS and Linux only. A Docker container is started and stopped by Docker,
+not by those commands.
 State still lives under `%USERPROFILE%\.dopbase` unless you set `--data-dir` or
 `DOPBASE_DATA_DIR`.
 
@@ -136,7 +150,7 @@ Dopbase keeps application secrets in one binary: run a server, store secrets per
 Usage: dopbase [OPTIONS] <COMMAND>
 
 Commands:
-  server   Start, stop, inspect, and read logs from a local Dopbase server
+  server   Set up, start, stop, inspect, and read logs from a local Dopbase server
   client   Connect the CLI to a Dopbase server (`client connect <url>`)
   login    Authenticate with the active server
   logout   Remove the saved credential for the active server
@@ -146,7 +160,7 @@ Commands:
   env      Manage environments inside a project (create, clone, list, rename, delete)
   secret   Manage secrets in an environment (list, set, get, delete)
   import   Bulk-import secrets into an environment from a dotenv, JSON, YAML, or TOML source
-  export   Export an environment's secrets as dotenv, JSON, YAML, TOML, or a Docker env file
+  export   Export secrets as dotenv, JSON, YAML, TOML, or a Docker env file
   token    Manage CI/runner access tokens for an environment
   run      Run a command with an environment's secrets injected as env vars
   cache    Inspect and clean the encrypted runtime cache for the active server
@@ -178,30 +192,44 @@ Environment variables:
   DOPBASE_TOKEN                   Bearer token for a machine runner or AI agent. Overrides the saved login
   DOPBASE_URL                     Server URL for client commands when --server is not set
   DOPBASE_ENV                     Environment for dopbase run when its argument is omitted
+  DOPBASE_ROOT_EMAIL              Root email for first startup or setup; setup --email overrides it
   DOPBASE_DATA_DIR                State and configuration directory (default: ~/.dopbase)
   DOPBASE_HOST                    Server bind host
   DOPBASE_PORT                    Server port (default: 8840)
   DOPBASE_PUBLIC_URL              Public URL
   DOPBASE_DOCS                    Enable or disable Swagger UI (true or false)
+  DOPBASE_WEB_UI                  Enable or disable the web UI (default: true)
   DOPBASE_MASTER_KEY_PATH         Path to the server master key file `./path/to/your.key`
   DOPBASE_SHUTDOWN_GRACE_SECONDS  Seconds allowed for graceful shutdown
 
 Quickstart:
-  dopbase server start                     # run a server on http://localhost:8840
-  dopbase server up                        # run the server in the background
+  dopbase server start                     # start on http://localhost:8840; fresh instances enter setup
+  dopbase server start --background        # run the server in the background (also -b)
+  dopbase server stop                      # stop the background server
+  dopbase server restart                   # restart with saved launch settings
   dopbase login                            # authenticate with the active server
   dopbase init                             # create a project + environment from ./.env
   dopbase init myapp/dev --from .env       # create a project + environment from a secrets file
-  dopbase env clone myapp/dev staging      # copy secrets into a new environment
   dopbase secret set myapp/dev API_KEY --stdin
   dopbase run myapp/dev -- node server.js  # run with secrets injected as env vars
 
 Common server options:
   --host <HOST>    Bind host (default: 127.0.0.1)
   --port <PORT>    Listen port (default: 8840)
+  --no-web-ui      Disable the web UI for server start
 
 Run 'dopbase help <command>' for details on any command.
 ```
+
+Fresh instances enter automatic setup during `server start`; completed resets
+use the same flow. Pending resets still require explicit setup. `init` creates
+a project and its first environment; it does not initialize the server.
+
+`server start` runs in the foreground. Add `--background` or `-b` to keep it running
+in the background. `server restart` preserves launch overrides and rereads configuration.
+`server up` and `server down` have been replaced by `server start --background`
+and `server stop`. The old commands show an informational migration notice and
+exit with status 1 without starting or stopping a server.
 
 ## Why Dopbase
 
@@ -230,9 +258,11 @@ SQLite database, lock files, configuration, and local master key live under
 
 Read the [public documentation](./docs/) for the product model, CLI, self-hosting guidance, security design, and roadmap.
 
-Dopbase 0.1.8 includes environment cloning, configurable token expiry, guided
-`.env` setup, four roles, user management, read-only AI accounts, an instance
-overview, encrypted backups, and crash-safe factory reset.
+Dopbase 0.1.9 adds guided server setup, automatic first-run initialization,
+optional web UI, and background server restart. It includes environment cloning,
+configurable token expiry, guided `.env` setup, four roles, user management,
+read-only AI accounts, an instance overview, encrypted backups, and crash-safe
+factory reset.
 
 See [users and AI agents](./docs/ui/users.md) and [role permissions](./docs/reference/identity.md) for how access works.
 Version 0.1.0 starts with a fresh data directory. Databases and backups from
@@ -264,7 +294,7 @@ See [server and client](./docs/guide/server-client.md) for the full walkthrough.
 
 | Path         | Purpose                                         | Current state                 |
 | ------------ | ----------------------------------------------- | ----------------------------- |
-| `app/`       | Rust service and command-line application       | v0.1.8 backend implementation |
+| `app/`       | Rust service and command-line application       | v0.1.9 backend implementation |
 | `app/tests/` | Rust integration tests                          | Backend and CLI test suite    |
 | `src/`       | Vue administration interface and frontend tests | Embedded Admin UI             |
 | `docs/`      | VitePress product documentation                 | Active public specification   |
@@ -295,6 +325,10 @@ Scripts use the `action:target` pattern. The targets are `ui`, `app`, and
 | `bun run test`       | Run the Admin UI and Rust application tests |
 | `bun run test:ui`    | Run only the Admin UI tests                 |
 | `bun run test:app`   | Run only the Rust application and CLI tests |
+
+`bun run dev` and `bun run dev:app` automatically enter setup on fresh storage.
+Use a separate `DOPBASE_DATA_DIR` for development. Open the printed setup link or
+supply `DOPBASE_ROOT_EMAIL` to generate credentials without browser setup.
 
 The combined command serves the UI at `http://localhost:9000`, proxies `/api`
 requests to the backend at `http://localhost:8840`, and stops both processes

@@ -7,7 +7,9 @@ use crate::{
   config::{ServerConfig, ServerOverrides},
   constants::{
     config::{DEFAULT_PUBLIC_URL, ENV_SERVER_URL},
-    tokens::{ADMIN_SESSION_PREFIX, AGENT_TOKEN_PREFIX, RUNNER_TOKEN_PREFIX, WORKSPACE_TOKEN_PREFIX},
+    tokens::{
+      ADMIN_SESSION_PREFIX, AGENT_TOKEN_PREFIX, RUNNER_TOKEN_PREFIX, WORKSPACE_TOKEN_PREFIX,
+    },
   },
   daemon::ManagedDaemonState,
 };
@@ -278,8 +280,7 @@ pub fn status_document(
 
 fn credential_identity(credential: &Credential) -> &'static str {
   match credential.source {
-    CredentialSource::Argument | CredentialSource::Environment => match credential.token.as_deref()
-    {
+    CredentialSource::Environment => match credential.token.as_deref() {
       Some(token) if token.starts_with(ADMIN_SESSION_PREFIX) => "human",
       Some(token) if token.starts_with(RUNNER_TOKEN_PREFIX) => "runner",
       Some(token) if token.starts_with(WORKSPACE_TOKEN_PREFIX) => "workspace_runner",

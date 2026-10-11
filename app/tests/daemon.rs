@@ -140,6 +140,15 @@ async fn clean_logs_creates_a_missing_log_file() {
   assert_eq!(fs::read_to_string(path).unwrap(), "");
 }
 
+#[cfg(unix)]
+#[tokio::test]
+async fn readiness_does_not_claim_a_runtime_owned_descriptor() {
+  assert!(Ready::attached().is_none());
+  // The reactor must remain usable after checking for the parent pipe.
+  let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+  assert!(listener.local_addr().unwrap().port() > 0);
+}
+
 #[test]
 fn ready_reports_exactly_once() {
   let buffer = SharedBuffer::default();
@@ -214,4 +223,17 @@ async fn stop_never_signals_a_live_process_from_an_unowned_stale_pid_file() {
   assert!(unrelated.try_wait().unwrap().is_none());
   unrelated.kill().unwrap();
   let _ = unrelated.wait();
+}
+
+#[test]
+fn saved_launch_settings_without_web_ui_remain_compatible() {
+  let launch: app::daemon::LaunchDescriptor = serde_json::from_value(serde_json::json!({
+    "version": 1,
+    "overrides": {"background": true, "supervised": false},
+    "environment": {},
+    "working_directory": "/tmp"
+  }))
+  .unwrap();
+  assert_eq!(launch.overrides.web_ui, None);
+  assert_eq!(launch.environment.web_ui, None);
 }

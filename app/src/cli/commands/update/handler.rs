@@ -26,7 +26,7 @@ pub struct UpdateStatus {
 
 pub async fn run(json_output: bool) -> Result<i32> {
   let current = env!("CARGO_PKG_VERSION");
-  let status = check(current).await?;
+  let status = check_release(current, RELEASE_API_URL).await?;
   if json_output {
     println!("{}", serde_json::to_string_pretty(&status)?);
   } else if status.update_available {
@@ -67,7 +67,11 @@ fn install_command_hint() -> &'static str {
   }
 }
 
-async fn check(current: &'static str) -> Result<UpdateStatus> {
+#[doc(hidden)]
+pub async fn check_release(
+  current: &'static str,
+  endpoint: &str,
+) -> Result<UpdateStatus> {
   let current_version = parse_version(current).context("invalid CARGO_PKG_VERSION")?;
   let client = reqwest::Client::builder()
     .user_agent(format!("dopbase/{current}"))
@@ -75,7 +79,7 @@ async fn check(current: &'static str) -> Result<UpdateStatus> {
     .build()
     .context("failed to build an HTTP client")?;
   let response = client
-    .get(RELEASE_API_URL)
+    .get(endpoint)
     .header("Accept", "application/vnd.github+json")
     .header("X-GitHub-Api-Version", "2022-11-28")
     .send()

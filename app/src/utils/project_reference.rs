@@ -54,9 +54,7 @@ pub fn parse_create_target(value: &str) -> Result<ProjectCreateTarget, String> {
       .next()
       .ok_or_else(|| "project path cannot be empty".to_string())?;
     if !slug::is_valid(name) {
-      return Err(
-        "project name must be a lowercase slug of at most 63 characters".into(),
-      );
+      return Err("project name must be a lowercase slug of at most 63 characters".into());
     }
     return Ok(ProjectCreateTarget {
       name: name.to_owned(),
@@ -65,9 +63,7 @@ pub fn parse_create_target(value: &str) -> Result<ProjectCreateTarget, String> {
     });
   }
   if !slug::is_valid(&api_ref) {
-    return Err(
-      "project name must be a lowercase slug of at most 63 characters".into(),
-    );
+    return Err("project name must be a lowercase slug of at most 63 characters".into());
   }
   Ok(ProjectCreateTarget {
     name: api_ref,

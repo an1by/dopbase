@@ -41,15 +41,16 @@ pub async fn resolve_all(
   let parsed = parse(reference).ok_or_else(|| sqlx::Error::RowNotFound)?;
   match parsed {
     EnvironmentReference::Id(id) => Ok(find_id(pool, &id).await?.into_iter().collect()),
-    EnvironmentReference::Legacy { project, environment } => {
-      sqlx::query_as(&format!(
-        "{SELECT} WHERE (p.id=? OR p.name=?) AND e.name=?"
-      ))
-      .bind(&project)
-      .bind(&project)
-      .bind(&environment)
-      .fetch_all(pool)
-      .await
+    EnvironmentReference::Legacy {
+      project,
+      environment,
+    } => {
+      sqlx::query_as(&format!("{SELECT} WHERE (p.id=? OR p.name=?) AND e.name=?"))
+        .bind(&project)
+        .bind(&project)
+        .bind(&environment)
+        .fetch_all(pool)
+        .await
     }
     EnvironmentReference::Qualified {
       workspace,

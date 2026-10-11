@@ -20,22 +20,18 @@ pub async fn complete_environment_reference(
   if reference.starts_with(ENVIRONMENT_ID_PREFIX) || reference.contains('/') {
     return Ok(reference.to_string());
   }
-  let project = resolve_project_from_cwd(api)
-    .await?
-    .with_context(|| {
-      format!(
-        "could not resolve project from the current directory for environment name '{reference}'"
-      )
-    })?;
+  let project = resolve_project_from_cwd(api).await?.with_context(|| {
+    format!(
+      "could not resolve project from the current directory for environment name '{reference}'"
+    )
+  })?;
   Ok(format!(
     "{}/{}/{}",
     project.workspace_name, project.name, reference
   ))
 }
 
-pub async fn resolve_project_from_cwd(
-  api: &ApiClient,
-) -> Result<Option<ResolvedProjectLocation>> {
+pub async fn resolve_project_from_cwd(api: &ApiClient) -> Result<Option<ResolvedProjectLocation>> {
   let cwd = env::current_dir().context("could not read the current working directory")?;
   let projects = api
     .request(Method::GET, api_paths::projects::COLLECTION, None)
@@ -94,7 +90,10 @@ pub async fn resolve_project_from_cwd(
   Ok(best.map(|(_, location)| location))
 }
 
-fn join_workspace_path(root: &str, relative: &str) -> String {
+fn join_workspace_path(
+  root: &str,
+  relative: &str,
+) -> String {
   let normalized_root = normalize_path_string(root);
   let root = normalized_root.trim_end_matches('/');
   if relative == "." {
@@ -118,7 +117,10 @@ fn normalize_path_string(value: impl AsRef<str>) -> String {
   normalized
 }
 
-fn path_contains(cwd: &str, root: &str) -> bool {
+fn path_contains(
+  cwd: &str,
+  root: &str,
+) -> bool {
   let cwd = normalize_path_string(cwd);
   let root = normalize_path_string(root);
   if cwd.eq_ignore_ascii_case(&root) {

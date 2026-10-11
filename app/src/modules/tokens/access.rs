@@ -1,8 +1,4 @@
-use crate::{
-  constants::errors::TOKEN_SCOPE_INVALID,
-  http::HttpError,
-  models::AuthIdentity,
-};
+use crate::{constants::errors::TOKEN_SCOPE_INVALID, http::HttpError, models::AuthIdentity};
 use sqlx::SqlitePool;
 
 pub async fn runner_may_access_environment(

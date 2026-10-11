@@ -6,7 +6,10 @@ fn normalize_git_bash_converted_default_project_reference() {
     cli_path_argument::normalize("C:/Program Files/Git/api"),
     "/api"
   );
-  assert_eq!(to_api_reference("C:/Program Files/Git/api").unwrap(), "default/api");
+  assert_eq!(
+    to_api_reference("C:/Program Files/Git/api").unwrap(),
+    "default/api"
+  );
 }
 
 #[test]

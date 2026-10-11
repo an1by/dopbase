@@ -17,8 +17,10 @@ When no server is configured, the CLI uses:
 http://localhost:8840
 ```
 
-This default is implicit. Dopbase does not need to create a configuration file
-just to connect to a server started with the default `dopbase server start` settings.
+This default is implicit. Client commands can use it without a configuration
+file. Setup and startup create a missing `config.toml` with commented examples.
+Startup also recreates missing reference files for an initialized instance. The examples leave
+the implicit local connection and unset default environment unchanged.
 
 If a configured remote server is unavailable, Dopbase fails clearly. It never
 falls back to localhost, Cloud, or another endpoint.
@@ -34,6 +36,12 @@ macOS and Linux: ~/.dopbase/config.toml
 Use the global `--data-dir <dir>` option or `DOPBASE_DATA_DIR` to relocate this
 file together with the default server data. The CLI option takes precedence
 over the environment variable.
+
+The generated file describes every client setting with commented examples.
+Existing files stay untouched during setup and server startup. When `client connect` or
+`env default` saves settings, Dopbase writes the reference at the top and the
+active settings below `# Saved client settings`. Edit active settings there
+instead of uncommenting an example for the same key.
 
 The v{{version}} schema contains only non-secret client state:
 
@@ -208,9 +216,12 @@ The effective server is resolved in this order:
 
 Authentication is resolved in this order:
 
-1. `-t <TOKEN>` or `--token <TOKEN>` on `dopbase run`
-2. `DOPBASE_TOKEN`
-3. The encrypted credential matching the normalized active server
+1. `DOPBASE_TOKEN`
+2. The encrypted credential matching the normalized active server
+
+An empty or invalid `DOPBASE_TOKEN` stops the command instead of falling back.
+Runner exports use the same precedence and require a live server response;
+they never use the encrypted run cache.
 
 The environment used by `dopbase run` is resolved in this order:
 

@@ -76,15 +76,24 @@ pub mod projects {
   pub const LOCATION: &str = api_path!("/projects/{project_ref}/location");
 
   pub fn item(project_ref: &str) -> String {
-    super::render(ITEM, &[("project_ref", &super::encode_project_ref(project_ref))])
+    super::render(
+      ITEM,
+      &[("project_ref", &super::encode_project_ref(project_ref))],
+    )
   }
 
   pub fn environments(project_ref: &str) -> String {
-    super::render(ENVIRONMENTS, &[("project_ref", &super::encode_project_ref(project_ref))])
+    super::render(
+      ENVIRONMENTS,
+      &[("project_ref", &super::encode_project_ref(project_ref))],
+    )
   }
 
   pub fn location(project_ref: &str) -> String {
-    super::render(LOCATION, &[("project_ref", &super::encode_project_ref(project_ref))])
+    super::render(
+      LOCATION,
+      &[("project_ref", &super::encode_project_ref(project_ref))],
+    )
   }
 }
 

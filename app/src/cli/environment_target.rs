@@ -27,8 +27,7 @@ pub fn parse_init(value: &str) -> Result<EnvironmentTarget, String> {
   let target = parse_target(value)?;
   if target.project.contains('/') {
     return Err(
-      "init uses PROJECT/ENVIRONMENT only; workspace-qualified targets are not supported"
-        .into(),
+      "init uses PROJECT/ENVIRONMENT only; workspace-qualified targets are not supported".into(),
     );
   }
   if !slug::is_valid(&target.project) {
@@ -90,9 +89,7 @@ fn parse_target(value: &str) -> Result<EnvironmentTarget, String> {
     },
   };
   if !slug::is_valid(&target.environment) {
-    return Err(
-      "environment name must be a lowercase slug of at most 63 characters".into(),
-    );
+    return Err("environment name must be a lowercase slug of at most 63 characters".into());
   }
   Ok(target)
 }

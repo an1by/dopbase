@@ -17,9 +17,12 @@ the [CLI cheat sheet](./cheat-sheet).
 
 | Command                                | Purpose                             |
 | -------------------------------------- | ----------------------------------- |
+| `dopbase server setup`                 | Initialize local storage and root   |
+| `dopbase server setup --web`           | Run existing browser setup          |
 | `dopbase server start`                 | Run the server in the foreground    |
-| `dopbase server up`                    | Start the server in the background  |
-| `dopbase server down`                  | Stop the background server          |
+| `dopbase server start --background`    | Start the server in the background  |
+| `dopbase server restart`               | Restart the background server       |
+| `dopbase server stop`                  | Stop the background server          |
 | `dopbase server status`                | Check the local server process      |
 | `dopbase server logs`                  | Read background server logs         |
 | `dopbase client connect <server-url>`  | Validate and save another server    |
@@ -40,31 +43,64 @@ new endpoint. A foreground server must first be stopped with Ctrl+C. It does
 not select a project or environment, stop remote or unrelated local servers,
 or revoke browser sessions.
 
+## Server setup
+
+Use `dopbase server setup` for optional standalone terminal initialization. It
+prompts for the root email, a masked password of 12 to 128 characters, and
+confirmation when no email default is supplied. `--email EMAIL` or
+`DOPBASE_ROOT_EMAIL` generates a password and prints it once without prompting;
+this mode also supports global `--json`. Explicit `--email` takes precedence.
+
+Setup accepts `--config` and `--master-key-file` with global `--data-dir`,
+rejects `--server`, and leaves the server stopped. It creates no client session
+and does not change the selected client endpoint. `dopbase init` remains the
+project and environment workflow.
+
+`server setup --web` starts the existing foreground web flow, including backup
+restore. It accepts the foreground listener options listed below, continues
+serving after setup, and stops with Ctrl+C. `--email` or `DOPBASE_ROOT_EMAIL`
+prefills the email through the printed setup link. Web setup rejects `--json`.
+Listener options require `--web` when used with setup.
+See [server setup](./setup) for output, recovery, and instance selection.
+
 ## Server lifecycle
 
-`server start` stays attached to the terminal and stops with Ctrl+C. On macOS
-and Linux, `server up` starts a managed background process. Use `server down`
+Fresh startup enters existing web setup, or creates root with a generated password
+when `DOPBASE_ROOT_EMAIL` is supplied. Existing instances preserve credentials.
+With the web UI disabled and no email, complete CLI setup first. Interrupted
+factory resets also require explicit setup. `server start` stays attached to the
+terminal and stops with Ctrl+C. On macOS
+and Linux, `server start --background` starts a managed background process. Use `server stop`
 to stop it, `server status` to inspect it, and `server logs` to read its output.
-See [server lifecycle](./serve) for options and examples.
+`server restart` restarts a running background server with its saved CLI and
+environment overrides while rereading configuration. It accepts `--timeout`
+(default 10 seconds). Stop and start again to change explicit launch overrides.
+See [server lifecycle](./serve) for options, migration steps, and examples.
 
-`server start` and `server up` accept the same launch options:
+`server start` accepts these options in either mode:
 
 | Option                               | Purpose                                     |
 | ------------------------------------ | ------------------------------------------- |
+| `--background`, `-b`                 | Run a managed background server             |
 | `--config <FILE>`                    | Read a different server configuration file  |
 | `--host <HOST>`                      | Bind to an IP address, default `127.0.0.1`  |
 | `--port <PORT>`                      | Listen on a port, default `8840`            |
 | `--public-url <URL>`                 | Set the URL clients use to reach the server |
 | `--shutdown-grace-seconds <SECONDS>` | Set the request-drain timeout               |
+| `--no-web-ui`                        | Disable the web UI for `server start`       |
 | `--docs` / `--no-docs`               | Enable or disable API documentation         |
 | `--master-key-file <FILE>`           | Read the master key from another file       |
 
-`server down --timeout <SECONDS>` waits 10 seconds by default. `server logs`
+`server stop --timeout <SECONDS>` waits 10 seconds by default. `server logs`
 accepts `--lines <COUNT>` (default 100), `--watch` or `-w`, and `--clean`.
 `--clean --watch` clears the existing log before waiting for new output.
 
-The old `serve`, `serve --background`, and `stop` commands are not supported.
-Use `server start`, `server up`, and `server down` respectively.
+`server up` and `server down` have been replaced by `server start --background`
+and `server stop`. The old commands show an informational migration notice and
+exit with status 1 without starting or stopping a server.
+
+The old top-level `serve`, `serve --background`, and `stop` commands are not supported.
+Use `server start`, `server start --background`, and `server stop` respectively.
 
 ## Check for updates
 
@@ -94,13 +130,11 @@ The server resolution order is:
 3. The endpoint saved by `dopbase client connect`
 4. `http://localhost:8840`
 
-Machine runners can register a credential with `dopbase login --token`. CI
-systems and deployment platforms can use `DOPBASE_TOKEN`. For `dopbase run`, an
-explicit `-t <TOKEN>` or `--token <TOKEN>` takes precedence over
-`DOPBASE_TOKEN`, followed by the encrypted credential saved by `login`. A saved
-credential is used only when it matches the resolved server. Command-line
-tokens may be visible in shell history and process inspection, so they are best
-kept for one-off overrides.
+Machine runners can save an encrypted credential with `dopbase login --token`.
+CI systems and deployment platforms should inject `DOPBASE_TOKEN` from their
+secret store. Authentication uses `DOPBASE_TOKEN`, then the encrypted credential
+saved by `login`. A saved credential is used only when it matches the resolved
+server. An invalid environment credential never falls back to the saved one.
 
 `dopbase client status` displays the config path, resolved server and its source,
 authentication source, locally identified credential type, login email, and
@@ -181,16 +215,31 @@ affected resource counts and requires confirmation. Automation must pass
 
 ## Environment commands
 
-| Command                                                                          | Purpose                            |
-| -------------------------------------------------------------------------------- | ---------------------------------- |
-| `dopbase env create <PROJECT_REF/ENVIRONMENT_NAME>`                              | Create an environment              |
-| `dopbase env clone <PROJECT_REF/SOURCE_ENVIRONMENT_NAME> <NEW_ENVIRONMENT_NAME>` | Clone secrets to a new environment |
-| `dopbase env default <ENVIRONMENT_REF>`                                          | Set the run default                |
-| `dopbase env default --clear`                                                    | Clear the run default              |
-| `dopbase env list [PROJECT_REF]`                                                 | List environments                  |
-| `dopbase env show <ENVIRONMENT_REF>`                                             | Show environment metadata          |
-| `dopbase env rename <ENVIRONMENT_REF> <NEW_ENVIRONMENT_NAME>`                    | Rename an environment              |
-| `dopbase env delete <ENVIRONMENT_REF>`                                           | Delete an environment              |
+| Command                                                                          | Purpose                                  |
+| -------------------------------------------------------------------------------- | ---------------------------------------- |
+| `dopbase env create <PROJECT_REF/ENVIRONMENT_NAME>`                              | Create an environment                    |
+| `dopbase env clone <PROJECT_REF/SOURCE_ENVIRONMENT_NAME> <NEW_ENVIRONMENT_NAME>` | Clone secrets to a new environment       |
+| `dopbase env edit <ENVIRONMENT_REF>`                                             | Edit an environment in a terminal editor |
+| `dopbase env default <ENVIRONMENT_REF>`                                          | Set the run default                      |
+| `dopbase env default --clear`                                                    | Clear the run default                    |
+| `dopbase env list [PROJECT_REF]`                                                 | List environments                        |
+| `dopbase env show <ENVIRONMENT_REF>`                                             | Show environment metadata                |
+| `dopbase env rename <ENVIRONMENT_REF> <NEW_ENVIRONMENT_NAME>`                    | Rename an environment                    |
+| `dopbase env delete <ENVIRONMENT_REF>`                                           | Delete an environment                    |
+
+`dopbase env list` shows `ENVIRONMENT`, `ID`, and `UPDATED` columns. Each
+`ENVIRONMENT` value uses the project and environment names, such as
+`payment-service/local`. Filtering by project name or ID keeps this format.
+`--json` returns the environment records with separate `projectName` and `name`
+fields.
+
+```text
+ENVIRONMENT                  ID           UPDATED
+payment-service/local        env_100001   2026-10-05 08:30 UTC
+payment-service/production   env_100002   2026-10-05 09:00 UTC
+
+2 environment(s)
+```
 
 Deleting an environment also deletes its secrets and scoped tokens. The
 operation requires confirmation or `--yes` and is recorded in the audit log.
@@ -221,6 +270,75 @@ returns the same environment array as `dopbase env list <PROJECT_REF> --json`.
 The clone copies current secret key/value pairs only. It does not copy editor
 layout, tokens, audit history, IDs, or timestamps, and it does not keep the two
 environments synchronized.
+
+## Edit a whole environment
+
+```bash
+dopbase env edit payment-service/staging
+dopbase env edit payment-service/staging --editor hx
+dopbase env edit payment-service/staging --editor nvim --dry-run
+```
+
+`env edit` requires a terminal. With an existing login, Dopbase first checks
+that the environment exists and lists its secret metadata. If it is empty,
+Dopbase asks whether to add secrets; pressing Enter exits without password
+confirmation or opening an editor. Existing sessions always require password
+confirmation before export. A login completed by this command counts as
+confirmation, so it does not ask twice.
+
+Editor selection uses `--editor`, then `VISUAL`, then `EDITOR`. If none is set,
+Dopbase checks for `nvim`, `vim`, `hx`, and `nano`, in that order.
+Commands are split into arguments without a shell; shell expansion and pipelines are unavailable.
+
+The editor opens the current secrets as `.env` text. On exit, Dopbase parses
+the document and runs a server dry run. The preview lists added, updated, and
+deleted key names without showing their values. Type `apply` to save, `edit`
+to reopen the buffer, or press Enter to cancel. `--dry-run` stops after the
+preview and saves nothing. Invalid documents can be reopened for correction.
+
+Removing a line schedules that key for deletion. `KEY=` saves an empty value.
+Deleting every secret requires typing the environment reference. There is no
+`--yes` option, and `--json` is unavailable for this interactive command.
+
+Comments, blank lines, and key ordering survive later CLI and UI sessions.
+Comments are unencrypted metadata. Put credentials in values, never in
+comments. Use escaped newlines for multiline values, such as
+`PRIVATE_KEY="first\nsecond"`. Variable references and command substitutions
+remain literal text; Dopbase never evaluates them.
+
+The environment must remain unchanged from loading through saving. If another
+user changes its secrets or layout, Dopbase stops with a conflict. Start a
+fresh editing session to work from the current values. Failed or uncertain
+save requests are not automatically retried. Dopbase removes the editor files
+before submitting a confirmed draft. Once submission starts, an interruption
+waits for the server response instead of reporting a cancellation while a save
+may still commit.
+
+### Editor security
+
+Known editors use a protected session with isolated configuration and disabled
+plugins, language servers, swap files, backups, and persistent history where
+applicable. This means your usual configuration and custom mappings are not
+loaded. On macOS, a `nano` alias pointing to Pico is treated as a custom
+editor. A custom command, including a known editor with extra arguments,
+requires acknowledgement before values are fetched. Custom editors must wait
+until editing finishes; a launcher that returns immediately is unsuitable.
+
+Dopbase uses an owner-only session directory under the active client
+configuration directory's `secret-edit` folder. The directory has mode `0700`
+and the `.env` file has mode `0600`. The editor receives a limited environment
+without Dopbase tokens or unrelated credentials. Unsafe file replacements,
+symlinks, hard links, and documents larger than 8 MiB are rejected.
+
+Dopbase removes session files after success, cancellation, errors, Ctrl+C,
+and handled termination signals. A later `env edit` invocation removes
+abandoned sessions while preserving active sessions. Cleanup failures report
+the remaining directory. Linux and macOS are supported.
+
+External editors receive plaintext. Forced termination, power loss, disk
+snapshots, a compromised editor, or terminal recording can expose it. File
+deletion does not guarantee forensic erasure. Read the
+[security model](/reference/security#terminal-editor-sessions) for these limits.
 
 ## Secret commands
 
@@ -319,13 +437,59 @@ and remove the file after the command exits.
 
 File export refuses to overwrite an existing path unless `--force` is passed
 and creates the file with restrictive permissions where the platform supports
-them. Export and stdout reveal plaintext values and therefore require reveal
-permission and create an audit event. The CLI also requires interactive
-password confirmation for every export. Non-interactive export is rejected.
+them. Export reveals plaintext values and records access in the audit log.
+Human CLI exports require interactive password confirmation. Runner tokens can
+export only their assigned environment without a prompt, using `DOPBASE_TOKEN`
+or an encrypted saved runner credential. AI agent tokens cannot export values.
+
+Exports require a live server response. They never fall back to the encrypted
+run cache. Authentication, network, or rendering failures leave an existing
+output file untouched.
 
 The Admin UI provides the same workflow for dotenv files, with a visual review
 and dry-run summary before anything is stored. See
 [import and export](/ui/import-export).
+
+### Export in AWS CodeBuild
+
+Install Dopbase in the build image and use a runner token scoped to the target
+environment. Store a JSON secret containing a `token` field in AWS Secrets
+Manager, for example under `dopbase/production`. Give the CodeBuild service role
+`secretsmanager:GetSecretValue` access to that secret. CodeBuild injects it as
+`DOPBASE_TOKEN` through `env.secrets-manager`:
+
+```yaml
+version: 0.2
+env:
+  shell: bash
+  variables:
+    DOPBASE_URL: https://dopbase.example.com
+  secrets-manager:
+    DOPBASE_TOKEN: "dopbase/production:token"
+phases:
+  build:
+    commands:
+      - |
+        (
+          set -eu
+          set +x
+          secrets_dir=$(mktemp -d)
+          trap 'rm -rf "$secrets_dir"' EXIT
+          dopbase export env_482731 --output "$secrets_dir/.env"
+          ./deploy.sh "$secrets_dir/.env"
+        )
+```
+
+Replace the environment ID and deployment command with your own. The build
+must be able to reach the Dopbase server. The shell exits if export fails and
+removes its temporary secrets directory when the block ends. Keep `.env` out of
+build logs, source control, container image layers, and ordinary build artifacts.
+No `dopbase login` step is needed.
+
+AWS Systems Manager Parameter Store is another option, using
+`env.parameter-store` and the corresponding IAM permissions. See the
+[AWS CodeBuild buildspec reference](https://docs.aws.amazon.com/codebuild/latest/userguide/build-spec-ref.html)
+for both integrations and permissions, including KMS requirements.
 
 ## Runner tokens
 
@@ -365,13 +529,15 @@ settings (workspace).
 
 Without `--expires-in`, runner and workspace tokens do not expire. Use `never`
 or a whole number followed by `h` or `d`, up to `26280h` or `1095d`. The server
-rejects expired tokens even if the client's clock is wrong.
+rejects expired tokens even if the client's clock is wrong. The list shows each
+token's expiry and status.
 
-An environment runner can read values only for its environment. A workspace
-runner can read values for any environment in linked projects; the CLI still
-requires an explicit environment reference on each command (for example
-`blipsu/api/staging`). Neither token type can modify secrets or use admin
-export over the browser API.
+An environment runner (`dbs_`) can retrieve values for `dopbase run` and export
+them from its assigned environment. Export audit entries identify the runner
+token and secret count without storing values. A workspace runner (`dbw_`) can
+read values for any environment in linked projects; the CLI still requires an
+explicit environment reference on each command (for example
+`blipsu/api/staging`). Neither token type can modify secrets.
 
 ## Run a process
 
@@ -388,10 +554,10 @@ printf '%s' "$RUNNER_TOKEN" | dopbase login --token
 dopbase run payment-service/production -- npm start
 ```
 
-Use an explicit token only for a one-off command:
+For CI jobs, inject `DOPBASE_TOKEN` through the pipeline's secret store:
 
 ```bash
-dopbase run payment-service/production -t "$RUNNER_TOKEN" -- npm start
+dopbase run payment-service/production -- npm start
 ```
 
 Automation may set `DOPBASE_ENV` instead:
@@ -511,8 +677,9 @@ dopbase restore ./pre-upgrade.dop --key /path/to/source/master.key
 # Restore on a new server using a 64-character hex master key
 dopbase restore ./pre-upgrade.dop --key 4a2f8b9c01234567...
 
-# First-run restore requires the setup token printed by the target server
-dopbase restore ./pre-upgrade.dop --setup-token dbs_... --yes
+# First run: start without DOPBASE_ROOT_EMAIL, or use `server setup --web`
+# Use the setup token printed by that target listener
+dopbase restore ./pre-upgrade.dop --setup-token setup_... --yes
 ```
 
 | Argument / Flag         | Description                                                                                         |
@@ -533,7 +700,7 @@ dopbase restore ./pre-upgrade.dop --setup-token dbs_... --yes
   5. If `--key` was provided, re-keys restored secret metadata to the target server's existing `~/.dopbase/master.key`.
   6. Replaces SQLite database tables, runs any pending migrations, and preserves the active administrator session.
 - **On a first-run uninitialized server**:
-  - Restoring requires the one-time first-run setup token.
+  - Start with no bootstrap email, or use `server setup --web`; restoration requires the printed one-time setup token.
 
 > [!IMPORTANT]
 > `dopbase restore` strictly requires the server to be live and connected (`server_status: connected (live)`).
@@ -565,7 +732,8 @@ root password. There is no non-interactive bypass.
 By default, the reset saves the whole data directory to a timestamped ZIP next
 to that directory, then removes the active data. The ZIP includes every
 database, master-key, configuration, backup, log, and local CLI file stored
-inside the directory. The next server start creates a fresh installation.
+inside the directory. Start again to enter automatic setup on the fresh instance.
+An interrupted web reset still requires explicit setup to finish its pending work.
 
 Pass `--no-backup` to remove the data directory without creating the ZIP. The
 same confirmation phrase and root password are still required.

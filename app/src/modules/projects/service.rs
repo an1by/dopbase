@@ -33,9 +33,7 @@ async fn ensure_name_available_in_workspace(
   name: &str,
   exclude_project_id: Option<&str>,
 ) -> Result<(), HttpError> {
-  if repository::name_taken_in_workspace(pool, workspace_id, name, exclude_project_id)
-    .await?
-  {
+  if repository::name_taken_in_workspace(pool, workspace_id, name, exclude_project_id).await? {
     return Err(HttpError::conflict(
       "PROJECT_ALREADY_EXISTS",
       "A project with this name already exists in the workspace.",

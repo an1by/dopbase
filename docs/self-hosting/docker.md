@@ -88,7 +88,14 @@ host = "0.0.0.0"
 port = 8840
 public_url = "https://dopbase.example.com"
 docs = false
+web_ui = true
 ```
+
+Set `DOPBASE_ROOT_EMAIL` on the service to create the root account with a
+generated password on the first `server start`. The password and setup link
+are printed once in the container logs. An initialized container ignores that
+variable on later starts. Set `DOPBASE_WEB_UI=false` or `web_ui = false` to
+serve the API without the Admin UI.
 
 Start the stack:
 
@@ -116,11 +123,13 @@ hostname.
 
 ## Operating the server inside the container
 
-The image entrypoint is `dopbase`. Override with explicit subcommands as in the
-Compose example (`server start --config ...`).
+The image entrypoint is `dopbase`, and the default command is foreground
+`server start`. Docker Compose starts, stops, and restarts that process
+(`docker compose up -d`, `stop`, `restart`). Do not use `server up`,
+`server down`, `server start --background`, `server stop`, or
+`server restart` inside the container.
 
-From the host, forward **local** `admin` and `server` commands with
-`--container`:
+From the host, forward inspection and admin commands with `--container`:
 
 ```bash
 dopbase --container server status

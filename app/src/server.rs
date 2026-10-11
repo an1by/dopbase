@@ -1,3 +1,9 @@
+mod instance;
+pub(crate) mod provision;
+
+pub(crate) use instance::require_uninitialized;
+pub use instance::{InitializationRequired, require_initialized};
+
 use std::{
   fs::{File, OpenOptions},
   sync::Arc,
@@ -34,7 +40,18 @@ use crate::{
   state::{AppState, SetupState},
 };
 
+/// Build runtime state for an initialized instance.
 pub async fn build_state(config: ServerConfig) -> Result<AppState> {
+  require_initialized(&config).await?;
+  build_instance_state(config, false).await
+}
+
+/// Build state for an explicitly requested web setup or an isolated setup fixture.
+pub async fn build_setup_state(config: ServerConfig) -> Result<AppState> {
+  build_instance_state(config, true).await
+}
+
+pub(crate) async fn prepare_instance(config: &ServerConfig) -> Result<(DbClient, CryptoService)> {
   ensure_data_dir(&config.data_dir)?;
   let db = DbClient::connect(&config.database_url)
     .await
@@ -47,7 +64,7 @@ pub async fn build_state(config: ServerConfig) -> Result<AppState> {
     .context("failed to initialize master key")?;
   let reset_marker = config.data_dir.join(".factory-reset.pending");
   if reset_marker.exists() {
-    // A reset marker is durable intent. Re-run the database phase on startup
+    // A reset marker is durable intent. Re-run the database phase during setup
     // so a process crash cannot leave a partially reset instance usable.
     let mut tx = db.pool().begin().await?;
     for table in [
@@ -84,10 +101,18 @@ pub async fn build_state(config: ServerConfig) -> Result<AppState> {
     std::fs::remove_file(&reset_marker)
       .with_context(|| format!("failed to clear reset marker {}", reset_marker.display()))?;
   }
+  Ok((db, crypto))
+}
+
+async fn build_instance_state(
+  config: ServerConfig,
+  setup_enabled: bool,
+) -> Result<AppState> {
+  let (db, crypto) = prepare_instance(&config).await?;
   let admin_count: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM admins")
     .fetch_one(db.pool())
     .await?;
-  let setup_token = if admin_count == 0 {
+  let setup_token = if setup_enabled && admin_count == 0 {
     Some(token::generate("setup_")?)
   } else {
     None
@@ -208,6 +233,7 @@ pub fn startup_banner(
   bind_address: &str,
   data_dir: &std::path::Path,
   docs_enabled: bool,
+  web_ui_enabled: bool,
 ) -> String {
   let public_url = public_url.trim_end_matches('/');
   let heading = Style::new().effects(Effects::BOLD);
@@ -218,7 +244,14 @@ pub fn startup_banner(
     String::new(),
     format!("Public URL: {public_url}"),
     format!("Bind:       {bind_address}"),
-    format!("Admin UI:   {public_url}"),
+    format!(
+      "Admin UI:   {}",
+      if web_ui_enabled {
+        public_url
+      } else {
+        "disabled"
+      }
+    ),
     format!("API:        {public_url}/api/v1"),
     format!("Config:     {}", data_dir.display()),
   ];
@@ -242,9 +275,23 @@ pub fn setup_token_message(
   public_url: &str,
   token: &str,
 ) -> String {
+  setup_token_message_with_email(public_url, token, None)
+}
+
+fn setup_token_message_with_email(
+  public_url: &str,
+  token: &str,
+  email: Option<&str>,
+) -> String {
   let base = public_url.trim_end_matches('/');
+  let mut query = url::form_urlencoded::Serializer::new(String::new());
+  query.append_pair("token", token);
+  if let Some(email) = email {
+    query.append_pair("email", email);
+  }
+  let query = query.finish();
   format!(
-    "\nDopbase setup token (shown once):\n{token}\n\nOr open this link to fill it in automatically:\n{base}/setup?token={token}\n"
+    "\nDopbase setup token (shown once):\n{token}\n\nOr open this link to fill it in automatically:\n{base}/setup?{query}\n"
   )
 }
 
@@ -254,29 +301,139 @@ pub async fn serve_with_ready(
   config: ServerConfig,
   ready: Option<&crate::daemon::Ready>,
 ) -> Result<()> {
+  serve_instance(config, ready, false, None).await
+}
+
+/// Run the existing foreground server with first-run web setup enabled.
+pub(crate) async fn serve_setup(
+  mut config: ServerConfig,
+  email: Option<&str>,
+) -> Result<()> {
+  config.web_ui_enabled = true;
+  serve_instance(config, None, true, email).await
+}
+
+async fn serve_instance(
+  config: ServerConfig,
+  ready: Option<&crate::daemon::Ready>,
+  setup_enabled: bool,
+  setup_email: Option<&str>,
+) -> Result<()> {
+  use provision::{GeneratedSetup, StartupMode, cli_error, commit_root};
+  use zeroize::Zeroizing;
+
+  let mode = if setup_enabled {
+    require_uninitialized(&config).await?;
+    StartupMode::Web
+  } else {
+    provision::startup_mode(&config).await?
+  };
+  // Prepare credentials before creating files. Recheck state while holding the lock.
+  let mut prepared = if let StartupMode::Generated(email) = &mode {
+    let password = Zeroizing::new(token::generate("")?);
+    let credentials = modules::bootstrap::service::prepare_root(email, password.to_string())
+      .await
+      .map_err(cli_error)?;
+    Some((password, credentials))
+  } else {
+    None
+  };
   ensure_data_dir(&config.data_dir)?;
   let _lock = InstanceLock::acquire(&config.database_url)?;
-  let state = build_state(config).await?;
+  let mode = if setup_enabled {
+    require_uninitialized(&config).await?;
+    StartupMode::Web
+  } else {
+    provision::startup_mode(&config).await?
+  };
+  // Bind before automatic account creation so a busy port cannot consume credentials.
+  let address = config.bind_addr()?;
+  let listener = if matches!(mode, StartupMode::Generated(_)) {
+    Some(
+      tokio::net::TcpListener::bind(address)
+        .await
+        .with_context(|| format!("failed to bind {address}"))?,
+    )
+  } else {
+    None
+  };
+  let state = match mode {
+    StartupMode::Runtime => build_state(config).await?,
+    StartupMode::Web => build_setup_state(config).await?,
+    StartupMode::Generated(_) => build_instance_state(config, false).await?,
+  };
+  let listener = match listener {
+    Some(listener) => listener,
+    None => tokio::net::TcpListener::bind(address)
+      .await
+      .with_context(|| format!("failed to bind {address}"))?,
+  };
+  state.config.ensure_reference_files()?;
+  let generated_setup = if let StartupMode::Generated(email) = mode {
+    let (password, credentials) = prepared
+      .take()
+      .context("missing prepared root credentials")?;
+    let admin_id = commit_root(&state.db, &credentials).await?;
+    let setup = GeneratedSetup {
+      initialized: true,
+      admin_id,
+      email,
+      data_dir: state.config.data_dir.clone(),
+      password,
+    };
+    state.setup.write().await.token = None;
+    if let Err(error) = state.db.checkpoint().await {
+      state.db.close().await;
+      return Err(setup.committed_error(
+        anyhow::Error::from(error).context("failed to checkpoint initialized storage"),
+      ));
+    }
+    Some(setup)
+  } else {
+    None
+  };
+  drop(prepared);
   let setup_token = state.setup.read().await.token.clone();
-  let address = state.config.bind_addr()?;
   let grace = state.config.shutdown_grace_seconds;
-  let listener = tokio::net::TcpListener::bind(address)
-    .await
-    .with_context(|| format!("failed to bind {address}"))?;
   let daemonized = state.config.daemonized;
   let _pid_file_lock = if daemonized {
-    Some(crate::daemon::write_pid_file(
+    match crate::daemon::write_pid_file_with_launch(
       &crate::daemon::pid_file_path(&state.config.data_dir),
       std::process::id(),
       &state.config.bind_address,
       &state.config.public_url,
-    )?)
+      state.config.daemon_launch.clone(),
+    ) {
+      Ok(lock) => Some(lock),
+      Err(error) => {
+        state.db.close().await;
+        return Err(match &generated_setup {
+          Some(setup) => setup.committed_error(error),
+          None => error,
+        });
+      }
+    }
   } else {
     None
   };
-  if let Some(ready) = ready {
+  if let Some(setup) = &generated_setup {
+    let delivered = if let Some(ready) = ready {
+      ready.ok_with_setup(std::process::id(), setup)
+    } else {
+      crate::cli::output::print_raw(&setup.human_output())
+    };
+    if let Err(error) = delivered {
+      if daemonized {
+        let _ =
+          crate::daemon::remove_pid_file(&crate::daemon::pid_file_path(&state.config.data_dir));
+      }
+      state.db.close().await;
+      return Err(setup.committed_error(error.context("failed to deliver setup output")));
+    }
+  } else if let Some(ready) = ready {
     ready.ok(std::process::id(), setup_token.as_deref());
   }
+  drop(generated_setup);
   let public_url = state.config.public_url.trim_end_matches('/');
   anstream::eprintln!(
     "\n{}\n",
@@ -284,14 +441,18 @@ pub async fn serve_with_ready(
       public_url,
       &state.config.bind_address,
       &state.config.data_dir,
-      state.config.docs_enabled
+      state.config.docs_enabled,
+      state.config.web_ui_enabled,
     )
   );
   if let Some(warning) = state.config.public_url_warning() {
     anstream::eprintln!("{}\n", startup_warning(&warning));
   }
   if let Some(setup) = setup_token.as_deref() {
-    eprintln!("{}", setup_token_message(public_url, setup));
+    eprintln!(
+      "{}",
+      setup_token_message_with_email(public_url, setup, setup_email)
+    );
   }
   tracing::info!(%address,"Dopbase server started");
   let serve_result = axum::serve(listener, router(state.clone()))
@@ -393,9 +554,16 @@ impl Drop for InstanceLock {
   }
 }
 
-async fn static_fallback(uri: Uri) -> Response {
+async fn static_fallback(
+  axum::extract::State(state): axum::extract::State<AppState>,
+  uri: Uri,
+) -> Response {
   if uri.path().starts_with(api::PREFIX) {
     return HttpError::not_found(REQUEST_INVALID, "The requested API route was not found.")
+      .into_response();
+  }
+  if !state.config.web_ui_enabled {
+    return HttpError::not_found(REQUEST_INVALID, "The requested route was not found.")
       .into_response();
   }
   embedded_asset(uri.path()).unwrap_or_else(|| {

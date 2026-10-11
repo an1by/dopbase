@@ -11,15 +11,13 @@ pub(crate) async fn execute(
 ) -> Result<i32> {
   let RunArgs {
     environment,
-    token,
     command,
   } = args;
-  let api = client::any_authenticated_client(server, token).await?;
+  let api = client::any_authenticated_client(server).await?;
   let environment = match environment {
-    Some(reference) => Some(
-      crate::cli::project_resolve::complete_environment_reference(&api, &reference)
-        .await?,
-    ),
+    Some(reference) => {
+      Some(crate::cli::project_resolve::complete_environment_reference(&api, &reference).await?)
+    }
     None => None,
   };
   let selection = run_environment(

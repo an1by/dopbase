@@ -103,9 +103,10 @@ dopbase --container server logs --watch
 dopbase --container admin reset-password admin@example.com
 ```
 
-Only `admin` and `server` subcommands support `--container`. Remote client
-workflows (`secret`, `token`, `run`, `docker`, …) use `--server` /
-`dopbase client connect` instead.
+`--container` accepts `admin` plus `server status` and `server logs`. It rejects
+`server setup`, `start`, `stop`, `restart`, `up`, and `down`: the container
+runtime owns that process. Remote client workflows (`secret`, `token`, `run`,
+`docker`, …) use `--server` / `dopbase client connect` instead.
 
 ## Alternative: export and `docker exec`
 
@@ -146,4 +147,5 @@ tokens per environment and job class.
 - [Import and export](./commands#import-and-export) — `--format docker`
 - [Run a process](./commands#run-a-process) — non-Docker injection with
   `dopbase run`
-- [Server lifecycle](./serve) — foreground and background server processes
+- [Run Dopbase in Docker](/self-hosting/docker) — container start and stop
+- [Server lifecycle](./serve) — native foreground and background server processes

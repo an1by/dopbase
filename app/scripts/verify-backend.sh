@@ -4,16 +4,15 @@ set -euo pipefail
 export CARGO_BUILD_JOBS="${CARGO_BUILD_JOBS:-2}"
 
 cargo fmt --check
-cargo clippy --all-targets --all-features -- -D warnings
-cargo test --all-targets -- --test-threads=1
-cargo test --all-targets --all-features -- --test-threads=1
+cargo clippy --locked --all-targets --all-features -- -D warnings
+cargo test --locked --all-targets --all-features -- --test-threads=1
 
 # Release builds embed ../dist/ at compile time (rust-embed).
 if [[ ! -f ../dist/index.html ]]; then
   echo "error: dist/index.html not found. Run 'bun run build:ui' first." >&2
   exit 1
 fi
-cargo build --release
+cargo build --locked --release
 
 runtime_root="$(mktemp -d)"
 data_dir="${runtime_root}/data"
@@ -28,7 +27,7 @@ cleanup() {
     wait "${server_pid}" 2>/dev/null || true
   fi
   if [[ -x "${binary}" ]] && [[ -f "${background_data_dir}/dopbase.pid" ]]; then
-    "${binary}" --data-dir "${background_data_dir}" server down --timeout 2 >/dev/null 2>&1 || true
+    "${binary}" --data-dir "${background_data_dir}" server stop --timeout 2 >/dev/null 2>&1 || true
   fi
   rm -rf "${runtime_root}"
 }
@@ -82,7 +81,20 @@ if (( verified_command_paths < 2 )); then
   exit 1
 fi
 
-"${binary}" --data-dir "${data_dir}" server start \
+# A disabled UI without a bootstrap email still requires explicit setup.
+if "${binary}" --data-dir "${data_dir}" server start --no-web-ui >"${runtime_root}/fresh-start.out" 2>&1; then
+  echo "error: uninitialized foreground startup unexpectedly succeeded" >&2
+  exit 1
+fi
+grep --quiet 'dopbase server setup' "${runtime_root}/fresh-start.out"
+test ! -e "${data_dir}"
+if "${binary}" --data-dir "${background_data_dir}" server start --background --no-web-ui >"${runtime_root}/fresh-background.out" 2>&1; then
+  echo "error: uninitialized background startup unexpectedly succeeded" >&2
+  exit 1
+fi
+test ! -e "${background_data_dir}"
+
+DOPBASE_ROOT_EMAIL= "${binary}" --data-dir "${data_dir}" server start \
   --docs \
   --host 127.0.0.1 \
   --port 18376 \
@@ -111,21 +123,45 @@ test -f "${data_dir}/master.key"
 test -f "${data_dir}/dopbase.db.lock"
 test ! -e "${runtime_root}/dopbase.db"
 grep --quiet "Config:     ${data_dir}" "${server_log}"
+grep --quiet 'Dopbase setup token' "${server_log}"
+setup_token="$(awk '/^setup_/ { print; exit }' "${server_log}")"
+test -n "${setup_token}"
+curl --fail --silent http://127.0.0.1:18376/api/v1/bootstrap/admin \
+  --header 'Content-Type: application/json' \
+  --data "{\"setupToken\":\"${setup_token}\",\"email\":\"smoke@example.com\",\"password\":\"fixture-password-123\"}" \
+  >"${runtime_root}/claim.json"
+curl --fail --silent http://127.0.0.1:18376/api/v1/bootstrap/status | grep --quiet '"state":"ready"'
 
 kill -TERM "${server_pid}"
 wait "${server_pid}"
 server_pid=""
 
-"${binary}" --data-dir "${background_data_dir}" --json server up \
+DOPBASE_ROOT_EMAIL=smoke@example.com "${binary}" --data-dir "${background_data_dir}" --json server start --background \
   --docs \
   --host 127.0.0.1 \
   --port 18377 \
   >"${runtime_root}/background-start.json"
+grep --quiet '"initialized": true' "${runtime_root}/background-start.json"
+if grep --quiet 'Password (shown once)' "${background_data_dir}/serve.log"; then
+  echo "error: background password leaked to daemon log" >&2
+  exit 1
+fi
 curl --fail --silent http://127.0.0.1:18377/api/v1/health | grep --quiet '"success":true'
 "${binary}" --data-dir "${background_data_dir}" --json server status \
   | grep --quiet '"status": "running"'
 "${binary}" --data-dir "${background_data_dir}" server logs --lines 5 >/dev/null
-"${binary}" --data-dir "${background_data_dir}" server down
+"${binary}" --data-dir "${background_data_dir}" --json server restart >"${runtime_root}/background-restart.json"
+if grep --quiet '"setup"' "${runtime_root}/background-restart.json"; then
+  echo "error: restart generated new credentials" >&2
+  exit 1
+fi
+curl --fail --silent http://127.0.0.1:18377/api/v1/health | grep --quiet '"success":true'
+if "${binary}" --data-dir "${background_data_dir}" server down >"${runtime_root}/migration.out" 2>&1; then
+  echo "error: replaced server down unexpectedly succeeded" >&2
+  exit 1
+fi
+grep --quiet 'dopbase server stop' "${runtime_root}/migration.out"
+"${binary}" --data-dir "${background_data_dir}" server stop
 if "${binary}" --data-dir "${background_data_dir}" server status >/dev/null; then
   echo "error: background server still reports as running" >&2
   exit 1

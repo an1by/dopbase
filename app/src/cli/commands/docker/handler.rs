@@ -2,10 +2,7 @@ use super::DockerCommand;
 use crate::cli::{
   client,
   commands::environment,
-  container,
-  docker_env,
-  local_config,
-  output,
+  container, docker_env, local_config, output,
   project_resolve::{complete_environment_reference, ensure_docker_available},
 };
 use crate::{constants::api, models::SecretInput};
@@ -25,7 +22,10 @@ pub(crate) async fn execute(
 ) -> Result<i32> {
   ensure_docker_available()?;
   match command {
-    DockerCommand::EnvFile { environment, output } => {
+    DockerCommand::EnvFile {
+      environment,
+      output,
+    } => {
       let api = client::recently_authenticated_client(server).await?;
       let reference = complete_environment_reference(&api, &environment).await?;
       let entries = load_entries(&api, &reference).await?;
@@ -49,13 +49,18 @@ pub(crate) async fn execute(
       }
       Ok(0)
     }
-    DockerCommand::Run { environment, command } => {
-      run_with_env_file(server, &environment, "run", command, json_output).await
-    }
-    DockerCommand::Compose { environment, command } => {
-      run_with_env_file(server, &environment, "compose", command, json_output).await
-    }
-    DockerCommand::Exec { environment, command } => {
+    DockerCommand::Run {
+      environment,
+      command,
+    } => run_with_env_file(server, &environment, "run", command, json_output).await,
+    DockerCommand::Compose {
+      environment,
+      command,
+    } => run_with_env_file(server, &environment, "compose", command, json_output).await,
+    DockerCommand::Exec {
+      environment,
+      command,
+    } => {
       let api = client::recently_authenticated_client(server).await?;
       let reference = complete_environment_reference(&api, &environment).await?;
       let entries = load_entries(&api, &reference).await?;
@@ -138,7 +143,10 @@ fn exec_argv(command: &[String]) -> Vec<String> {
   command.to_vec()
 }
 
-async fn load_entries(api: &client::ApiClient, reference: &str) -> Result<Vec<SecretInput>> {
+async fn load_entries(
+  api: &client::ApiClient,
+  reference: &str,
+) -> Result<Vec<SecretInput>> {
   let env = environment::resolve_environment(api, reference).await?;
   let data = api
     .request(

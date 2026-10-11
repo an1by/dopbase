@@ -44,7 +44,11 @@ pub enum DockerCommand {
   Run {
     #[arg(value_name = "ENVIRONMENT_REF", help = ENVIRONMENT_ARG_HELP)]
     environment: String,
-    #[arg(last = true, required = true, help = "Full Docker command after `--`, starting with `docker run`")]
+    #[arg(
+      last = true,
+      required = true,
+      help = "Full Docker command after `--`, starting with `docker run`"
+    )]
     command: Vec<String>,
   },
   /// Run `docker compose` with secrets injected through --env-file.
@@ -52,7 +56,11 @@ pub enum DockerCommand {
   Compose {
     #[arg(value_name = "ENVIRONMENT_REF", help = ENVIRONMENT_ARG_HELP)]
     environment: String,
-    #[arg(last = true, required = true, help = "Full Docker command after `--`, starting with `docker compose`")]
+    #[arg(
+      last = true,
+      required = true,
+      help = "Full Docker command after `--`, starting with `docker compose`"
+    )]
     command: Vec<String>,
   },
   /// Run a command in the Dopbase container with secrets injected through --env-file.

@@ -4,7 +4,10 @@ use app::utils::project_reference::{parse_create_target, to_api_reference};
 fn to_api_reference_expands_default_workspace_prefix() {
   assert_eq!(to_api_reference("/api").unwrap(), "default/api");
   assert_eq!(to_api_reference("blipsu/api").unwrap(), "blipsu/api");
-  assert_eq!(to_api_reference("payment-service").unwrap(), "payment-service");
+  assert_eq!(
+    to_api_reference("payment-service").unwrap(),
+    "payment-service"
+  );
 }
 
 #[test]

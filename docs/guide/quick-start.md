@@ -8,15 +8,18 @@ description: "Install Dopbase, start a local secrets server, import an existing 
 This walkthrough installs Dopbase {{version}}, starts a local server, imports an
 existing `.env` file, and runs an application with its secrets.
 
-::: warning Fresh install required
-Dopbase {{version}} expects a fresh data directory. Databases and backups from earlier
-releases are not supported. Keep the matching `master.key` with every backup.
+::: warning Backup compatibility
+Databases and backups from unsupported earlier releases cannot be used. Keep the
+matching `master.key` with every backup. This command change requires no database
+migration; already initialized instances do not need setup again.
 :::
 
 ## 1. Install Dopbase
 
-The installers download the correct release archive from GitHub Releases and
-verify its SHA-256 checksum.
+The shell installer downloads the matching tar.gz archive from GitHub Releases,
+shows download progress, verifies its SHA-256 checksum, and checks the binary's
+version before installing it. It requires curl, tar/gzip, and either sha256sum
+or shasum.
 
 On macOS or Linux, install to `~/.local/bin`:
 
@@ -50,15 +53,40 @@ Set `DOPBASE_INSTALL_DIR` to choose another directory and
 `DOPBASE_REPOSITORY_URL`. An explicit
 `DOPBASE_DOWNLOAD_BASE_URL` still overrides the complete release download path.
 
-On Windows, use `dopbase server start` in the foreground. Background server
-commands (`server up`, `down`, and `logs`) are available on macOS and Linux
-only.
+On Windows, use `dopbase server start` in the foreground. Background commands
+(`server start --background`, `stop`, and `restart`) are available on macOS and
+Linux only. When Dopbase itself runs in Docker, start and stop the container
+with Docker Compose instead.
 
 ## 2. Start the server
 
 ```bash
 dopbase server start
 ```
+
+Fresh storage automatically enters the existing web setup flow and prints a
+protected setup link. Keep this process running.
+
+## 3. Complete setup
+
+Open the printed setup link. Enter your root email and a password of 12 to 128
+characters, then confirm it. Setup signs you into the browser and opens Projects;
+the server continues serving. Existing instances skip setup and show Sign in.
+
+For startup without browser setup:
+
+```bash
+DOPBASE_ROOT_EMAIL=admin@example.com dopbase server start
+```
+
+This creates root on fresh storage and displays a generated password once. Save
+it and sign in with it. Subsequent starts preserve the account and ignore the
+bootstrap email. Guided terminal setup remains available through
+`dopbase server setup`, followed by startup.
+
+To restore a backup, use the web setup link without supplying a bootstrap email,
+or run `dopbase server setup --web`. See [server setup](/cli/setup) for disabled
+web UI settings, background credential output, and interrupted-reset recovery.
 
 The default local server exposes:
 
@@ -67,18 +95,19 @@ Dopbase
 Secure, Simple and Private
 Version {{version}}
 
+Public URL: http://localhost:8840
+Bind:       127.0.0.1:8840
 Admin UI:   http://localhost:8840
 API:        http://localhost:8840/api/v1
 Config:     ~/.dopbase
 ```
 
-The same address serves the Admin UI in a browser. The first visit walks you
-through claiming the server with the setup token. The [Admin UI guide](/ui/)
-covers every screen.
+The same address serves the Admin UI in a browser. If root was created from an
+email supplied at startup, sign in with the generated credentials. The [Admin UI guide](/ui/) covers every screen.
 
 Keep this process running while you use the client.
 
-## 3. Confirm the client configuration
+## 4. Confirm the client configuration
 
 Open another terminal. With no configured server, Dopbase uses the local
 default automatically:
@@ -101,7 +130,7 @@ No repository or global config file is required for the implicit local server.
 Use `dopbase client connect <server-url>` when targeting another local or
 self-hosted instance.
 
-## 4. Sign in
+## 5. Sign in
 
 ```bash
 dopbase login
@@ -110,7 +139,7 @@ dopbase login
 `login` authenticates with the resolved server and saves the token in the
 encrypted local session file.
 
-## 5. Bootstrap a project
+## 6. Initialize a project
 
 From an application directory with an existing `.env` file:
 
@@ -124,7 +153,7 @@ Dopbase shows the variable count and asks for a new target such as
 transaction and stores every `.env` entry as an encrypted secret. After the
 import, it asks whether to delete `.env`, with Yes selected by default.
 
-## 6. Run the application
+## 7. Run the application
 
 Use the readable environment reference while developing:
 

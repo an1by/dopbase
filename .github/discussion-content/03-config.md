@@ -1,5 +1,23 @@
 # Configure Dopbase: servers, CLI connections, and defaults
 
+## Current setup commands
+
+Fresh instances enter existing web setup during startup:
+
+```bash
+dopbase --data-dir "$HOME/.dopbase-discussion-server" server start --port 18840
+```
+
+Open the printed setup link to create root or restore a backup. The process
+keeps serving afterward. Existing instances start normally. Supplying
+`DOPBASE_ROOT_EMAIL` creates root with a generated password instead; omit it
+when following the browser exercise. Explicit `server setup` commands remain
+available, and pending factory resets still require explicit setup.
+`dopbase init` creates application projects and environments.
+
+See the [current setup guide](https://dopbase.com/docs/cli/setup). The following
+transcript records version 0.1.8, which performed web setup during startup.
+
 Tested with Dopbase **0.1.8 on macOS ARM64**, using separate local demo instances on ports 18840 and 19000. Linux uses the same CLI commands but was not replayed for this guide. Generated IDs, timestamps, and file paths will differ. Paths and setup tokens are redacted below.
 
 Complete [installation](https://github.com/dopbase/dopbase/discussions/61) and [the import exercise](https://github.com/dopbase/dopbase/discussions/62) first. This guide uses their `discussion-demo/development` environment. Keep the server on port 18840 running.
@@ -180,6 +198,9 @@ Environment:     none (set with `dopbase env default <ENVIRONMENT_REF>`)
 It is still port 18840 and the login remains saved. Failed validation does not switch the active endpoint. If port 19999 is occupied on your machine, select another unused port for this exercise.
 
 ## Start and select another local server
+
+Current builds also enter web setup through `server start` on fresh storage.
+Omit `DOPBASE_ROOT_EMAIL` when following this browser exercise.
 
 In a third terminal, start a separate instance:
 

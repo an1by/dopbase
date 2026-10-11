@@ -45,6 +45,7 @@ pub enum TokenCommand {
       required_unless_present = "workspace"
     )]
     environment: Option<String>,
+    /// Workspace name or ID (mutually exclusive with the environment argument).
     #[arg(long, value_name = "WORKSPACE_REF", conflicts_with = "environment")]
     workspace: Option<String>,
   },

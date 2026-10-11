@@ -1,6 +1,6 @@
 [package]
 name = "app"
-version = "0.1.8"
+version = "0.1.9"
 edition = "2024"
 license = "Apache-2.0"
 
@@ -79,10 +79,14 @@ tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 ulid = { version = "1", features = ["serde"] }
 zeroize = "1"
+shlex = "2"
 tempfile = "3"
 
 [target.'cfg(unix)'.dependencies]
 nix = { version = "0.30", features = ["signal", "process", "fs"] }
+
+[target.'cfg(unix)'.dev-dependencies]
+nix = { version = "0.30", features = ["term"] }
 
 [dev-dependencies]
 tower = { version = "0.5", features = ["util"] }

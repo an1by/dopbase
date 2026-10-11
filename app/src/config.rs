@@ -12,7 +12,7 @@ use url::{Host, Url};
 use crate::constants::config::{
   CLIENT_CONFIG_FILENAME, DATA_DIRECTORY_NAME, DATABASE_FILENAME, DEFAULT_PORT, ENV_DATA_DIR,
   ENV_DOCS, ENV_HOST, ENV_MASTER_KEY_PATH, ENV_PORT, ENV_PUBLIC_URL, ENV_SHUTDOWN_GRACE_SECONDS,
-  MASTER_KEY_FILENAME, SERVER_CONFIG_FILENAME, SERVER_HOST_PLACEHOLDER,
+  ENV_WEB_UI, MASTER_KEY_FILENAME, SERVER_CONFIG_FILENAME, SERVER_HOST_PLACEHOLDER,
 };
 pub use crate::constants::config::{DEFAULT_BIND_ADDRESS, DEFAULT_PUBLIC_URL};
 
@@ -42,10 +42,14 @@ pub struct ServerConfig {
   pub shutdown_grace_seconds: u64,
   #[serde(skip)]
   pub docs_enabled: bool,
+  #[serde(skip)]
+  pub web_ui_enabled: bool,
   /// True when this process runs as a supervised background server and must
   /// manage the PID file.
   #[serde(skip)]
   pub daemonized: bool,
+  #[serde(skip)]
+  pub daemon_launch: Option<crate::daemon::LaunchDescriptor>,
   pub master_key: MasterKeyConfig,
   /// Records whether the public URL was configured or derived at startup.
   #[serde(skip)]
@@ -59,7 +63,7 @@ pub enum PublicUrlSource {
   NetworkPlaceholder,
 }
 
-#[derive(Clone, Debug, Default)]
+#[derive(Clone, Debug, Default, Serialize, Deserialize)]
 pub struct ServerOverrides {
   pub data_dir: Option<PathBuf>,
   pub config_path: Option<PathBuf>,
@@ -68,6 +72,7 @@ pub struct ServerOverrides {
   pub host: Option<String>,
   pub shutdown_grace_seconds: Option<u64>,
   pub docs: Option<bool>,
+  pub web_ui: Option<bool>,
   pub background: bool,
   pub supervised: bool,
   pub master_key_path: Option<PathBuf>,
@@ -81,6 +86,7 @@ struct ServerConfigFile {
   host: Option<String>,
   shutdown_grace_seconds: Option<u64>,
   docs: Option<bool>,
+  web_ui: Option<bool>,
   master_key: Option<MasterKeyConfigFile>,
 }
 
@@ -92,7 +98,7 @@ struct MasterKeyConfigFile {
 
 /// `DOPBASE_*` environment overrides, structured so tests (and any embedder)
 /// can resolve configuration from injected values instead of process state.
-#[derive(Debug, Default)]
+#[derive(Clone, Debug, Default, Serialize, Deserialize)]
 pub struct EnvironmentOverrides {
   pub data_dir: Option<PathBuf>,
   pub public_url: Option<String>,
@@ -100,11 +106,12 @@ pub struct EnvironmentOverrides {
   pub host: Option<String>,
   pub shutdown_grace_seconds: Option<String>,
   pub docs: Option<String>,
+  pub web_ui: Option<String>,
   pub master_key_path: Option<PathBuf>,
 }
 
 impl EnvironmentOverrides {
-  fn read() -> Self {
+  pub(crate) fn read() -> Self {
     Self {
       data_dir: env::var_os(ENV_DATA_DIR).map(PathBuf::from),
       public_url: env::var(ENV_PUBLIC_URL).ok(),
@@ -112,6 +119,7 @@ impl EnvironmentOverrides {
       host: env::var(ENV_HOST).ok(),
       shutdown_grace_seconds: env::var(ENV_SHUTDOWN_GRACE_SECONDS).ok(),
       docs: env::var(ENV_DOCS).ok(),
+      web_ui: env::var(ENV_WEB_UI).ok(),
       master_key_path: env::var_os(ENV_MASTER_KEY_PATH).map(PathBuf::from),
     }
   }
@@ -147,7 +155,9 @@ impl ServerConfig {
       public_url: DEFAULT_PUBLIC_URL.into(),
       shutdown_grace_seconds: 10,
       docs_enabled: false,
+      web_ui_enabled: true,
       daemonized: false,
+      daemon_launch: None,
       public_url_source: PublicUrlSource::LoopbackDefault,
     }
   }
@@ -160,17 +170,25 @@ impl ServerConfig {
     overrides: &ServerOverrides,
     environment: EnvironmentOverrides,
   ) -> Result<Self> {
+    Self::load_with_environment_at(overrides, environment, &env::current_dir()?)
+  }
+
+  pub(crate) fn load_with_environment_at(
+    overrides: &ServerOverrides,
+    environment: EnvironmentOverrides,
+    working_directory: &Path,
+  ) -> Result<Self> {
     let fallback = dopbase_home();
     let selected_data_dir = overrides
       .data_dir
       .as_deref()
       .or(environment.data_dir.as_deref())
       .unwrap_or(&fallback);
-    let data_dir = resolve_path(selected_data_dir)?;
+    let data_dir = resolve_path_from(selected_data_dir, working_directory)?;
     let config_path = overrides
       .config_path
       .as_deref()
-      .map(resolve_path)
+      .map(|path| resolve_path_from(path, working_directory))
       .transpose()?
       .unwrap_or_else(|| data_dir.join(SERVER_CONFIG_FILENAME));
     let mut config = Self::for_data_dir(data_dir);
@@ -207,7 +225,7 @@ impl ServerConfig {
       overrides.host.clone().or(environment_host).or(file_host),
     )?;
     config.derive_public_url()?;
-    config.master_key.path = resolve_path(&config.master_key.path)?;
+    config.master_key.path = resolve_path_from(&config.master_key.path, working_directory)?;
     config.validate()?;
     Ok(config)
   }
@@ -225,6 +243,9 @@ impl ServerConfig {
     }
     if let Some(value) = file.shutdown_grace_seconds {
       self.shutdown_grace_seconds = value;
+    }
+    if let Some(value) = file.web_ui {
+      self.web_ui_enabled = value;
     }
     if let Some(value) = file.docs {
       self.docs_enabled = value;
@@ -253,6 +274,9 @@ impl ServerConfig {
         .parse()
         .context("invalid DOPBASE_SHUTDOWN_GRACE_SECONDS")?;
     }
+    if let Some(value) = environment.web_ui {
+      self.web_ui_enabled = value.parse().context("invalid DOPBASE_WEB_UI")?;
+    }
     if let Some(value) = environment.docs {
       self.docs_enabled = value.parse().context("invalid DOPBASE_DOCS")?;
     }
@@ -273,6 +297,9 @@ impl ServerConfig {
     if let Some(value) = overrides.shutdown_grace_seconds {
       self.shutdown_grace_seconds = value;
     }
+    if let Some(value) = overrides.web_ui {
+      self.web_ui_enabled = value;
+    }
     if let Some(value) = overrides.docs {
       self.docs_enabled = value;
     }
@@ -280,6 +307,24 @@ impl ServerConfig {
     if let Some(value) = &overrides.master_key_path {
       self.master_key.path.clone_from(value);
     }
+  }
+
+  /// Create missing configuration references without changing saved settings.
+  pub fn ensure_reference_files(&self) -> Result<()> {
+    ensure_data_dir(&self.data_dir)?;
+    let mut reference = include_str!("config/server.toml")
+      .replace("{{PORT}}", &DEFAULT_PORT.to_string())
+      .replace("{{PUBLIC_URL}}", DEFAULT_PUBLIC_URL);
+    let key_path =
+      std::collections::BTreeMap::from([("path", self.data_dir.join(MASTER_KEY_FILENAME))]);
+    for line in toml::to_string(&key_path)?.lines() {
+      reference.push_str("# ");
+      reference.push_str(line);
+      reference.push('\n');
+    }
+    crate::utils::private_file::write_if_missing(&self.config_path, reference.as_bytes())?;
+    crate::cli::local_config::ensure_reference_file(&self.data_dir.join(CLIENT_CONFIG_FILENAME))?;
+    Ok(())
   }
 
   pub fn bind_addr(&self) -> Result<SocketAddr> {
@@ -450,15 +495,21 @@ pub fn database_path(url: &str) -> Result<PathBuf> {
 }
 
 fn resolve_path(path: &Path) -> Result<PathBuf> {
+  resolve_path_from(
+    path,
+    &env::current_dir().context("failed to resolve current directory")?,
+  )
+}
+
+fn resolve_path_from(
+  path: &Path,
+  working_directory: &Path,
+) -> Result<PathBuf> {
   let expanded = expand_home(path);
   if expanded.is_absolute() {
     Ok(expanded)
   } else {
-    Ok(
-      env::current_dir()
-        .context("failed to resolve current directory")?
-        .join(expanded),
-    )
+    Ok(working_directory.join(expanded))
   }
 }
 

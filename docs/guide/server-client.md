@@ -34,7 +34,10 @@ flowchart LR
 
 ## The server
 
-`dopbase server start` runs a self-hosted Dopbase instance. The server owns:
+Run `dopbase server start` to run the instance. Fresh storage enters protected
+web setup, or creates root with a generated password when `DOPBASE_ROOT_EMAIL`
+is supplied. Existing instances start normally. `dopbase init` creates an application
+project and environment through the server. The server owns:
 
 - Encrypted secret records and their metadata
 - Projects and environments

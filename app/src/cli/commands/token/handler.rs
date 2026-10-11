@@ -101,7 +101,10 @@ pub(crate) async fn execute(
             None,
           )
           .await?;
-        (data, format!("No tokens found for workspace {workspace_ref}."))
+        (
+          data,
+          format!("No tokens found for workspace {workspace_ref}."),
+        )
       } else {
         let environment = environment
           .as_deref()

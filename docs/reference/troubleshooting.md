@@ -5,6 +5,24 @@ description: "Fix common Dopbase problems: client connection failures, authentic
 
 # Troubleshooting
 
+## Startup requires setup
+
+Fresh `server start` normally enters web setup. If the web UI is disabled,
+supply `DOPBASE_ROOT_EMAIL` to generate credentials or run explicit CLI setup
+using the same `--data-dir`, `--config`, and master-key settings as startup.
+Blank email values count as unset. Invalid nonblank values on fresh storage fail
+before creating files; existing instances ignore bootstrap email values.
+
+A pending factory reset stops automatic startup without deleting more data.
+Run `dopbase server setup` with the same instance options to finish it. A damaged
+database or mismatched master key is an error, not a reason to initialize again.
+
+If setup says the instance is already initialized, do not reset it to recover a
+password. Stop its server and use `dopbase admin reset-password EMAIL` with the
+matching master key. This also recovers credentials lost after initialization
+committed. Subsequent startup never generates a replacement password. See
+[server setup](/cli/setup).
+
 ## The client cannot connect
 
 1. Run `dopbase client status` and confirm the effective server and its source.

@@ -1,33 +1,47 @@
 use clap::{Args, Subcommand};
 use std::path::PathBuf;
 
+pub(crate) const UP_MIGRATION: &str = "\
+`dopbase server up` has been replaced by `dopbase server start --background`.
+You can also use `dopbase server start -b`.
+
+Use `dopbase server start` to run the server in this terminal.
+
+No server was started.";
+pub(crate) const DOWN_MIGRATION: &str = "\
+`dopbase server down` has been replaced by `dopbase server stop`.
+Use `dopbase server stop --timeout 30` to allow more time for shutdown.
+
+No server was stopped.";
+
 pub(crate) const HELP: &str = "\
 Examples:
+  dopbase server setup
   dopbase server start
-  dopbase server up --port 9000
+  dopbase server start --background --port 9000
   dopbase server status
   dopbase server logs --watch
-  dopbase server down
+  dopbase server stop
 ";
 
 const START_HELP: &str = "\
+Fresh instances use web setup. Set DOPBASE_ROOT_EMAIL to create root with a generated password shown once.
+Initialized instances start normally and ignore DOPBASE_ROOT_EMAIL.
+With the web UI disabled, supply a root email or run `dopbase server setup` first.
+Pending factory resets require explicit setup.
+
 Examples:
   dopbase server start
   dopbase server start --port 9000
+  dopbase server start --no-web-ui
+  dopbase server start --background
+  dopbase server start -b --port 9000
   dopbase server start --host 0.0.0.0 --public-url https://dopbase.example.com
 ";
-const UP_HELP: &str = "\
+const STOP_HELP: &str = "\
 Examples:
-  dopbase server up
-  dopbase server up --port 9000
-  dopbase server up --host 0.0.0.0
-  dopbase server up --host 0.0.0.0 --public-url http://203.0.113.10:8840
-  dopbase server up --docs
-";
-const DOWN_HELP: &str = "\
-Examples:
-  dopbase server down
-  dopbase server down --timeout 30
+  dopbase server stop
+  dopbase server stop --timeout 30
 ";
 const STATUS_HELP: &str = "\
 Examples:
@@ -44,16 +58,33 @@ Examples:
 
 #[derive(Subcommand, Debug)]
 pub enum ServerCommand {
+  /// Initialize a local instance before starting the server.
+  #[command(after_help = SETUP_HELP)]
+  Setup(ServerSetupArgs),
   /// Run the server in the foreground. Press Ctrl+C to stop it.
   #[command(after_help = START_HELP)]
   Start(ServerStartArgs),
-  /// Start the server in the background on macOS or Linux.
-  #[command(after_help = UP_HELP)]
-  Up(ServerLaunchArgs),
   /// Stop the managed background server.
-  #[command(after_help = DOWN_HELP)]
-  Down {
+  #[command(after_help = STOP_HELP)]
+  Stop {
     /// Seconds to wait for a graceful shutdown before forcing it.
+    #[arg(long, default_value_t = 10)]
+    timeout: u64,
+  },
+  /// Restart the running background server with its saved launch settings.
+  #[command(
+    after_help = "Examples:\n  dopbase server restart\n  dopbase server restart --timeout 30"
+  )]
+  Restart {
+    /// Seconds to allow for graceful shutdown before forcing it.
+    #[arg(long, default_value_t = 10)]
+    timeout: u64,
+  },
+  #[command(hide = true, about = "Replaced by server start --background", after_help = UP_MIGRATION)]
+  Up(ServerLaunchArgs),
+  #[command(hide = true, about = "Replaced by server stop", after_help = DOWN_MIGRATION)]
+  Down {
+    /// Legacy shutdown timeout; this command only prints migration instructions.
     #[arg(long, default_value_t = 10)]
     timeout: u64,
   },
@@ -79,7 +110,13 @@ pub enum ServerCommand {
 pub struct ServerStartArgs {
   #[command(flatten)]
   pub launch: ServerLaunchArgs,
-  /// Internal: set by `server up` on the detached child process.
+  /// Disable the web UI for this run, overriding server.toml or DOPBASE_WEB_UI.
+  #[arg(long)]
+  pub no_web_ui: bool,
+  /// Start the server in the background on macOS or Linux.
+  #[arg(short = 'b', long, conflicts_with = "supervised")]
+  pub background: bool,
+  /// Internal: set on the detached child process.
   #[arg(long, hide = true)]
   pub supervised: bool,
 }
@@ -126,4 +163,37 @@ impl ServerLaunchArgs {
       None
     }
   }
+}
+
+const SETUP_HELP: &str = "\
+Examples:
+  dopbase server setup
+  dopbase server setup --email admin@example.com
+  dopbase --data-dir /srv/dopbase --json server setup --email admin@example.com
+  dopbase server setup --web
+  dopbase server setup --web --port 9000
+  dopbase server setup --web --email admin@example.com
+  DOPBASE_ROOT_EMAIL=admin@example.com dopbase server setup
+
+CLI setup creates the root account and exits without starting a server.
+--email or DOPBASE_ROOT_EMAIL generates a password and prints it once in CLI mode.
+--email overrides DOPBASE_ROOT_EMAIL. Empty environment values use guided setup.
+Save the generated password before closing the terminal.
+--web enables the web UI for this run, even when web_ui or DOPBASE_WEB_UI is false.
+The setup server keeps running until you stop it with Ctrl+C.
+An email supplied with --web prefills the form through the printed setup link.
+Use the same --data-dir and --config options when starting the instance.
+";
+
+#[derive(Args, Debug, Default)]
+pub struct ServerSetupArgs {
+  /// Use the existing web setup flow in this terminal.
+  #[arg(long)]
+  pub web: bool,
+  /// Root email; generates a password in CLI mode or prefills web setup.
+  /// Defaults to DOPBASE_ROOT_EMAIL when set.
+  #[arg(long, value_name = "EMAIL")]
+  pub email: Option<String>,
+  #[command(flatten)]
+  pub launch: ServerLaunchArgs,
 }

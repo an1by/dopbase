@@ -84,8 +84,8 @@ server that is still using its original `master.key`:
 You are spinning up a new server, rebuilding after total hardware loss, or
 migrating to a new machine:
 
-When you start a fresh Dopbase instance (`dopbase server start`), it generates a _new, unique_
-master key and an empty database. If you attempt to restore your `.dop` backup using the
+When you run `dopbase server setup --web` for a fresh instance, it creates a
+new master key and an empty database, then starts the existing setup listener. If you attempt to restore your `.dop` backup using the
 new server's temporary master key, decryption fails because the cryptographic keys do not match.
 
 To solve this smoothly and securely, Dopbase provides **Dual-Input Restoration with Automatic Re-Keying**:
@@ -114,10 +114,15 @@ operational state. If the server is stopped or disconnected, the CLI halts and g
 to start the server:
 
 ```bash
-dopbase server up
+dopbase server start --background
 ```
 
 ---
+
+For first-run restoration, use `dopbase server start` without a bootstrap email
+or explicit `dopbase server setup --web`, then use `dopbase restore --setup-token <SETUP_TOKEN>` from another
+terminal. No browser is needed for that restore command. The setup listener
+continues running after restoration until you stop it.
 
 ## Command line (CLI) workflows
 
@@ -222,7 +227,14 @@ manager or cold storage vault.
 
 ### Restoring on first-run setup
 
-When setting up a fresh Dopbase instance for the first time, navigate to the Web UI at `http://localhost:8840`:
+On fresh storage, `dopbase server start` without `DOPBASE_ROOT_EMAIL` opens
+the same protected setup flow. Explicit `server setup --web` remains useful
+when an email is set or the web UI is disabled. During restoration, avoid
+automatic root creation so the backup supplies the original accounts.
+
+For a fresh instance, run `dopbase server setup --web`, then open the printed
+setup link. Automatic `server start` without a bootstrap email uses the same
+flow on fresh storage.
 
 1. On the welcome screen, switch to the **Restore from Backup** tab.
 2. Enter the one-time setup token printed by the target server.

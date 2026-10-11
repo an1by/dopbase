@@ -15,18 +15,27 @@ async fn test_app() -> (TempDir, app::state::AppState, Router) {
 }
 
 async fn test_app_with_docs(docs_enabled: bool) -> (TempDir, app::state::AppState, Router) {
+  test_app_with_ui(docs_enabled, true).await
+}
+
+async fn test_app_with_ui(
+  docs_enabled: bool,
+  web_ui_enabled: bool,
+) -> (TempDir, app::state::AppState, Router) {
   let directory = TempDir::new().unwrap();
   let database = directory.path().join("dopbase.db");
   let config = ServerConfig {
+    data_dir: directory.path().to_path_buf(),
     database_url: format!("sqlite://{}", database.display()),
     master_key: app::config::MasterKeyConfig {
       provider: "file".into(),
       path: directory.path().join("master.key"),
     },
     docs_enabled,
+    web_ui_enabled,
     ..ServerConfig::default()
   };
-  let state = server::build_state(config).await.unwrap();
+  let state = server::build_setup_state(config).await.unwrap();
   let router = server::router(state.clone());
   (directory, state, router)
 }
@@ -433,7 +442,7 @@ async fn concurrent_secret_sets_increment_every_version() {
 }
 
 #[tokio::test]
-async fn import_apply_rejects_a_stale_preview_revision() {
+async fn import_rejects_stale_revisions_during_preview_and_apply() {
   let (_directory, state, router, token, environment_id) = admin_environment().await;
   let base = format!("/api/v1/environments/{environment_id}/secrets");
   let (_, preview, _) = call(
@@ -445,6 +454,18 @@ async fn import_apply_rejects_a_stale_preview_revision() {
   )
   .await;
   let revision = preview["data"]["revision"].as_str().unwrap();
+  let (status, snapshot, _) = call(
+    &router,
+    "POST",
+    &format!("{base}/export"),
+    Some(&token),
+    None,
+  )
+  .await;
+  assert_eq!(status, 200);
+  assert_eq!(snapshot["data"]["revision"], revision);
+  assert!(snapshot["data"]["entries"].as_array().unwrap().is_empty());
+  assert!(snapshot["data"]["envLayout"].is_null());
   let (status, _, _) = call(
     &router,
     "PUT",
@@ -460,6 +481,16 @@ async fn import_apply_rejects_a_stale_preview_revision() {
     &format!("{base}/import"),
     Some(&token),
     Some(json!({"mode":"replace","dryRun":false,"expectedRevision":revision,"entries":[{"key":"A","value":"one"}]})),
+  )
+  .await;
+  assert_eq!(status, 409);
+  assert!(body["error"]["IMPORT_PREVIEW_STALE"].is_string());
+  let (status, body, _) = call(
+    &router,
+    "POST",
+    &format!("{base}/import"),
+    Some(&token),
+    Some(json!({"mode":"replace","dryRun":true,"expectedRevision":revision,"entries":[]})),
   )
   .await;
   assert_eq!(status, 409);
@@ -997,6 +1028,30 @@ async fn env_layout_persists_with_import_and_omits_values() {
       .contains("postgres")
   );
 
+  let (_, snapshot, _) = call(
+    &router,
+    "POST",
+    &format!("{base}/export"),
+    Some(token),
+    None,
+  )
+  .await;
+  assert_eq!(snapshot["data"]["envLayout"], layout_text);
+  assert_eq!(snapshot["data"]["entries"].as_array().unwrap().len(), 2);
+  for layout in [
+    "API_KEY=plaintext-private-marker",
+    "API_KEY=\nAPI_KEY=",
+    "not a slot",
+  ] {
+    for dry_run in [true, false] {
+      let (status, body, _) = call(&router, "POST", &format!("{base}/import"), Some(token),
+        Some(json!({"mode":"replace","dryRun":dry_run,"entries":[],"envLayout":layout,"expectedRevision":snapshot["data"]["revision"]}))).await;
+      assert_eq!(status, 422);
+      assert!(body["error"]["ENV_LAYOUT_INVALID"].is_string());
+      assert!(!body.to_string().contains("plaintext-private-marker"));
+    }
+  }
+
   // A layout beyond the size limit is rejected.
   let huge = "x".repeat(64 * 1024 + 1);
   let (status, _, _) = call(
@@ -1147,14 +1202,7 @@ async fn runner_expiry_is_enforced_and_existing_default_stays_unlimited() {
 async fn workspace_runner_token_accesses_linked_environments_only() {
   let (_directory, state, router) = test_app().await;
   let admin = bootstrap_admin(&state, &router).await;
-  let (_, workspaces, _) = call(
-    &router,
-    "GET",
-    "/api/v1/workspaces",
-    Some(&admin),
-    None,
-  )
-  .await;
+  let (_, workspaces, _) = call(&router, "GET", "/api/v1/workspaces", Some(&admin), None).await;
   let workspace_id = workspaces["data"][0]["id"].as_str().unwrap();
 
   let mut linked_env_ids = Vec::new();
@@ -1249,14 +1297,7 @@ async fn workspace_runner_token_accesses_linked_environments_only() {
   }
 
   let orphan_runtime = format!("/api/v1/environments/{orphan_env_id}/secrets/runtime");
-  let (status, _, _) = call(
-    &router,
-    "GET",
-    &orphan_runtime,
-    Some(workspace_token),
-    None,
-  )
-  .await;
+  let (status, _, _) = call(&router, "GET", &orphan_runtime, Some(workspace_token), None).await;
   assert_eq!(status, 403);
 
   let (status, created_runner, _) = call(
@@ -1280,4 +1321,74 @@ async fn workspace_runner_token_accesses_linked_environments_only() {
   assert_eq!(status, 403);
 
   state.db.close().await;
+}
+
+#[tokio::test]
+async fn disabled_web_ui_blocks_pages_and_assets_but_keeps_cli_api_and_optional_docs() {
+  for docs_enabled in [false, true] {
+    let (_directory, state, router) = test_app_with_ui(docs_enabled, false).await;
+    for path in [
+      "/",
+      "/index.html",
+      "/login",
+      "/setup",
+      "/projects/example/settings",
+      "/favicon.svg",
+      "/missing.js",
+    ] {
+      let (status, body, headers) = call(&router, "GET", path, None, None).await;
+      assert_eq!(status, 404, "{path}");
+      assert_eq!(headers[header::CONTENT_TYPE], "application/json");
+      assert_eq!(
+        body,
+        json!({"success":false,"error":{"REQUEST_INVALID":"The requested route was not found."}})
+      );
+      assert_eq!(headers["x-content-type-options"], "nosniff");
+    }
+    let (status, body, _) = call(&router, "GET", "/api/v1/missing", None, None).await;
+    assert_eq!(status, 404);
+    assert_eq!(
+      body["error"]["REQUEST_INVALID"],
+      "The requested API route was not found."
+    );
+    assert_eq!(get(&router, "/api/v1/health").await.status(), 200);
+    assert_eq!(
+      get(&router, "/api/docs/").await.status(),
+      if docs_enabled { 200 } else { 404 }
+    );
+    assert_eq!(
+      get(&router, "/api/v1/openapi.json").await.status(),
+      if docs_enabled { 200 } else { 404 }
+    );
+    let setup = state.setup.read().await.token.clone().unwrap();
+    let (status, _, _) = call(
+      &router,
+      "POST",
+      "/api/v1/bootstrap/admin",
+      None,
+      Some(json!({"setupToken":setup,"email":"admin@example.com","password":"correct-horse-123"})),
+    )
+    .await;
+    assert_eq!(status, 201);
+    let (status, login, _) = call(
+      &router,
+      "POST",
+      "/api/v1/auth/login",
+      None,
+      Some(json!({"email":"admin@example.com","password":"correct-horse-123","sessionKind":"cli"})),
+    )
+    .await;
+    assert_eq!(status, 200);
+    let token = login["data"]["token"].as_str().unwrap();
+    let (status, _, _) = call(
+      &router,
+      "POST",
+      "/api/v1/projects",
+      Some(token),
+      Some(json!({"name":"cli-only"})),
+    )
+    .await;
+    assert_eq!(status, 201);
+    state.db.close().await;
+  }
 }

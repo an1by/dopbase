@@ -1,9 +1,6 @@
 use super::WorkspaceCommand;
 use crate::cli::{client, output, prompt};
-use crate::{
-  cli::local_config,
-  constants::api as api_paths,
-};
+use crate::{cli::local_config, constants::api as api_paths};
 use anyhow::{Context, Result, bail};
 use reqwest::Method;
 use serde_json::{Value, json};
@@ -31,10 +28,7 @@ pub(crate) async fn execute(
           output::string(&data, "name"),
           output::string(&data, "id")
         ));
-        output::print_fields(&[(
-          "Root:",
-          output::string(&data, "rootPath"),
-        )]);
+        output::print_fields(&[("Root:", output::string(&data, "rootPath"))]);
       }
     }
     WorkspaceCommand::List => {

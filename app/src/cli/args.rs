@@ -7,8 +7,8 @@ use std::{
 
 use crate::{
   cli::commands::{
-    admin, auth, backup, cache, client, docker, environment, export, import, init, project, restore,
-    run, secret, server, token, update, workspace,
+    admin, auth, backup, cache, client, docker, environment, export, import, init, project,
+    restore, run, secret, server, token, update, workspace,
   },
   constants::help::*,
 };
@@ -18,6 +18,7 @@ pub use auth::LoginArgs;
 pub use backup::BackupArgs;
 pub use cache::CacheCommand;
 pub use client::ClientCommand;
+pub use docker::DockerCommand;
 pub use environment::EnvCommand;
 pub use export::ExportArgs;
 pub use import::ImportArgs;
@@ -26,10 +27,9 @@ pub use project::ProjectCommand;
 pub use restore::RestoreArgs;
 pub use run::RunArgs;
 pub use secret::SecretCommand;
-pub use server::{ServerCommand, ServerLaunchArgs, ServerStartArgs};
+pub use server::{ServerCommand, ServerLaunchArgs, ServerSetupArgs, ServerStartArgs};
 pub use token::TokenCommand;
 pub use workspace::WorkspaceCommand;
-pub use docker::DockerCommand;
 
 #[derive(Parser, Debug)]
 #[command(
@@ -133,7 +133,7 @@ impl Cli {
 
 #[derive(Subcommand, Debug)]
 pub enum Command {
-  /// Start, stop, inspect, and read logs from a local Dopbase server.
+  /// Set up, start, stop, inspect, and read logs from a local Dopbase server.
   #[command(after_help = server::HELP)]
   Server {
     #[command(subcommand)]
@@ -171,7 +171,7 @@ pub enum Command {
     #[command(subcommand)]
     command: WorkspaceCommand,
   },
-  /// Manage environments inside a project (create, clone, list, rename, delete).
+  /// Manage environments inside a project (create, clone, edit, list, rename, delete).
   #[command(after_help = environment::HELP)]
   Env {
     #[command(subcommand)]
@@ -193,7 +193,7 @@ pub enum Command {
   ///
   /// Requires --output <FILE> or --stdout. --force overwrites an existing
   /// file. Human export requires interactive password confirmation; runner tokens
-/// (`dbs_…`) export via the runtime API for non-interactive CI.
+  /// (`dbs_…`) export via the runtime API for non-interactive CI.
   #[command(after_help = export::HELP)]
   Export(ExportArgs),
   /// Manage CI/runner access tokens for an environment.
