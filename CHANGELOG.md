@@ -6,7 +6,7 @@ All notable changes to Dopbase are documented in this file.
 
 [Dopbase](https://dopbase.com) Unreleased. The audit log
 becomes tamper-evident: every record joins a hash chain that `dopbase audit
-verify` checks.
+verify` checks, and `dopbase audit export` ships the log as JSON lines.
 
 ### Added
 
@@ -25,6 +25,16 @@ verify` checks.
   the restore, so verification covers the whole log. The chain columns are
   additive: existing audit endpoints, filters, and clients keep their shape,
   and verification reads no secret values.
+
+- `dopbase audit export` streams audit records as JSON lines to standard
+  output or, with `--output <FILE>`, to a file written with owner-only
+  permissions that is never replaced without `--force`. `--action`,
+  `--project`, `--environment`, and `--actor` narrow the stream, and `--limit`
+  caps it; without filters every record is exported by following pagination to
+  the end. Each line is the record exactly as the audit list API returns it,
+  chain fields (`seq`, `prevHash`, `recordHash`) included, so an exported copy
+  can be anchored and checked outside Dopbase. Export requires an
+  administrator account and reads no secret values.
 
 ### Security Update
 
