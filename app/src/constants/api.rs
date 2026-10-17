@@ -146,6 +146,7 @@ pub mod tokens {
 
 pub mod audit {
   pub const COLLECTION: &str = api_path!("/audit-events");
+  pub const VERIFY: &str = api_path!("/audit-events/verify");
 }
 
 pub mod instance {

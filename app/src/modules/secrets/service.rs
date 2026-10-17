@@ -108,7 +108,7 @@ pub async fn set(
   };
   sqlx::query("INSERT INTO secrets(environment_id,key,version,ciphertext,value_nonce,wrapped_key,key_nonce,created_at,updated_at)VALUES(?,?,?,?,?,?,?,?,?) ON CONFLICT(environment_id,key) DO UPDATE SET version=excluded.version,ciphertext=excluded.ciphertext,value_nonce=excluded.value_nonce,wrapped_key=excluded.wrapped_key,key_nonce=excluded.key_nonce,updated_at=excluded.updated_at").bind(id).bind(&key).bind(version).bind(encrypted.ciphertext).bind(encrypted.value_nonce).bind(encrypted.wrapped_key).bind(encrypted.key_nonce).bind(&created_at).bind(&now).execute(&mut *tx).await?;
   common::audit(
-    &mut *tx,
+    &mut tx,
     "admin",
     Some(admin_id),
     Some(email),
@@ -144,7 +144,7 @@ pub async fn delete(
     ));
   }
   common::audit(
-    &mut *tx,
+    &mut tx,
     "admin",
     Some(admin_id),
     Some(email),
@@ -188,7 +188,7 @@ pub async fn reveal(
       HttpError::not_found("SECRET_NOT_FOUND", "The requested secret was not found.")
     })?;
   let value = decrypt_row(state, id, &row)?;
-  common::audit(
+  common::audit_standalone(
     state.db.pool(),
     "admin",
     Some(admin_id),
@@ -326,7 +326,7 @@ pub async fn import(
   }
   if request.dry_run {
     tx.rollback().await?;
-    common::audit(
+    common::audit_standalone(
       state.db.pool(),
       "admin",
       Some(admin_id),
@@ -394,7 +394,7 @@ pub async fn import(
       .fetch_optional(&mut *tx)
       .await?;
   let revision = collection_revision(id, resulting_rows.iter(), resulting_layout.as_deref());
-  common::audit(&mut *tx,"admin",Some(admin_id),Some(email),"secret.imported",Some(&env.project_id),Some(id),Some("environment"),Some(id),serde_json::json!({"added":added,"updated":updated,"unchanged":unchanged,"deleted":deleted,"layout":request.env_layout.is_some()})).await?;
+  common::audit(&mut tx,"admin",Some(admin_id),Some(email),"secret.imported",Some(&env.project_id),Some(id),Some("environment"),Some(id),serde_json::json!({"added":added,"updated":updated,"unchanged":unchanged,"deleted":deleted,"layout":request.env_layout.is_some()})).await?;
   tx.commit().await?;
   Ok(ImportSecretsResponse {
     added_keys: added,
@@ -501,7 +501,7 @@ pub async fn export(
     })
     .collect::<Result<Vec<_>, _>>()?;
   tx.rollback().await?;
-  common::audit(
+  common::audit_standalone(
     state.db.pool(),
     actor_type,
     Some(actor_id),
@@ -548,7 +548,7 @@ pub async fn runtime(
     }
   };
   let entries = decrypt_all(state, id).await?;
-  common::audit(
+  common::audit_standalone(
     state.db.pool(),
     actor_type,
     Some(actor_id),

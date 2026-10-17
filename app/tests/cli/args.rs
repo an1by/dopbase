@@ -1,5 +1,6 @@
 use app::cli::args::{
-  AdminCommand, Cli, Command, ExportArgs, ImportArgs, InitArgs, RunArgs, ServerCommand,
+  AdminCommand, AuditCommand, Cli, Command, ExportArgs, ImportArgs, InitArgs, RunArgs,
+  ServerCommand,
 };
 use app::cli::secret_format::{ExportFormat, SecretFormat};
 use app::constants::config::executable_environment_names;
@@ -591,6 +592,25 @@ fn token_create_expiry_flag_accepts_hours_days_and_never() {
 }
 
 #[test]
+fn audit_verify_parses_with_the_global_json_flag() {
+  let cli = Cli::try_parse_from(["dopbase", "audit", "verify"]).unwrap();
+  assert!(matches!(
+    cli.command,
+    Command::Audit {
+      command: AuditCommand::Verify
+    }
+  ));
+  let cli = Cli::try_parse_from(["dopbase", "--json", "audit", "verify"]).unwrap();
+  assert!(cli.json);
+  assert!(matches!(
+    cli.command,
+    Command::Audit {
+      command: AuditCommand::Verify
+    }
+  ));
+}
+
+#[test]
 fn incomplete_secret_commands_show_examples_and_environment_help() {
   let cases: &[(&[&str], &[&str])] = &[
     (
@@ -892,6 +912,7 @@ fn parses_each_public_command_and_detects_missing_cases() {
     ],
     &["dopbase", "token", "list", "billing/local"],
     &["dopbase", "token", "revoke", "tok_01"],
+    &["dopbase", "audit", "verify"],
     &["dopbase", "run", "--", "true"],
     &["dopbase", "cache", "list"],
     &["dopbase", "cache", "clean"],
