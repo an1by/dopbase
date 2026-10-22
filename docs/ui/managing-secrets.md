@@ -28,13 +28,15 @@ plaintext only in memory and removes it when reloaded.
 
 ## Password re-confirmation
 
-Revealing and exporting require a recent password confirmation. If you have
-not entered your password in the last ten minutes, the server asks for it
-first. After the dialog confirms your password, the pending reveal or export
-continues.
+Revealing, exporting, and importing require a recent password confirmation.
+This includes import previews and saving changes from the `.env` editor. If
+you have not entered your password in the last ten minutes, the server asks
+for it first. After confirmation, the pending action continues. Cancelling
+the prompt leaves your draft available to try again.
 
-The ten-minute window applies to reveal, export, and the `.env` editor. After
-it expires, the next sensitive action asks once more.
+The server checks the window again when you apply an import. If it expires
+after previewing, you must confirm your password again before saving. A
+successful preview creates an audit event without changing secrets or layout.
 
 ## Editing a whole environment as `.env`
 

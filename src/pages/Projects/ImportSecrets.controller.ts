@@ -1,8 +1,10 @@
-import { computed, onUnmounted, ref } from "vue";
+import { computed, onUnmounted, ref, watch } from "vue";
 import { useRoute, useRouter } from "vue-router";
 import { importSecrets } from "~/services/secrets.api";
 import type { ImportMode, ImportSecretsResponse } from "~/services/secrets.api";
 import { errorMessage } from "~/services/api-errors";
+import { useReauthentication } from "~/composable";
+import { ApiError } from "~/services/http.client";
 import { useImportStore } from "~/stores/import.store";
 
 /** Owns the review and confirmation flow for an in-memory .env import. */
@@ -10,6 +12,8 @@ export function useImportSecretsController() {
   const route = useRoute();
   const router = useRouter();
   const importStore = useImportStore();
+  const { runWithReauth } = useReauthentication();
+  let operationScope = new AbortController();
 
   const environmentId = computed(() =>
     typeof route.params.environmentId === "string"
@@ -30,7 +34,10 @@ export function useImportSecretsController() {
 
   if (!valid.value)
     void router.replace({ name: "environment", params: route.params });
-  onUnmounted(() => importStore.clear());
+  onUnmounted(() => {
+    operationScope.abort();
+    importStore.clear();
+  });
 
   const fileName = computed(() => importStore.pending?.fileName ?? "");
   const keys = computed(
@@ -42,6 +49,20 @@ export function useImportSecretsController() {
   const working = ref(false);
   const actionError = ref<string | null>(null);
   const dryResult = ref<ImportSecretsResponse | null>(null);
+
+  function invalidateOperation(): void {
+    operationScope.abort();
+    operationScope = new AbortController();
+    working.value = false;
+    dryResult.value = null;
+    stage.value = "review";
+    actionError.value = null;
+  }
+
+  watch([environmentId, mode, () => importStore.pending], invalidateOperation, {
+    deep: true,
+    flush: "sync",
+  });
 
   const effectGroups = computed(() => {
     const result = dryResult.value;
@@ -55,6 +76,7 @@ export function useImportSecretsController() {
   });
 
   function backToEnvironment(): void {
+    invalidateOperation();
     void router.push({ name: "environment", params: route.params });
   }
 
@@ -65,25 +87,34 @@ export function useImportSecretsController() {
   async function validate(): Promise<void> {
     const pending = importStore.pending;
     const target = environmentId.value;
-    if (!pending || !target || working.value) return;
+    if (!valid.value || !pending || !target || working.value) return;
+    const signal = operationScope.signal;
+    const request = {
+      mode: mode.value,
+      dryRun: true,
+      entries: pending.entries.map(({ key, value }) => ({ key, value })),
+    };
     working.value = true;
     actionError.value = null;
     try {
-      dryResult.value = await importSecrets(target, {
-        mode: mode.value,
-        dryRun: true,
-        entries: pending.entries,
-      });
-      if (importStore.pending === pending && environmentId.value === target) {
+      await runWithReauth(async () => {
+        const result = await importSecrets(target, request, signal);
+        if (signal.aborted) return;
+        dryResult.value = result;
         stage.value = "dry";
-      }
+      }, signal);
     } catch (cause) {
+      if (
+        signal.aborted ||
+        (cause instanceof DOMException && cause.name === "AbortError")
+      )
+        return;
       actionError.value = errorMessage(
         cause,
         "The import is not valid. Check the file and try again.",
       );
     } finally {
-      working.value = false;
+      if (!signal.aborted) working.value = false;
     }
   }
 
@@ -91,28 +122,46 @@ export function useImportSecretsController() {
     const pending = importStore.pending;
     const target = environmentId.value;
     const revision = dryResult.value?.revision;
-    if (!pending || !target || working.value) return;
+    if (!valid.value || !pending || !target || !revision || working.value)
+      return;
+    const signal = operationScope.signal;
+    const params = { ...route.params };
+    const request = {
+      mode: mode.value,
+      dryRun: false,
+      entries: pending.entries.map(({ key, value }) => ({ key, value })),
+      expectedRevision: revision,
+    };
     working.value = true;
     actionError.value = null;
     try {
-      await importSecrets(target, {
-        mode: mode.value,
-        dryRun: false,
-        entries: pending.entries,
-        expectedRevision: revision,
-      });
+      await runWithReauth(async () => {
+        await importSecrets(target, request, signal);
+      }, signal);
+      if (signal.aborted) return;
       void router.push({
         name: "environment",
-        params: route.params,
+        params,
         query: { imported: String(Date.now()) },
       });
     } catch (cause) {
-      actionError.value = errorMessage(
-        cause,
-        "The import failed on the server. Nothing may have changed. Run validation again to confirm.",
-      );
+      if (
+        signal.aborted ||
+        (cause instanceof DOMException && cause.name === "AbortError")
+      )
+        return;
+      if (cause instanceof ApiError && cause.hasCode("IMPORT_PREVIEW_STALE")) {
+        dryResult.value = null;
+        stage.value = "review";
+        actionError.value = "The secrets changed. Preview the import again.";
+      } else {
+        actionError.value = errorMessage(
+          cause,
+          "The import failed on the server. Nothing may have changed. Run validation again to confirm.",
+        );
+      }
     } finally {
-      working.value = false;
+      if (!signal.aborted) working.value = false;
     }
   }
 

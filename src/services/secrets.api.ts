@@ -120,15 +120,17 @@ export async function getEnvLayout(
 
 /**
  * Imports entries in `merge` or `replace` mode. Run with `dryRun: true` to
- * validate the whole batch and preview the effect without mutating anything.
+ * validate the batch without changing secrets. Both modes require recent
+ * browser password confirmation; successful previews create an audit event.
  */
 export async function importSecrets(
   environmentId: string,
   request: ImportSecretsRequest,
+  signal?: AbortSignal,
 ): Promise<ImportSecretsResponse> {
   const { data } = await apiRequest<ImportSecretsResponse>(
     `${base(environmentId)}/import`,
-    { method: "POST", body: request },
+    { method: "POST", body: request, signal },
   );
   return data;
 }

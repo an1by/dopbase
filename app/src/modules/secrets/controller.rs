@@ -161,7 +161,9 @@ pub async fn reveal(
 ///
 /// Merge or replace a batch of secrets, optionally as a dry run that only
 /// reports what would change. Expected revisions are checked during both
-/// preview and apply. Requires the CSRF header for browser sessions.
+/// preview and apply. Browser sessions require a valid CSRF header and password
+/// confirmation within the last ten minutes. Successful previews are audited
+/// without changing secrets or editor layout.
 #[utoipa::path(
   post,
   path = crate::constants::api::secrets::IMPORT,
@@ -172,7 +174,7 @@ pub async fn reveal(
   responses(
     (status = 200, description = "Import applied, or previewed when dry run. Added, updated, unchanged, and deleted keys are returned", body = inline(HttpResponseFormat<ImportSecretsResponse>)),
     (status = 401, description = "Authentication is required", body = crate::http::ErrorBody),
-    (status = 403, description = "Administrator with a valid CSRF token is required", body = crate::http::ErrorBody),
+    (status = 403, description = "A human project account, valid browser CSRF token, and recent browser password confirmation are required", body = crate::http::ErrorBody),
     (status = 404, description = "The environment was not found", body = crate::http::ErrorBody),
     (status = 409, description = "A replace preview is required, or the supplied revision is stale", body = crate::http::ErrorBody),
     (status = 422, description = "A key, value, or layout is invalid, a key is duplicated, or a limit is exceeded", body = crate::http::ErrorBody),

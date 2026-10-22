@@ -2,6 +2,13 @@
 
 All notable changes to Dopbase are documented in this file.
 
+## Unreleased
+
+### Security Update
+
+- Improved security to prevent secret value guessing.
+  CWE-306: Reported by kta1kri.
+
 ## 0.1.9 - 2026-10-07
 
 [Dopbase](https://dopbase.com) 0.1.9 adds guided server setup, optional web UI,

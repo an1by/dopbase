@@ -10,7 +10,7 @@
  *   sessions. The token is provided by the auth store via
  *   {@link registerCsrfProvider} to keep this module store-free.
  * - Notifies registered listeners when the session or its CSRF token is no
- *   longer valid, and when reveal/export needs a fresh password confirmation.
+ *   longer valid, and when a sensitive operation needs a fresh password confirmation.
  */
 
 export interface ApiEnvelope<T> {
@@ -82,7 +82,7 @@ export function onSessionExpired(listener: Listener): () => void {
 
 /**
  * Subscribes to 403 `RECENT_AUTHENTICATION_REQUIRED` responses, emitted by
- * reveal/export when the last password confirmation is more than ten minutes
+ * sensitive operations when the last password confirmation is more than ten minutes
  * old. Returns an unsubscribe function.
  */
 export function onReauthenticationRequired(listener: Listener): () => void {
