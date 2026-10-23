@@ -63,6 +63,9 @@ configurable retention archives expired records before deleting them.
 
 ### Changed
 
+- The unused `user_agent` column is removed from `audit_events`; nothing
+  ever recorded a value in it.
+
 - Audit records store the client's IP address, which was always empty
   before. Behind a reverse proxy, list it in `trusted_proxies` in
   `server.toml` or `DOPBASE_TRUSTED_PROXIES`, and the address comes from

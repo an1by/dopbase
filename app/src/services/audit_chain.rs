@@ -52,7 +52,6 @@ struct Record {
   resource_type: Option<String>,
   resource_id: Option<String>,
   ip_address: Option<String>,
-  user_agent: Option<String>,
   metadata: String,
   created_at: String,
   seq: Option<i64>,
@@ -75,7 +74,6 @@ impl Record {
       "resourceType": self.resource_type,
       "resourceId": self.resource_id,
       "ipAddress": self.ip_address,
-      "userAgent": self.user_agent,
       "metadata": serde_json::from_str::<Value>(&self.metadata)
         .unwrap_or_else(|_| Value::String(self.metadata.clone())),
       "createdAt": self.created_at,
@@ -87,9 +85,8 @@ impl Record {
 
   /// Hash the record's stored values together with its chain position.
   ///
-  /// `ip_address` and `user_agent` are stored as NULL today and hash as
-  /// empty strings; because both write and verification read the stored
-  /// values, a later release that fills them keeps verification correct.
+  /// A missing `ip_address`, as on records written outside a request,
+  /// hashes as an empty string.
   fn digest(
     &self,
     seq: i64,
@@ -107,7 +104,6 @@ impl Record {
       self.resource_type.as_deref().unwrap_or(GENESIS),
       self.resource_id.as_deref().unwrap_or(GENESIS),
       self.ip_address.as_deref().unwrap_or(GENESIS),
-      self.user_agent.as_deref().unwrap_or(GENESIS),
       &self.metadata,
       &self.created_at,
       prev_hash,
@@ -115,7 +111,7 @@ impl Record {
   }
 }
 
-const COLUMNS: &str = "id,actor_type,actor_id,actor_label,action,project_id,environment_id,resource_type,resource_id,ip_address,user_agent,metadata,created_at,seq,prev_hash,record_hash";
+const COLUMNS: &str = "id,actor_type,actor_id,actor_label,action,project_id,environment_id,resource_type,resource_id,ip_address,metadata,created_at,seq,prev_hash,record_hash";
 
 fn digest(fields: &[&str]) -> String {
   let mut hasher = Sha256::new();
@@ -192,7 +188,6 @@ pub async fn append(
     resource_type.unwrap_or(GENESIS),
     resource_id.unwrap_or(GENESIS),
     ip_address.unwrap_or(GENESIS),
-    GENESIS, // user_agent, stored as NULL
     metadata,
     created_at,
     &prev_hash,

@@ -155,7 +155,6 @@ project
 environment
 secret key
 IP address
-user agent
 ```
 
 The IP address is the client that made the request. Behind a reverse proxy,

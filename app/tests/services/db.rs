@@ -115,6 +115,13 @@ async fn migrations_apply_rollback_and_reapply() {
         .unwrap();
     assert_eq!(chain_column, column);
   }
+  let user_agent: i64 = sqlx::query_scalar(
+    "SELECT COUNT(*) FROM pragma_table_info('audit_events') WHERE name='user_agent'",
+  )
+  .fetch_one(db.pool())
+  .await
+  .unwrap();
+  assert_eq!(user_agent, 0, "the unused user_agent column is dropped");
 
   MIGRATOR.undo(db.pool(), 0).await.unwrap();
   assert_schema_objects(&db, "table", &TABLES, false).await;
