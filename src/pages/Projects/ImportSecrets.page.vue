@@ -32,11 +32,11 @@ const {
 
 <template>
   <DashboardLayout>
-    <section class="mx-auto flex w-full max-w-3xl flex-col gap-4 p-6">
+    <section class="mx-auto flex w-full max-w-3xl flex-col gap-4 p-4 sm:p-6">
       <!-- Header -->
       <header class="flex flex-col gap-1">
         <nav
-          class="flex items-center gap-1.5 font-mono text-sm text-ink-muted"
+          class="flex min-w-0 flex-wrap items-center gap-x-1.5 font-mono text-sm text-ink-muted"
           aria-label="Breadcrumb">
           <button
             type="button"
@@ -47,7 +47,8 @@ const {
           <span class="text-ink-faint">/</span>
           <button
             type="button"
-            class="cursor-pointer font-mono transition-colors hover:text-ink-strong"
+            class="max-w-[16ch] cursor-pointer truncate font-mono transition-colors hover:text-ink-strong sm:max-w-none"
+            :title="environmentId ?? undefined"
             @click="backToEnvironment">
             {{ environmentId }}
           </button>
@@ -55,8 +56,11 @@ const {
           <span class="text-ink-strong">import</span>
         </nav>
         <h1 class="text-lg font-semibold">Review import</h1>
-        <p class="text-sm text-ink">
-          <span class="font-mono text-ink-strong">{{ fileName }}</span> ·
+        <p class="break-words text-sm text-ink">
+          <span class="break-all font-mono text-ink-strong">{{
+            fileName
+          }}</span>
+          ·
           <span class="font-mono text-ink-strong">{{ keys.length }}</span>
           keys parsed. Values are hidden.
         </p>
@@ -65,10 +69,7 @@ const {
       <!-- Review: full-height key list -->
       <template v-if="stage === 'review'">
         <div class="rounded-card border border-line bg-panel p-4">
-          <p
-            class="mb-2 font-mono text-xs uppercase tracking-wide text-ink-faint">
-            keys ({{ keys.length }})
-          </p>
+          <p class="mb-2 text-xs text-ink-muted">Keys ({{ keys.length }})</p>
           <div
             class="max-h-[60vh] overflow-y-auto rounded-control border border-line-soft bg-canvas px-3 py-2">
             <div class="grid grid-cols-1 gap-x-6 sm:grid-cols-2 lg:grid-cols-3">
@@ -113,7 +114,7 @@ const {
 
       <!-- Dry-run result -->
       <template v-else>
-        <div class="flex items-center gap-2">
+        <div class="flex flex-wrap items-center gap-2">
           <DbBadge tone="accent">Validate changes ok</DbBadge>
           <span class="text-xs text-ink-muted">
             mode: {{ mode }} · nothing stored yet
@@ -123,12 +124,11 @@ const {
           v-for="group in effectGroups"
           :key="group.label"
           class="rounded-card border border-line bg-panel p-4">
-          <p
-            class="mb-1 font-mono text-xs uppercase tracking-wide text-ink-faint">
+          <p class="mb-1 text-xs text-ink-muted first-letter:uppercase">
             {{ group.label }} ({{ group.keys.length }})
           </p>
           <div class="max-h-56 overflow-y-auto">
-            <p class="font-mono text-xs text-ink">
+            <p class="break-words font-mono text-xs text-ink">
               {{ group.keys.join(", ") }}
             </p>
           </div>

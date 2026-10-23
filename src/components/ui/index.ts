@@ -9,6 +9,7 @@ export { default as DbEmptyState } from "./DbEmptyState.vue";
 export { default as DbInput } from "./DbInput.vue";
 export { default as DbModal } from "./DbModal.vue";
 export { default as DbSelect } from "./DbSelect.vue";
+export { default as DbSheet } from "./DbSheet.vue";
 export { default as DbSkeleton } from "./DbSkeleton.vue";
 export { default as DbSpinner } from "./DbSpinner.vue";
 export { default as DbSwitch } from "./DbSwitch.vue";

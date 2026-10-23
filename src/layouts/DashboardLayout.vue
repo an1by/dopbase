@@ -1,93 +1,58 @@
 <script setup lang="ts">
 import { computed } from "vue";
-import { useRoute } from "vue-router";
 import { useAuthStore } from "~/stores/auth.store";
-import {
-  ArchiveIcon,
-  AlertTriangleIcon,
-  DopbaseIcon,
-  FolderIcon,
-  HistoryIcon,
-  ServerIcon,
-  UserIcon,
-  UsersIcon,
-  LogOutIcon,
-} from "~/assets/icons";
-import { DbButton, DbModal, DbSpinner } from "~/components/ui";
+import { AlertTriangleIcon, DopbaseIcon, MenuIcon } from "~/assets/icons";
+import { DbButton, DbModal, DbSheet } from "~/components/ui";
 import ReauthModal from "~/components/app/ReauthModal.vue";
+import DashboardNav from "./DashboardNav.vue";
 import { useDashboardLayoutController } from "./DashboardLayout.controller";
 
 /**
  * DashboardLayout — the authenticated app shell.
  *
- * A fixed sidebar rail with primary navigation plus the account footer
- * (email + logout), and a content area rendered from the default slot.
- * The global reauthentication dialog lives here so every screen inherits
- * it.
+ * From `lg` up: a fixed sidebar with primary navigation and the account
+ * footer beside the content. Below `lg` the sidebar folds into a 48px top
+ * bar whose menu button opens the same navigation in a sheet. The global
+ * reauthentication dialog lives here so every screen inherits it.
  */
-const route = useRoute();
 const auth = useAuthStore();
-const { email, sessionExpired, loggingOut, logout, signInAgain } =
+const { email, sessionExpired, loggingOut, navOpen, logout, signInAgain } =
   useDashboardLayoutController();
 
-const navItems = [
-  {
-    name: "users",
-    label: "Users",
-    icon: UsersIcon,
-    match: (r: string) => r.startsWith("/users"),
-  },
-  {
-    name: "projects",
-    label: "Projects",
-    icon: FolderIcon,
-    match: (r: string) => r.startsWith("/projects"),
-  },
-  {
-    name: "backups",
-    label: "Backups",
-    icon: ArchiveIcon,
-    match: (r: string) => r.startsWith("/backups"),
-  },
-  {
-    name: "audit",
-    label: "Audit",
-    icon: HistoryIcon,
-    match: (r: string) => r.startsWith("/audit"),
-  },
-  {
-    name: "instance",
-    label: "Instance",
-    icon: ServerIcon,
-    match: (r: string) => r.startsWith("/instance"),
-  },
-  {
-    name: "account",
-    label: "Account",
-    icon: UserIcon,
-    match: (r: string) => r.startsWith("/account"),
-  },
-] as const;
-
-const isActive = (item: (typeof navItems)[number]): boolean =>
-  item.match(route.path);
-const visibleNavItems = computed(() =>
-  navItems.filter((item) =>
-    item.name === "backups" || item.name === "users" || item.name === "audit"
-      ? auth.isAdmin
-      : true,
-  ),
-);
 const consoleLabel = computed(() =>
   auth.session?.role === "member" ? "member console" : "admin console",
 );
 </script>
 
 <template>
-  <div class="flex min-h-svh">
+  <div class="flex min-h-svh flex-col lg:flex-row">
+    <!-- Narrow screens: top bar with the navigation behind a menu button -->
+    <header
+      class="sticky top-0 z-30 flex h-12 shrink-0 items-center gap-2.5 border-b border-line bg-panel pl-4 pr-1 lg:hidden">
+      <div
+        class="flex h-7 w-7 items-center justify-center rounded-control border border-accent/40 bg-accent-soft text-accent-strong">
+        <DopbaseIcon class="h-4 w-4" />
+      </div>
+      <p class="font-mono text-sm font-semibold text-ink-strong">Dopbase</p>
+      <button
+        type="button"
+        class="ml-auto flex h-11 w-11 cursor-pointer items-center justify-center rounded-control text-ink-muted transition-colors hover:bg-raised hover:text-ink-strong"
+        aria-label="Open navigation"
+        :aria-expanded="navOpen"
+        data-testid="nav-open"
+        @click="navOpen = true">
+        <MenuIcon class="h-5 w-5" />
+      </button>
+    </header>
+
+    <DbSheet :open="navOpen" title="Dopbase" @close="navOpen = false">
+      <p class="px-6 pt-3 text-xs text-ink-muted">{{ consoleLabel }}</p>
+      <DashboardNav :email="email" :logging-out="loggingOut" @logout="logout" />
+    </DbSheet>
+
+    <!-- Wide screens: fixed sidebar -->
     <aside
-      class="sticky top-0 flex h-svh w-60 shrink-0 flex-col border-r border-line bg-panel">
-      <!-- Brand -->
+      class="sticky top-0 hidden h-svh w-60 shrink-0 flex-col border-r border-line bg-panel lg:flex">
       <div
         class="flex items-center gap-2.5 border-b border-line-soft px-5 py-4">
         <div
@@ -99,49 +64,7 @@ const consoleLabel = computed(() =>
           <p class="text-xs text-ink-muted">{{ consoleLabel }}</p>
         </div>
       </div>
-
-      <!-- Primary navigation -->
-      <nav class="flex flex-col gap-1 px-3 py-4">
-        <RouterLink
-          v-for="item in visibleNavItems"
-          :key="item.name"
-          :to="{ name: item.name }"
-          class="flex items-center gap-2.5 rounded-control px-3 py-2 text-sm transition-colors"
-          :class="
-            isActive(item)
-              ? 'bg-accent-soft text-ink-strong'
-              : 'text-ink-muted hover:bg-raised hover:text-ink-strong'
-          "
-          :aria-current="isActive(item) ? 'page' : undefined">
-          <component :is="item.icon" class="h-4 w-4" />
-          <span>{{ item.label }}</span>
-        </RouterLink>
-      </nav>
-
-      <!-- Account footer -->
-      <div class="mt-auto border-t border-line-soft px-4 py-3.5">
-        <div class="flex items-center justify-between gap-2">
-          <div class="min-w-0">
-            <p class="text-xs uppercase tracking-wide text-ink-faint">
-              signed in as
-            </p>
-            <p class="truncate font-mono text-xs text-ink-strong">
-              {{ email }}
-            </p>
-          </div>
-          <button
-            type="button"
-            class="cursor-pointer rounded-control bg-raised p-1.5 text-ink-muted transition-colors hover:bg-crit/15 hover:text-crit disabled:cursor-not-allowed disabled:opacity-60"
-            :disabled="loggingOut"
-            :aria-label="loggingOut ? 'Logging out...' : 'Log out'"
-            :title="loggingOut ? 'Logging out...' : 'Log out'"
-            data-testid="logout-button"
-            @click="logout">
-            <DbSpinner v-if="loggingOut" class="h-4 w-4 text-ink-muted" />
-            <LogOutIcon v-else class="h-4 w-4" />
-          </button>
-        </div>
-      </div>
+      <DashboardNav :email="email" :logging-out="loggingOut" @logout="logout" />
     </aside>
 
     <main class="min-w-0 flex-1">

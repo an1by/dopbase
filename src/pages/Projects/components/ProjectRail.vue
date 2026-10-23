@@ -16,7 +16,8 @@ import type { Environment, Project } from "~/services";
  * ProjectRail — the project/environment keyline rail.
  *
  * Renders the hierarchy and selection state plus all project/environment
- * create, rename, and delete interactions. Destructive dialogs require
+ * create, rename, and delete interactions. The parent places it (a sticky
+ * column on desktop, a sheet on narrow screens) through `class`. Destructive dialogs require
  * typing the resource name. Environment deletion lists affected counts.
  */
 const props = defineProps<{ controller: ProjectsController }>();
@@ -92,15 +93,12 @@ async function confirmEnvDelete(): Promise<void> {
 </script>
 
 <template>
-  <aside
-    class="sticky top-0 flex h-svh w-72 shrink-0 flex-col border-r border-line bg-panel/60">
+  <aside class="min-h-0">
     <header class="flex items-center justify-between px-4 py-3.5">
-      <h2 class="font-mono text-xs uppercase tracking-wider text-ink-faint">
-        projects
-      </h2>
+      <h2 class="text-xs text-ink-muted">Projects</h2>
       <button
         type="button"
-        class="cursor-pointer rounded-control bg-raised p-1 text-ink-muted transition-colors hover:bg-line hover:text-ink-strong"
+        class="cursor-pointer rounded-control bg-raised p-1 text-ink-muted transition-colors hover:bg-line hover:text-ink-strong pointer-coarse:p-2.5"
         aria-label="New project"
         data-testid="new-project"
         @click="projectDialog = { mode: 'create' }">
@@ -129,13 +127,13 @@ async function confirmEnvDelete(): Promise<void> {
         <li v-for="project in projects" :key="project.id">
           <!-- Project row -->
           <div
-            class="group flex items-center gap-1 rounded-control px-2 py-1.5"
+            class="group flex items-center gap-1 rounded-control px-2 py-1.5 pointer-coarse:py-1"
             :class="
               isProjectActive(project) ? 'bg-raised' : 'hover:bg-raised/60'
             ">
             <button
               type="button"
-              class="flex min-w-0 flex-1 cursor-pointer items-center gap-2 text-left"
+              class="flex min-w-0 flex-1 cursor-pointer items-center gap-2 text-left pointer-coarse:min-h-10"
               @click="controller.selectProject(project.name)">
               <BoxIcon
                 class="h-3.5 w-3.5 shrink-0"
@@ -153,17 +151,17 @@ async function confirmEnvDelete(): Promise<void> {
               </span>
             </button>
             <span
-              class="flex shrink-0 items-center opacity-0 transition-opacity group-hover:opacity-100 focus-within:opacity-100">
+              class="flex shrink-0 items-center opacity-0 transition-opacity group-hover:opacity-100 focus-within:opacity-100 pointer-coarse:opacity-100">
               <button
                 type="button"
-                class="cursor-pointer rounded p-1 text-ink-faint hover:text-ink-strong"
+                class="cursor-pointer rounded p-1 text-ink-faint hover:text-ink-strong pointer-coarse:p-2.5"
                 :aria-label="`Rename ${project.name}`"
                 @click="projectDialog = { mode: 'rename', project }">
                 <PencilIcon class="h-3 w-3" />
               </button>
               <button
                 type="button"
-                class="cursor-pointer rounded p-1 text-ink-faint hover:text-crit"
+                class="cursor-pointer rounded p-1 text-ink-faint hover:text-crit pointer-coarse:p-2.5"
                 :aria-label="`Delete ${project.name}`"
                 @click="projectDelete = project">
                 <TrashIcon class="h-3 w-3" />
@@ -177,7 +175,7 @@ async function confirmEnvDelete(): Promise<void> {
             class="mb-1 ml-4 flex flex-col gap-0.5 border-l border-line-soft pl-2 pt-0.5">
             <li v-for="environment in environments ?? []" :key="environment.id">
               <div
-                class="group flex items-center gap-1 rounded-control px-2 py-1.5"
+                class="group flex items-center gap-1 rounded-control px-2 py-1.5 pointer-coarse:py-1"
                 :class="
                   isEnvActive(environment)
                     ? 'bg-accent-soft'
@@ -185,7 +183,7 @@ async function confirmEnvDelete(): Promise<void> {
                 ">
                 <button
                   type="button"
-                  class="flex min-w-0 flex-1 cursor-pointer items-center gap-2 text-left"
+                  class="flex min-w-0 flex-1 cursor-pointer items-center gap-2 text-left pointer-coarse:min-h-10"
                   @click="controller.selectEnvironment(environment.id)">
                   <LayersIcon
                     class="h-3 w-3 shrink-0"
@@ -205,17 +203,17 @@ async function confirmEnvDelete(): Promise<void> {
                   </span>
                 </button>
                 <span
-                  class="flex shrink-0 items-center opacity-0 transition-opacity group-hover:opacity-100 focus-within:opacity-100">
+                  class="flex shrink-0 items-center opacity-0 transition-opacity group-hover:opacity-100 focus-within:opacity-100 pointer-coarse:opacity-100">
                   <button
                     type="button"
-                    class="cursor-pointer rounded p-1 text-ink-faint hover:text-ink-strong"
+                    class="cursor-pointer rounded p-1 text-ink-faint hover:text-ink-strong pointer-coarse:p-2.5"
                     :aria-label="`Rename ${environment.name}`"
                     @click="envDialog = { mode: 'rename', environment }">
                     <PencilIcon class="h-3 w-3" />
                   </button>
                   <button
                     type="button"
-                    class="cursor-pointer rounded p-1 text-ink-faint hover:text-crit"
+                    class="cursor-pointer rounded p-1 text-ink-faint hover:text-crit pointer-coarse:p-2.5"
                     :aria-label="`Delete ${environment.name}`"
                     @click="openEnvDelete(environment)">
                     <TrashIcon class="h-3 w-3" />
@@ -240,7 +238,7 @@ async function confirmEnvDelete(): Promise<void> {
             <li>
               <button
                 type="button"
-                class="flex w-full cursor-pointer items-center gap-2 rounded-control px-2 py-1.5 font-mono text-xs text-ink-faint transition-colors hover:bg-raised/60 hover:text-ink"
+                class="flex w-full cursor-pointer items-center gap-2 rounded-control px-2 py-1.5 font-mono text-xs pointer-coarse:min-h-11 text-ink-faint transition-colors hover:bg-raised/60 hover:text-ink"
                 @click="envDialog = { mode: 'create' }">
                 <PlusIcon class="h-3 w-3" />
                 new environment

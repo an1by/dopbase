@@ -141,7 +141,7 @@ function tokenStatus(token: RunnerToken): {
 </script>
 
 <template>
-  <div class="flex flex-col gap-4">
+  <div class="@container flex flex-col gap-4">
     <header class="flex flex-wrap items-center gap-2">
       <div>
         <h3 class="text-sm font-semibold">
@@ -167,24 +167,21 @@ function tokenStatus(token: RunnerToken): {
       <table class="min-w-full text-left text-sm">
         <thead>
           <tr class="border-b border-line">
+            <th class="px-4 py-2.5 text-xs font-medium text-ink-muted">Name</th>
             <th
-              class="px-4 py-2.5 text-xs font-medium uppercase tracking-wide text-ink-muted">
-              Name
-            </th>
-            <th
-              class="px-4 py-2.5 text-xs font-medium uppercase tracking-wide text-ink-muted">
+              class="hidden px-4 py-2.5 text-xs font-medium text-ink-muted @2xl:table-cell">
               Created
             </th>
             <th
-              class="px-4 py-2.5 text-xs font-medium uppercase tracking-wide text-ink-muted">
+              class="hidden px-4 py-2.5 text-xs font-medium text-ink-muted @2xl:table-cell">
               Expires
             </th>
             <th
-              class="px-4 py-2.5 text-xs font-medium uppercase tracking-wide text-ink-muted">
+              class="hidden px-4 py-2.5 text-xs font-medium text-ink-muted @2xl:table-cell">
               Last used
             </th>
             <th
-              class="px-4 py-2.5 text-right text-xs font-medium uppercase tracking-wide text-ink-muted">
+              class="px-4 py-2.5 text-right text-xs font-medium text-ink-muted">
               Actions
             </th>
           </tr>
@@ -197,13 +194,13 @@ function tokenStatus(token: RunnerToken): {
             <td class="px-4 py-3">
               <DbSkeleton class="h-4 w-32" />
             </td>
-            <td class="px-4 py-3">
+            <td class="hidden px-4 py-3 @2xl:table-cell">
               <DbSkeleton class="h-4 w-20" />
             </td>
-            <td class="px-4 py-3">
+            <td class="hidden px-4 py-3 @2xl:table-cell">
               <DbSkeleton class="h-4 w-24" />
             </td>
-            <td class="px-4 py-3">
+            <td class="hidden px-4 py-3 @2xl:table-cell">
               <DbSkeleton class="h-4 w-20" />
             </td>
             <td class="px-4 py-3 text-right">
@@ -238,28 +235,24 @@ function tokenStatus(token: RunnerToken): {
       <table class="min-w-full text-left text-sm" data-testid="tokens-table">
         <thead>
           <tr class="border-b border-line">
+            <th class="px-4 py-2.5 text-xs font-medium text-ink-muted">Name</th>
             <th
-              class="px-4 py-2.5 text-xs font-medium uppercase tracking-wide text-ink-muted">
-              Name
-            </th>
-            <th
-              class="px-4 py-2.5 text-xs font-medium uppercase tracking-wide text-ink-muted">
+              class="hidden px-4 py-2.5 text-xs font-medium text-ink-muted @2xl:table-cell">
               Created
             </th>
             <th
-              class="px-4 py-2.5 text-xs font-medium uppercase tracking-wide text-ink-muted">
+              class="hidden px-4 py-2.5 text-xs font-medium text-ink-muted @2xl:table-cell">
               Expires
             </th>
             <th
-              class="px-4 py-2.5 text-xs font-medium uppercase tracking-wide text-ink-muted">
+              class="hidden px-4 py-2.5 text-xs font-medium text-ink-muted @2xl:table-cell">
               Last used
             </th>
-            <th
-              class="px-4 py-2.5 text-xs font-medium uppercase tracking-wide text-ink-muted">
+            <th class="px-4 py-2.5 text-xs font-medium text-ink-muted">
               Status
             </th>
             <th
-              class="px-4 py-2.5 text-right text-xs font-medium uppercase tracking-wide text-ink-muted">
+              class="px-4 py-2.5 text-right text-xs font-medium text-ink-muted">
               Actions
             </th>
           </tr>
@@ -269,16 +262,36 @@ function tokenStatus(token: RunnerToken): {
             v-for="token in tokens"
             :key="token.id"
             class="border-b border-line-soft last:border-b-0">
-            <td class="px-4 py-2.5 font-mono text-sm text-ink-strong">
-              {{ token.name }}
+            <td class="w-full max-w-0 px-4 py-2.5">
+              <p
+                class="truncate font-mono text-sm text-ink-strong"
+                :title="token.name">
+                {{ token.name }}
+              </p>
+              <p class="truncate text-xs text-ink-muted @2xl:hidden">
+                {{
+                  token.expiresAt
+                    ? `Expires ${formatDateTime(token.expiresAt)}`
+                    : "No expiry"
+                }}
+                ·
+                {{
+                  token.lastUsedAt
+                    ? `used ${formatRelativeTime(token.lastUsedAt)}`
+                    : "never used"
+                }}
+              </p>
             </td>
-            <td class="px-4 py-2.5 text-sm text-ink-muted">
+            <td
+              class="hidden px-4 py-2.5 text-sm text-ink-muted @2xl:table-cell">
               {{ formatRelativeTime(token.createdAt) }}
             </td>
-            <td class="px-4 py-2.5 text-sm text-ink-muted">
+            <td
+              class="hidden px-4 py-2.5 text-sm text-ink-muted @2xl:table-cell">
               {{ token.expiresAt ? formatDateTime(token.expiresAt) : "never" }}
             </td>
-            <td class="px-4 py-2.5 text-sm text-ink-muted">
+            <td
+              class="hidden px-4 py-2.5 text-sm text-ink-muted @2xl:table-cell">
               {{
                 token.lastUsedAt
                   ? formatRelativeTime(token.lastUsedAt)
@@ -294,7 +307,7 @@ function tokenStatus(token: RunnerToken): {
               <button
                 v-if="!token.revokedAt"
                 type="button"
-                class="cursor-pointer rounded border border-crit/40 bg-crit/10 px-2 py-1 font-mono text-xs text-crit transition-colors hover:bg-crit/20"
+                class="cursor-pointer rounded border border-crit/40 bg-crit/10 px-2 py-1 font-mono text-xs text-crit transition-colors hover:bg-crit/20 pointer-coarse:py-2"
                 @click="revokeTarget = token">
                 revoke
               </button>

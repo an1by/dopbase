@@ -107,8 +107,11 @@ function toggleReveal(): void {
           :step="step"
           :aria-invalid="error ? true : undefined"
           :aria-describedby="error ? `${id}-error` : undefined"
-          class="h-full w-full bg-transparent pl-3.5 pr-3.5 text-sm text-ink-strong outline-none placeholder:text-ink-faint disabled:cursor-default"
-          :class="[isPassword ? 'pr-10' : '', mono ? 'font-mono text-xs' : '']"
+          class="h-full w-full bg-transparent pl-3.5 pr-3.5 text-base text-ink-strong outline-none sm:text-sm placeholder:text-ink-faint disabled:cursor-default"
+          :class="[
+            isPassword ? 'pr-10' : '',
+            mono ? 'font-mono sm:text-xs' : '',
+          ]"
           @input="onInput" />
         <button
           v-if="isPassword"
