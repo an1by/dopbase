@@ -49,12 +49,12 @@ audit_retention_days = 365
 # Enable the web UI. The CLI and REST API remain available when disabled.
 # Accepts: true or false. Default: true.
 # Environment: DOPBASE_WEB_UI
-web_ui = true
+# web_ui = true
 
 # Enable Swagger UI at /api/docs.
 # Accepts: true or false. Default: false.
 # Environment: DOPBASE_DOCS
-docs = false
+# docs = false
 
 # Master encryption key settings.
 # Uncomment the table header before enabling settings below.
