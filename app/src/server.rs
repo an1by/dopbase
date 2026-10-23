@@ -81,6 +81,8 @@ pub(crate) async fn prepare_instance(config: &ServerConfig) -> Result<(DbClient,
     let mut tx = db.pool().begin().await?;
     for table in [
       "audit_events",
+      "audit_chain_anchor",
+      "audit_chain_genesis",
       "runner_tokens",
       "agent_tokens",
       "secrets",

@@ -19,7 +19,11 @@
 //!   deleting them, and leaves an anchor so the surviving records still
 //!   verify as one unbroken chain.
 
-use std::{fs, path::PathBuf, sync::OnceLock};
+use std::{
+  fs,
+  path::{Path, PathBuf},
+  sync::OnceLock,
+};
 
 use serde_json::{Value, json};
 use sha2::{Digest, Sha256};
@@ -480,13 +484,7 @@ impl Retention {
     name: &str,
     records: &[Record],
   ) -> anyhow::Result<()> {
-    fs::create_dir_all(&self.archive_dir)?;
-    let mut contents = Vec::new();
-    for record in records {
-      serde_json::to_writer(&mut contents, &record.archived())?;
-      contents.push(b'\n');
-    }
-    crate::utils::private_file::write(&self.archive_dir.join(name), &contents, true)
+    write_archive(&self.archive_dir, name, records)
   }
 
   async fn prune_chained(
@@ -550,6 +548,64 @@ impl Retention {
       through_hash,
     }))
   }
+}
+
+/// Write records as JSON lines, owner-only, into the archive directory.
+fn write_archive(
+  archive_dir: &Path,
+  name: &str,
+  records: &[Record],
+) -> anyhow::Result<()> {
+  fs::create_dir_all(archive_dir)?;
+  let mut contents = Vec::new();
+  for record in records {
+    serde_json::to_writer(&mut contents, &record.archived())?;
+    contents.push(b'\n');
+  }
+  crate::utils::private_file::write(&archive_dir.join(name), &contents, true)
+}
+
+/// What [`archive_all`] saved before the audit log was replaced.
+pub struct ArchivedLog {
+  pub records: u64,
+  /// File name inside the archive directory; `None` when the log was empty.
+  pub archive: Option<String>,
+  /// Position and hash the replaced chain ended at.
+  pub head: Option<(i64, String)>,
+}
+
+/// Archive every audit record, legacy ones included, before the log is
+/// replaced wholesale, as a backup restore does. Restoring would otherwise
+/// erase everything written since the snapshot while the restored chain
+/// still verifies. Runs on the caller's connection so the archive matches
+/// what the caller then deletes.
+pub async fn archive_all(
+  connection: &mut SqliteConnection,
+  archive_dir: &Path,
+) -> anyhow::Result<ArchivedLog> {
+  let records = sqlx::query_as::<_, Record>(&format!(
+    "SELECT {COLUMNS} FROM audit_events ORDER BY seq IS NULL DESC,seq,created_at,id"
+  ))
+  .fetch_all(&mut *connection)
+  .await?;
+  let head = head(connection).await?;
+  if records.is_empty() {
+    return Ok(ArchivedLog {
+      records: 0,
+      archive: None,
+      head,
+    });
+  }
+  let archive = format!(
+    "pre-restore-{}.jsonl",
+    chrono::Utc::now().format("%Y%m%dT%H%M%S%.3fZ")
+  );
+  write_archive(archive_dir, &archive, &records)?;
+  Ok(ArchivedLog {
+    records: records.len() as u64,
+    archive: Some(archive),
+    head,
+  })
 }
 
 /// The run of chained records one retention pass removed.

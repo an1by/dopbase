@@ -12,6 +12,7 @@ use zip::{ZipArchive, ZipWriter, write::SimpleFileOptions};
 
 use super::model::*;
 use crate::{
+  constants::config::AUDIT_ARCHIVE_DIRECTORY_NAME,
   extractors::{require_recent_browser_auth, require_root},
   http::HttpError,
   models::AuthIdentity,
@@ -702,8 +703,23 @@ pub async fn restore_database_from_archive(
       .await?;
     }
 
+    // The restore replaces the audit log with the snapshot's, which would
+    // erase everything written since the snapshot. Keep it on disk first;
+    // without that copy the restore does not go ahead.
+    let archived = crate::services::audit_chain::archive_all(
+      &mut tx,
+      &state.config.data_dir.join(AUDIT_ARCHIVE_DIRECTORY_NAME),
+    )
+    .await
+    .map_err(|error| {
+      tracing::error!(%error, "failed to archive the audit log before restoring");
+      sqlx::Error::Io(std::io::Error::other(error.to_string()))
+    })?;
+
     // Wipe existing data
     sqlx::query("DELETE FROM audit_events").execute(&mut *tx).await?;
+    sqlx::query("DELETE FROM audit_chain_anchor").execute(&mut *tx).await?;
+    sqlx::query("DELETE FROM audit_chain_genesis").execute(&mut *tx).await?;
     sqlx::query("DELETE FROM runner_tokens").execute(&mut *tx).await?;
     sqlx::query("DELETE FROM agent_tokens").execute(&mut *tx).await?;
     sqlx::query("DELETE FROM service_accounts").execute(&mut *tx).await?;
@@ -730,6 +746,9 @@ pub async fn restore_database_from_archive(
     sqlx::query("INSERT INTO secrets SELECT * FROM backup_db.secrets").execute(&mut *tx).await?;
     sqlx::query("INSERT INTO runner_tokens SELECT * FROM backup_db.runner_tokens").execute(&mut *tx).await?;
     sqlx::query("INSERT INTO audit_events SELECT * FROM backup_db.audit_events").execute(&mut *tx).await?;
+    // The chain's genesis and pruning anchor belong to the restored records.
+    sqlx::query("INSERT INTO audit_chain_anchor SELECT * FROM backup_db.audit_chain_anchor").execute(&mut *tx).await?;
+    sqlx::query("INSERT INTO audit_chain_genesis SELECT * FROM backup_db.audit_chain_genesis").execute(&mut *tx).await?;
 
     let mut effective_admin_id = preserve_admin.map(|(id, _, _)| id.to_string());
 
@@ -773,7 +792,12 @@ pub async fn restore_database_from_archive(
         None,
         Some("backup"),
         Some(key_str),
-        serde_json::json!({ "backup": key_str }),
+        serde_json::json!({
+          "backup": key_str,
+          "previousHead": archived.head.as_ref().map(|(seq, hash)| serde_json::json!({"seq": seq, "hash": hash})),
+          "archivedRecords": archived.records,
+          "archive": archived.archive,
+        }),
       )
       .await?;
     }
