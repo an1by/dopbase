@@ -8,7 +8,11 @@ pub enum AuditCommand {
   ///
   /// Exits with code 0 when the chain is intact and 2 when it is broken.
   #[command(after_help = VERIFY_HELP)]
-  Verify,
+  Verify {
+    /// Also check the log against a head saved earlier, as SEQ:HASH.
+    #[arg(long, value_name = "SEQ:HASH", value_parser = parse_anchor)]
+    anchor: Option<(i64, String)>,
+  },
 
   /// Stream audit records as JSON lines to standard output or a file.
   #[command(after_help = EXPORT_HELP)]
@@ -43,6 +47,23 @@ pub enum AuditCommand {
   },
 }
 
+/// Parses an anchor such as `42:9f86d0…`: a positive sequence number and
+/// the 64-character hex hash an earlier verification reported for it.
+fn parse_anchor(value: &str) -> Result<(i64, String), String> {
+  let (seq, hash) = value
+    .split_once(':')
+    .ok_or("expected SEQ:HASH, for example 42:9f86d081884c7d65…")?;
+  let seq = seq
+    .parse::<i64>()
+    .ok()
+    .filter(|seq| *seq > 0)
+    .ok_or("the sequence number must be a positive integer")?;
+  if hash.len() != 64 || !hash.bytes().all(|byte| byte.is_ascii_hexdigit()) {
+    return Err("the hash must be the 64-character hex value verify reported".into());
+  }
+  Ok((seq, hash.to_ascii_lowercase()))
+}
+
 pub(crate) const HELP: &str = "\
 Examples:
   dopbase audit verify
@@ -57,10 +78,16 @@ const VERIFY_HELP: &str = "\
 Examples:
   dopbase audit verify
   dopbase --json audit verify
+  dopbase audit verify --anchor 42:<HEAD_HASH>
 
 Requires an administrator account. Verification walks the records in
 sequence order and stops at the first break, reporting how many records
 were checked before it. No secret values are read or printed.
+
+The chain alone cannot tell a fully rewritten log, or one whose newest
+records were deleted, from an honest one. Save the head sequence and hash
+somewhere outside this server, then pass them to --anchor later: the check
+fails if that record changed or no longer exists.
 ";
 const EXPORT_HELP: &str = "\
 Examples:

@@ -468,6 +468,9 @@ async fn serve_instance(
     );
   }
   tracing::info!(%address,"Dopbase server started");
+  // The audit head goes to the log at startup and shutdown, so the log
+  // collector keeps a copy of it outside the database.
+  crate::services::audit_chain::log_checkpoint(state.db.pool()).await;
   let serve_result = axum::serve(listener, router(state.clone()))
     .with_graceful_shutdown(shutdown_signal())
     .await;
@@ -475,6 +478,7 @@ async fn serve_instance(
     let _ = crate::daemon::remove_pid_file(&crate::daemon::pid_file_path(&state.config.data_dir));
   }
   serve_result?;
+  crate::services::audit_chain::log_checkpoint(state.db.pool()).await;
   if let Err(error) = state.db.checkpoint().await {
     tracing::warn!(%error, "failed to checkpoint SQLite WAL during shutdown");
   }

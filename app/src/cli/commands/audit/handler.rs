@@ -22,10 +22,9 @@ pub(crate) async fn execute(
 ) -> Result<i32> {
   let api = client::human_client(server).await?;
   match command {
-    AuditCommand::Verify => {
-      let report = api
-        .request(Method::GET, api_paths::audit::VERIFY, None)
-        .await?;
+    AuditCommand::Verify { anchor } => {
+      let path = api_paths::audit::verify(anchor.as_ref().map(|(seq, hash)| (*seq, hash.as_str())));
+      let report = api.request(Method::GET, &path, None).await?;
       let ok = report.get("ok").and_then(Value::as_bool).unwrap_or(false);
       if json_output {
         output::print_json(&report)?;
@@ -225,6 +224,20 @@ fn print_report(report: &Value) {
   };
   if unsequenced > 0 {
     fields.push(("Unsequenced records:", unsequenced.to_string()));
+  }
+  if let Some(anchor) = report.get("anchor").filter(|value| value.is_object()) {
+    let seq = anchor
+      .get("seq")
+      .and_then(Value::as_i64)
+      .unwrap_or_default();
+    let status = match anchor.get("status").and_then(Value::as_str) {
+      Some("matched") => "matched".to_owned(),
+      Some("mismatch") => "MISMATCH: the log was rewritten up to this record".to_owned(),
+      Some("missing") => "MISSING: records up to this one were deleted".to_owned(),
+      Some("pruned") => "removed by retention; check it against the archive".to_owned(),
+      other => other.unwrap_or("unknown").to_owned(),
+    };
+    fields.push(("Anchor:", format!("sequence {seq} {status}")));
   }
   let legacy = output::number(report, "legacy");
   if legacy > 0 {

@@ -1,4 +1,4 @@
-use app::services::audit_chain::{self, Retention};
+use app::services::audit_chain::{self, Anchor, AnchorStatus, Retention};
 use app::services::db::DbClient;
 use serde_json::json;
 
@@ -526,4 +526,121 @@ async fn a_failed_retention_pass_leaves_the_callers_write_intact() {
   let report = verify(&db).await;
   assert!(report.ok, "chain broke: {:?}", report.broken);
   assert_eq!(report.pruned_seq, None);
+}
+
+async fn verify_against(
+  db: &DbClient,
+  anchor: &Anchor,
+) -> audit_chain::ChainReport {
+  audit_chain::verify_against(db.pool(), Some(anchor))
+    .await
+    .unwrap()
+}
+
+async fn head_anchor(db: &DbClient) -> Anchor {
+  let report = verify(db).await;
+  Anchor {
+    seq: report.head_seq.unwrap(),
+    hash: report.head_hash.unwrap(),
+  }
+}
+
+#[tokio::test]
+async fn an_outside_anchor_matches_an_honest_log() {
+  let (_directory, db) = database().await;
+  for index in 0..3 {
+    record(&db, &format!("aud_{index}"), "secret.updated").await;
+  }
+  let anchor = head_anchor(&db).await;
+  record(&db, "aud_later", "secret.updated").await;
+
+  let report = verify_against(&db, &anchor).await;
+  assert!(report.ok, "chain broke: {:?}", report.broken);
+  assert_eq!(report.anchor.unwrap().status, AnchorStatus::Matched);
+}
+
+#[tokio::test]
+async fn an_outside_anchor_exposes_a_fully_rewritten_log() {
+  let (_directory, db) = database().await;
+  for index in 0..3 {
+    record(&db, &format!("aud_{index}"), "secret.updated").await;
+  }
+  let anchor = head_anchor(&db).await;
+
+  // A rewrite that keeps the chain consistent: replace every record with a
+  // forged one appended through the same code path.
+  sqlx::query("DELETE FROM audit_events")
+    .execute(db.pool())
+    .await
+    .unwrap();
+  for index in 0..3 {
+    record(&db, &format!("aud_forged_{index}"), "login.succeeded").await;
+  }
+  assert!(
+    verify(&db).await.ok,
+    "the chain alone cannot see the rewrite"
+  );
+
+  let report = verify_against(&db, &anchor).await;
+  assert!(!report.ok);
+  assert_eq!(report.anchor.unwrap().status, AnchorStatus::Mismatch);
+}
+
+#[tokio::test]
+async fn an_outside_anchor_exposes_deleted_newest_records() {
+  let (_directory, db) = database().await;
+  for index in 0..3 {
+    record(&db, &format!("aud_{index}"), "secret.updated").await;
+  }
+  let anchor = head_anchor(&db).await;
+  sqlx::query("DELETE FROM audit_events WHERE seq=3")
+    .execute(db.pool())
+    .await
+    .unwrap();
+  assert!(
+    verify(&db).await.ok,
+    "the chain alone cannot see a truncation"
+  );
+
+  let report = verify_against(&db, &anchor).await;
+  assert!(!report.ok);
+  assert_eq!(report.anchor.unwrap().status, AnchorStatus::Missing);
+}
+
+#[tokio::test]
+async fn an_outside_anchor_removed_by_retention_is_reported_as_pruned() {
+  let (directory, db) = database().await;
+  for index in 0..3 {
+    record_at(
+      &db,
+      &format!("aud_old_{index}"),
+      "secret.updated",
+      "2000-01-01T00:00:00+00:00",
+    )
+    .await;
+  }
+  let first: String = sqlx::query_scalar("SELECT record_hash FROM audit_events WHERE seq=1")
+    .fetch_one(db.pool())
+    .await
+    .unwrap();
+  let last = head_anchor(&db).await;
+  let retention = Retention::new(directory.path().join("archive"), 30);
+  let mut transaction = db.pool().begin_with("BEGIN IMMEDIATE").await.unwrap();
+  retention.apply(&mut transaction).await.unwrap();
+  transaction.commit().await.unwrap();
+
+  let report = verify_against(
+    &db,
+    &Anchor {
+      seq: 1,
+      hash: first,
+    },
+  )
+  .await;
+  assert!(report.ok, "chain broke: {:?}", report.broken);
+  assert_eq!(report.anchor.unwrap().status, AnchorStatus::Pruned);
+  // The newest pruned position is still checkable against the anchor row.
+  let report = verify_against(&db, &last).await;
+  assert!(report.ok);
+  assert_eq!(report.anchor.unwrap().status, AnchorStatus::Matched);
 }

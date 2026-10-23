@@ -69,6 +69,29 @@ pub struct ChainVerifyReport {
   /// surviving records continue the chain after it.
   pub pruned_seq: Option<i64>,
   pub broken: Option<ChainVerifyBreak>,
+  /// The outcome of comparing the log with `anchorSeq`/`anchorHash`, when
+  /// they were given.
+  pub anchor: Option<ChainVerifyAnchor>,
+}
+
+/// How the log compares with an anchor saved outside the database.
+#[derive(Clone, Debug, Serialize, ToSchema)]
+#[serde(rename_all = "camelCase")]
+pub struct ChainVerifyAnchor {
+  pub seq: i64,
+  /// `matched`, `mismatch` (history was rewritten), `missing` (the newest
+  /// records were deleted), or `pruned` (retention removed that position).
+  pub status: String,
+}
+
+/// An anchor saved outside the database: a chain position and the hash the
+/// record at that position had, such as an earlier `headSeq`/`headHash`.
+#[derive(Deserialize, IntoParams)]
+#[into_params(parameter_in=Query)]
+#[serde(rename_all = "camelCase")]
+pub struct ChainVerifyQuery {
+  pub anchor_seq: Option<i64>,
+  pub anchor_hash: Option<String>,
 }
 
 impl From<crate::services::audit_chain::ChainReport> for ChainVerifyReport {
@@ -85,6 +108,10 @@ impl From<crate::services::audit_chain::ChainReport> for ChainVerifyReport {
         seq: chain_break.seq,
         id: chain_break.id,
         reason: chain_break.reason,
+      }),
+      anchor: report.anchor.map(|check| ChainVerifyAnchor {
+        seq: check.seq,
+        status: check.status.as_str().into(),
       }),
     }
   }

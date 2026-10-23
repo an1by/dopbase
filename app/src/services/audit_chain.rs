@@ -235,6 +235,54 @@ pub struct ChainReport {
   /// The surviving records continue the chain after it.
   pub pruned_seq: Option<i64>,
   pub broken: Option<ChainBreak>,
+  /// The outcome of checking an anchor saved outside the database, when
+  /// one was given.
+  pub anchor: Option<AnchorCheck>,
+}
+
+/// A chain position and hash saved outside the database, such as the head
+/// reported by an earlier verification or an exported record.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Anchor {
+  pub seq: i64,
+  pub hash: String,
+}
+
+/// How the log compares with an [`Anchor`].
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum AnchorStatus {
+  /// The record at that position still has that hash.
+  Matched,
+  /// The record at that position has a different hash: history up to it
+  /// was rewritten.
+  Mismatch,
+  /// No record holds that position and retention did not remove it: the
+  /// newest records were deleted.
+  Missing,
+  /// Retention removed that position; only the pruning archive can confirm
+  /// it.
+  Pruned,
+}
+
+impl AnchorStatus {
+  pub fn as_str(self) -> &'static str {
+    match self {
+      Self::Matched => "matched",
+      Self::Mismatch => "mismatch",
+      Self::Missing => "missing",
+      Self::Pruned => "pruned",
+    }
+  }
+
+  fn is_failure(self) -> bool {
+    matches!(self, Self::Mismatch | Self::Missing)
+  }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct AnchorCheck {
+  pub seq: i64,
+  pub status: AnchorStatus,
 }
 
 /// Walk the chain in sequence order and recompute every hash.
@@ -242,10 +290,81 @@ pub struct ChainReport {
 /// The walk runs in one read transaction, so it checks a single snapshot:
 /// appends or retention committing meanwhile cannot make it see a gap.
 pub async fn verify(pool: &SqlitePool) -> Result<ChainReport, sqlx::Error> {
+  verify_against(pool, None).await
+}
+
+/// Like [`verify`], and also compare the log with an anchor saved outside
+/// the database. The chain alone cannot tell a full rewrite, or removal of
+/// the newest records, from an honest log; an outside anchor can.
+pub async fn verify_against(
+  pool: &SqlitePool,
+  anchor: Option<&Anchor>,
+) -> Result<ChainReport, sqlx::Error> {
   let mut snapshot = pool.begin().await?;
-  let report = verify_snapshot(&mut snapshot).await?;
+  let mut report = verify_snapshot(&mut snapshot).await?;
+  if let Some(anchor) = anchor {
+    let status = check_anchor(&mut snapshot, anchor).await?;
+    report.ok = report.ok && !status.is_failure();
+    report.anchor = Some(AnchorCheck {
+      seq: anchor.seq,
+      status,
+    });
+  }
   snapshot.rollback().await?;
   Ok(report)
+}
+
+async fn check_anchor(
+  connection: &mut SqliteConnection,
+  anchor: &Anchor,
+) -> Result<AnchorStatus, sqlx::Error> {
+  let stored: Option<Option<String>> =
+    sqlx::query_scalar("SELECT record_hash FROM audit_events WHERE seq=?")
+      .bind(anchor.seq)
+      .fetch_optional(&mut *connection)
+      .await?;
+  if let Some(hash) = stored {
+    return Ok(if hash.as_deref() == Some(anchor.hash.as_str()) {
+      AnchorStatus::Matched
+    } else {
+      AnchorStatus::Mismatch
+    });
+  }
+  let pruned: Option<(i64, String)> =
+    sqlx::query_as("SELECT pruned_seq,pruned_hash FROM audit_chain_anchor WHERE id='chain'")
+      .fetch_optional(&mut *connection)
+      .await?;
+  Ok(match pruned {
+    Some((seq, hash)) if seq == anchor.seq => {
+      if hash == anchor.hash {
+        AnchorStatus::Matched
+      } else {
+        AnchorStatus::Mismatch
+      }
+    }
+    Some((seq, _)) if anchor.seq < seq => AnchorStatus::Pruned,
+    _ => AnchorStatus::Missing,
+  })
+}
+
+/// Log the chain head so a copy of it lands outside the database, in
+/// whatever collects the server's log. Comparing a logged head with a later
+/// verification exposes a rewrite or a truncation of the log.
+pub async fn log_checkpoint(pool: &SqlitePool) {
+  let mut connection = match pool.acquire().await {
+    Ok(connection) => connection,
+    Err(error) => {
+      tracing::warn!(%error, "audit checkpoint could not be read");
+      return;
+    }
+  };
+  match head(&mut connection).await {
+    Ok(Some((seq, hash))) => {
+      tracing::info!(seq, %hash, "audit checkpoint")
+    }
+    Ok(None) => tracing::info!("audit checkpoint: log is empty"),
+    Err(error) => tracing::warn!(%error, "audit checkpoint could not be read"),
+  }
 }
 
 async fn verify_snapshot(connection: &mut SqliteConnection) -> Result<ChainReport, sqlx::Error> {
@@ -265,6 +384,7 @@ async fn verify_snapshot(connection: &mut SqliteConnection) -> Result<ChainRepor
     unsequenced,
     pruned_seq: None,
     broken: None,
+    anchor: None,
   };
   // Records retention removed leave an anchor behind: the chain starts
   // there instead of at genesis, so pruning does not look like tampering.

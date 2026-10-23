@@ -623,6 +623,27 @@ async fn audit_verification_chains_real_requests_and_reports_tampering() {
   .await;
   assert_eq!(status, 403);
 
+  // An anchor saved from this report matches until history changes.
+  let head_seq = report["data"]["headSeq"].as_i64().unwrap();
+  let head_hash = report["data"]["headHash"].as_str().unwrap().to_owned();
+  let anchored = format!("/api/v1/audit-events/verify?anchorSeq={head_seq}&anchorHash={head_hash}");
+  let (status, anchored_report, _) = call(&router, "GET", &anchored, Some(&token), None).await;
+  assert_eq!(status, 200);
+  assert_eq!(anchored_report["data"]["anchor"]["status"], "matched");
+  assert_eq!(anchored_report["data"]["ok"], json!(true));
+  let (status, _, _) = call(
+    &router,
+    "GET",
+    "/api/v1/audit-events/verify?anchorSeq=1",
+    Some(&token),
+    None,
+  )
+  .await;
+  assert_eq!(
+    status, 400,
+    "an anchor needs both its sequence and its hash"
+  );
+
   // Editing a record in place breaks the chain at exactly that record. The
   // guard trigger only stops application bugs, so an attacker drops it.
   sqlx::query("DROP TRIGGER audit_events_sealed_immutable")

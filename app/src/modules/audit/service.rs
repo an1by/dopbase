@@ -1,7 +1,7 @@
 use super::{model::*, repository};
 use crate::{
   constants::errors::REQUEST_INVALID, extractors::require_admin, http::HttpError,
-  models::AuthIdentity, state::AppState,
+  models::AuthIdentity, services::audit_chain, state::AppState,
 };
 use base64::{Engine, engine::general_purpose::URL_SAFE_NO_PAD};
 fn decode(value: &str) -> Result<(String, String), HttpError> {
@@ -44,12 +44,28 @@ pub async fn list(
   Ok(AuditPage { items, next_cursor })
 }
 
-/// Recompute every audit record's hash in sequence order.
+/// Recompute every audit record's hash in sequence order, and compare the
+/// log with an outside anchor when one is given.
 pub async fn verify(
   state: &AppState,
   identity: &AuthIdentity,
+  query: ChainVerifyQuery,
 ) -> Result<ChainVerifyReport, HttpError> {
   require_admin(identity)?;
-  let report = crate::services::audit_chain::verify(state.db.pool()).await?;
+  let anchor = match (query.anchor_seq, query.anchor_hash) {
+    (None, None) => None,
+    (Some(seq), Some(hash)) if seq > 0 && !hash.is_empty() => {
+      Some(audit_chain::Anchor { seq, hash })
+    }
+    _ => {
+      return Err(HttpError::bad_request(
+        REQUEST_INVALID,
+        "anchorSeq and anchorHash must be given together, with a positive sequence.",
+      ));
+    }
+  };
+  let report = audit_chain::verify_against(state.db.pool(), anchor.as_ref()).await?;
+  // Every verification also leaves the head in the server log.
+  audit_chain::log_checkpoint(state.db.pool()).await;
   Ok(report.into())
 }

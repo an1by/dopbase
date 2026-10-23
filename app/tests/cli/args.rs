@@ -592,12 +592,47 @@ fn token_create_expiry_flag_accepts_hours_days_and_never() {
 }
 
 #[test]
+fn audit_verify_anchor_takes_a_sequence_and_a_full_hash() {
+  let hash = "9F86D081884C7D659A2FEAA0C55AD015A3BF4F1B2B0B822CD15D6C15B0F00A08";
+  let cli = Cli::try_parse_from([
+    "dopbase",
+    "audit",
+    "verify",
+    "--anchor",
+    &format!("42:{hash}"),
+  ])
+  .unwrap();
+  let Command::Audit {
+    command: AuditCommand::Verify {
+      anchor: Some((seq, parsed)),
+    },
+  } = cli.command
+  else {
+    panic!("expected audit verify with an anchor");
+  };
+  assert_eq!(seq, 42);
+  assert_eq!(parsed, hash.to_ascii_lowercase());
+  for value in [
+    "42",
+    "0:9f86d081884c7d659a2feaa0c55ad015a3bf4f1b2b0b822cd15d6c15b0f00a08",
+    "-1:9f86d081884c7d659a2feaa0c55ad015a3bf4f1b2b0b822cd15d6c15b0f00a08",
+    "42:9f86d0",
+    "42:zz86d081884c7d659a2feaa0c55ad015a3bf4f1b2b0b822cd15d6c15b0f00a08",
+  ] {
+    assert!(
+      Cli::try_parse_from(["dopbase", "audit", "verify", "--anchor", value]).is_err(),
+      "accepted {value}"
+    );
+  }
+}
+
+#[test]
 fn audit_verify_parses_with_the_global_json_flag() {
   let cli = Cli::try_parse_from(["dopbase", "audit", "verify"]).unwrap();
   assert!(matches!(
     cli.command,
     Command::Audit {
-      command: AuditCommand::Verify
+      command: AuditCommand::Verify { anchor: None }
     }
   ));
   let cli = Cli::try_parse_from(["dopbase", "--json", "audit", "verify"]).unwrap();
@@ -605,7 +640,7 @@ fn audit_verify_parses_with_the_global_json_flag() {
   assert!(matches!(
     cli.command,
     Command::Audit {
-      command: AuditCommand::Verify
+      command: AuditCommand::Verify { anchor: None }
     }
   ));
 }
