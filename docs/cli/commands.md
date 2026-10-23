@@ -523,6 +523,7 @@ write-once storage:
 
 ```bash
 dopbase audit verify
+dopbase audit verify --anchor 42:<HEAD_HASH>
 dopbase audit export --output audit-2026-10-17.jsonl
 dopbase --json audit verify
 ```
@@ -541,7 +542,13 @@ values.
 The command requires an administrator account. It exits with code `0` when the
 chain is intact and `2` when it is broken, so monitoring can alert on the
 result, and `--json` prints the full report including the head sequence and
-hash for external anchoring. When
+hash for external anchoring. Records written before the chain existed are
+listed as legacy records; they carry no hashes but do not fail verification.
+
+The chain alone cannot tell a fully rewritten log, or one whose newest records
+were deleted, from an honest one. Save the head sequence and hash somewhere
+outside the server and pass them back with `--anchor SEQ:HASH`: the check fails
+when that record changed (`MISMATCH`) or no longer exists (`MISSING`). When
 [retention](/reference/audit-events#retention) has removed records,
 verification continues from the pruning anchor and reports
 `Pruned through: sequence N` instead of a gap. See
@@ -551,8 +558,8 @@ chain does and does not prove.
 `dopbase audit export` writes one JSON object per line to standard output, or
 to a file with `--output <FILE>` (mode `0600`, never replacing an existing
 file without `--force`). Each line is the record exactly as the audit list API
-returns it, chain fields `seq`, `prevHash` and `recordHash` included, so an
-exported copy can be checked and anchored outside Dopbase:
+returns it, chain fields `seq`, `prevHash` and `recordHash` included, so any
+exported record can later serve as an `--anchor`:
 
 ```bash
 dopbase audit export > audit.jsonl

@@ -21,11 +21,19 @@ configurable retention archives expired records before deleting them.
   `GET /api/v1/audit-events/verify` serves the same check to scripts and is
   restricted to administrators, like the audit log itself.
 
-  Records written before this release are sealed into the chain during the
-  next startup, and a backup restored from an older release is sealed during
-  the restore, so verification covers the whole log. The chain columns are
+  Records written before this release are never sealed after the fact:
+  verification reports them as `legacy` without failing, and any record
+  without a chain position that is newer than the chain fails verification.
+  The database rejects updates of sealed records. The chain columns are
   additive: existing audit endpoints, filters, and clients keep their shape,
   and verification reads no secret values.
+
+- `dopbase audit verify --anchor SEQ:HASH`, or `anchorSeq` and `anchorHash`
+  on the verify endpoint, compares the log with a head saved outside the
+  server and reports `matched`, `mismatch`, `missing`, or `pruned`. This
+  catches what the chain alone cannot: a fully rewritten log, or deleted
+  newest records. The server also logs the head as an `audit checkpoint` at
+  startup, at shutdown, and after every verification.
 
 - `dopbase audit export` streams audit records as JSON lines to standard
   output or, with `--output <FILE>`, to a file written with owner-only
@@ -33,8 +41,8 @@ configurable retention archives expired records before deleting them.
   `--project`, `--environment`, and `--actor` narrow the stream, and `--limit`
   caps it; without filters every record is exported by following pagination to
   the end. Each line is the record exactly as the audit list API returns it,
-  chain fields (`seq`, `prevHash`, `recordHash`) included, so an exported copy
-  can be anchored and checked outside Dopbase. Export requires an
+  chain fields (`seq`, `prevHash`, `recordHash`) included, so any exported
+  record can serve as a verification anchor. Export requires an
   administrator account and reads no secret values.
 
 - `audit_retention_days` in `server.toml`, or `DOPBASE_AUDIT_RETENTION_DAYS`,
@@ -47,6 +55,19 @@ configurable retention archives expired records before deleting them.
   the oldest contiguous run of records is removed. Retention applies at
   startup and on each audit write, so no scheduler is involved. Back up
   `audit-archive/` separately: snapshots store the database only.
+
+  Each pass that removes records appends an `audit.pruned` record naming the
+  range and archive, and verification requires it to match the anchor, so a
+  hand-moved anchor fails. A failed pass is undone without failing the
+  audited operation. Expired legacy records are archived and removed too.
+
+### Changed
+
+- Restoring a backup archives the current audit log to
+  `audit-archive/pre-restore-<TIME>.jsonl` before replacing it, so records
+  written after the snapshot are kept; the restore stops if the archive
+  cannot be written. `backup.restored` names the archive, its record count,
+  and the replaced chain's head.
 
 ### Security Update
 

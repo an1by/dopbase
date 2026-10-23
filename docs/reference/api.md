@@ -111,18 +111,24 @@ inconsistency. Administrators only, like reading the audit log; runner tokens
 and AI service accounts are refused with `403`.
 
 The response carries `ok`, the number of `records` checked before the first
-break, `headSeq` and `headHash` for external anchoring, `unsequenced` for
-records that sit outside the chain, `prunedSeq` when
+break, `headSeq` and `headHash` for external anchoring, `legacy` for records
+written before the chain existed (not a failure), `unsequenced` for records
+inserted outside the chain after it existed (a failure), `prunedSeq` when
 [retention](/reference/audit-events#retention) removed records (the chain
 continues after it), and `broken` with the sequence number, record ID, and
-reason when something does not match. Records written before this release
-are sealed into the chain on the next startup, so `unsequenced` stays at
-zero.
+reason when something does not match.
+
+Pass `anchorSeq` and `anchorHash`, saved from an earlier `headSeq` and
+`headHash`, to compare the log with that outside copy. The response then
+carries `anchor` with `seq` and a `status` of `matched`, `mismatch`, `missing`,
+or `pruned`; `mismatch` and `missing` set `ok` to `false`. Passing only one of
+the two returns `400`.
 
 The chain columns are additive: the audit list keeps its shape and filters,
-and every item now carries `seq`, `prevHash`, and `recordHash`, so records
-exported from `GET /api/v1/audit-events` keep the evidence needed to check
-them outside Dopbase. Verification reads no secret values. `dopbase audit
+and every item now carries `seq`, `prevHash`, and `recordHash`, so an exported
+record can serve as an anchor. Recomputing hashes from an export is not
+supported yet: the list returns metadata re-serialized and omits the network
+fields the hash covers. Verification reads no secret values. `dopbase audit
 verify` runs the same check from the terminal, and `dopbase audit export`
 streams the filtered list as JSON lines.
 
