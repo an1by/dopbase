@@ -10,10 +10,10 @@ use serde::{Deserialize, Serialize};
 use url::{Host, Url};
 
 use crate::constants::config::{
-  CLIENT_CONFIG_FILENAME, DATA_DIRECTORY_NAME, DATABASE_FILENAME, DEFAULT_PORT,
-  ENV_AUDIT_RETENTION_DAYS, ENV_DATA_DIR, ENV_DOCS, ENV_HOST, ENV_MASTER_KEY_PATH, ENV_PORT,
-  ENV_PUBLIC_URL, ENV_SHUTDOWN_GRACE_SECONDS, ENV_TRUSTED_PROXIES, ENV_WEB_UI, MASTER_KEY_FILENAME,
-  SERVER_CONFIG_FILENAME, SERVER_HOST_PLACEHOLDER,
+  AUDIT_ARCHIVE_DIRECTORY_NAME, CLIENT_CONFIG_FILENAME, DATA_DIRECTORY_NAME, DATABASE_FILENAME,
+  DEFAULT_PORT, ENV_AUDIT_RETENTION_DAYS, ENV_DATA_DIR, ENV_DOCS, ENV_HOST, ENV_MASTER_KEY_PATH,
+  ENV_PORT, ENV_PUBLIC_URL, ENV_SHUTDOWN_GRACE_SECONDS, ENV_TRUSTED_PROXIES, ENV_WEB_UI,
+  MASTER_KEY_FILENAME, SERVER_CONFIG_FILENAME, SERVER_HOST_PLACEHOLDER,
 };
 pub use crate::constants::config::{DEFAULT_BIND_ADDRESS, DEFAULT_PUBLIC_URL};
 
@@ -417,6 +417,16 @@ impl ServerConfig {
       format!(
         "The public URL {} uses HTTP. Credentials, secrets, and setup tokens are not encrypted. Use HTTPS for deployments.",
         self.public_url
+      )
+    })
+  }
+
+  /// The audit retention policy, or `None` when records are kept forever.
+  pub fn audit_retention(&self) -> Option<crate::services::audit_chain::Retention> {
+    self.audit_retention_days.map(|keep_days| {
+      crate::services::audit_chain::Retention::new(
+        self.data_dir.join(AUDIT_ARCHIVE_DIRECTORY_NAME),
+        keep_days,
       )
     })
   }

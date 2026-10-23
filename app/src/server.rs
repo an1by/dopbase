@@ -32,7 +32,6 @@ use crate::{
   config::{ServerConfig, database_path, ensure_data_dir},
   constants::{
     api,
-    config::AUDIT_ARCHIVE_DIRECTORY_NAME,
     errors::{INTERNAL_ERROR, REQUEST_INVALID},
   },
   http::HttpError,
@@ -60,14 +59,8 @@ pub(crate) async fn prepare_instance(config: &ServerConfig) -> Result<(DbClient,
   db.migrate()
     .await
     .context("failed to run database migrations")?;
-  if let Some(keep_days) = config.audit_retention_days {
-    crate::services::audit_chain::configure_retention(
-      crate::services::audit_chain::Retention::new(
-        config.data_dir.join(AUDIT_ARCHIVE_DIRECTORY_NAME),
-        keep_days,
-      ),
-    );
-    crate::services::audit_chain::apply_retention(db.pool())
+  if let Some(retention) = config.audit_retention() {
+    crate::services::audit_chain::apply_retention(db.pool(), &retention)
       .await
       .context("failed to apply audit retention")?;
   }
@@ -185,6 +178,10 @@ pub fn router(state: AppState) -> Router {
     .layer(middleware::from_fn_with_state(
       state.clone(),
       middlewares::client_ip::capture,
+    ))
+    .layer(middleware::from_fn_with_state(
+      state.clone(),
+      middlewares::audit_retention::scope,
     ))
     .with_state(state)
 }

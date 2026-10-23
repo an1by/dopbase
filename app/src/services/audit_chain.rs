@@ -22,7 +22,6 @@
 use std::{
   fs,
   path::{Path, PathBuf},
-  sync::OnceLock,
 };
 
 use serde_json::{Value, json};
@@ -739,32 +738,37 @@ fn cutoff_for(keep_days: u64) -> String {
   (chrono::Utc::now() - chrono::Duration::days(days)).to_rfc3339()
 }
 
-/// The retention policy configured for this process, set once at startup.
-static RETENTION: OnceLock<Retention> = OnceLock::new();
-
-/// Configure the retention policy applied to the audit log.
-pub fn configure_retention(retention: Retention) {
-  let _ = RETENTION.set(retention);
+tokio::task_local! {
+  /// The retention policy of the instance handling the current request.
+  static RETENTION: Option<Retention>;
 }
 
-/// Apply the configured retention in a transaction this function owns.
-/// Runs once at startup; audit writes apply retention in the caller's
-/// transaction instead. Returns how many records were removed, and zero
-/// when retention is not configured.
-pub async fn apply_retention(pool: &SqlitePool) -> anyhow::Result<u64> {
-  let Some(retention) = RETENTION.get() else {
-    return Ok(0);
-  };
+/// Run a request with its instance's retention policy, so the audit writes
+/// it makes apply that policy. A process can serve more than one instance,
+/// as tests do, so the policy is never process-wide.
+pub async fn with_retention<F: std::future::Future>(
+  retention: Option<Retention>,
+  request: F,
+) -> F::Output {
+  RETENTION.scope(retention, request).await
+}
+
+/// Apply a retention policy in a transaction this function owns, as startup
+/// does. Returns how many records were removed.
+pub async fn apply_retention(
+  pool: &SqlitePool,
+  retention: &Retention,
+) -> anyhow::Result<u64> {
   let mut transaction = pool.begin_with("BEGIN IMMEDIATE").await?;
   let pruned = retention.apply(&mut transaction).await?;
   transaction.commit().await?;
   Ok(pruned)
 }
 
-/// Apply the configured retention on a connection that already holds the
-/// write lock. Returns `None` when retention is not configured.
+/// Apply the current request's retention policy on a connection that
+/// already holds the write lock. Returns `None` when there is no policy.
 pub async fn prune_configured(connection: &mut SqliteConnection) -> anyhow::Result<Option<u64>> {
-  let Some(retention) = RETENTION.get() else {
+  let Some(retention) = RETENTION.try_with(Clone::clone).ok().flatten() else {
     return Ok(None);
   };
   retention.apply(connection).await.map(Some)

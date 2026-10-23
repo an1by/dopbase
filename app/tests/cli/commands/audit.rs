@@ -278,8 +278,7 @@ async fn audit_export_writes_a_private_file_and_needs_force_to_replace_it() {
 
 #[tokio::test(flavor = "multi_thread")]
 async fn audit_retention_archives_expired_records_and_verification_continues() {
-  use app::services::audit_chain::{self, Retention};
-  let fixture = Fixture::new().await;
+  let fixture = Fixture::with_config(|config| config.audit_retention_days = Some(30)).await;
   fixture.environment().await;
 
   // The log went quiet past the retention window: every record written so
@@ -298,11 +297,7 @@ async fn audit_retention_archives_expired_records_and_verification_continues() {
     .await
     .unwrap();
 
-  // The next audit write applies the configured retention.
-  audit_chain::configure_retention(Retention::new(
-    fixture.directory.path().join("audit-archive"),
-    30,
-  ));
+  // The next audit write applies the instance's retention.
   fixture.run(&["project", "create", "second"]).await;
 
   // The expired records are gone from the log and archived as JSON lines
@@ -315,7 +310,7 @@ async fn audit_retention_archives_expired_records_and_verification_continues() {
     remaining, 2,
     "only the record that resumed the log and the audit.pruned record survive"
   );
-  let archive_dir = fixture.directory.path().join("audit-archive");
+  let archive_dir = fixture.data_dir.join("audit-archive");
   let mut archives = std::fs::read_dir(&archive_dir)
     .unwrap()
     .map(|entry| entry.unwrap().path())
