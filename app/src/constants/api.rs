@@ -146,6 +146,44 @@ pub mod tokens {
 
 pub mod audit {
   pub const COLLECTION: &str = api_path!("/audit-events");
+  pub const VERIFY: &str = api_path!("/audit-events/verify");
+
+  /// Build the audit list path with optional filters. Empty values are
+  /// skipped, so callers can pass their options directly.
+  pub fn collection(filters: &[(&str, &str)]) -> String {
+    with_query(COLLECTION, filters)
+  }
+
+  /// Build the verification path, with an outside anchor when given.
+  pub fn verify(anchor: Option<(i64, &str)>) -> String {
+    match anchor {
+      Some((seq, hash)) => with_query(
+        VERIFY,
+        &[("anchorSeq", &seq.to_string()), ("anchorHash", hash)],
+      ),
+      None => VERIFY.to_owned(),
+    }
+  }
+
+  fn with_query(
+    path: &str,
+    filters: &[(&str, &str)],
+  ) -> String {
+    let query = filters
+      .iter()
+      .filter(|(_, value)| !value.is_empty())
+      .map(|(name, value)| {
+        let encoded: String = url::form_urlencoded::byte_serialize(value.as_bytes()).collect();
+        format!("{name}={encoded}")
+      })
+      .collect::<Vec<_>>()
+      .join("&");
+    if query.is_empty() {
+      path.to_owned()
+    } else {
+      format!("{path}?{query}")
+    }
+  }
 }
 
 pub mod instance {

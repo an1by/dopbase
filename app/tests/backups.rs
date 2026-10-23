@@ -104,7 +104,7 @@ async fn admin_setup() -> (TempDir, app::state::AppState, Router, String) {
 
 #[tokio::test]
 async fn backup_and_restore_lifecycle() {
-  let (_dir, state, router, token) = admin_setup().await;
+  let (dir, state, router, token) = admin_setup().await;
 
   // 1. Create a project and environment with secrets
   let (status, project, _) = call(
@@ -222,6 +222,44 @@ async fn backup_and_restore_lifecycle() {
       .await
       .unwrap();
   assert!(restored_audit_history > 0);
+
+  // The audit log written after the snapshot is archived, not lost, and the
+  // restore record names where the replaced chain ended.
+  let archives = std::fs::read_dir(dir.path().join("audit-archive"))
+    .unwrap()
+    .map(|entry| entry.unwrap().file_name().into_string().unwrap())
+    .filter(|name| name.starts_with("pre-restore-"))
+    .collect::<Vec<_>>();
+  assert_eq!(archives.len(), 1, "{archives:?}");
+  let archived =
+    std::fs::read_to_string(dir.path().join("audit-archive").join(&archives[0])).unwrap();
+  assert!(
+    archived.contains("NEW_SECRET"),
+    "post-snapshot events must be archived"
+  );
+  let restored: String = sqlx::query_scalar(
+    "SELECT metadata FROM audit_events WHERE action='backup.restored' ORDER BY seq DESC LIMIT 1",
+  )
+  .fetch_one(state.db.pool())
+  .await
+  .unwrap();
+  let restored: Value = serde_json::from_str(&restored).unwrap();
+  assert_eq!(restored["archive"], archives[0].as_str());
+  assert_eq!(
+    restored["archivedRecords"].as_u64(),
+    Some(archived.lines().count() as u64)
+  );
+  assert!(restored["previousHead"]["seq"].as_i64().unwrap() > 0);
+  let (status, verified, _) = call(
+    &router,
+    "GET",
+    "/api/v1/audit-events/verify",
+    Some(&token),
+    None,
+  )
+  .await;
+  assert_eq!(status, 200);
+  assert_eq!(verified["data"]["ok"], true, "{verified}");
 
   // 8. Verify secrets are restored to their original snapshot state!
   let (status, reveal_res, _) = call(

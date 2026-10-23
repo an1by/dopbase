@@ -567,6 +567,117 @@ async fn concurrent_token_revokes_create_one_transition_and_one_audit() {
 }
 
 #[tokio::test]
+async fn audit_verification_chains_real_requests_and_reports_tampering() {
+  let (_directory, state, router, token, environment_id) = admin_environment().await;
+  // Real writes, so the chain covers more than the bootstrap records.
+  for key in ["DATABASE_URL", "API_KEY"] {
+    let (status, _, _) = call(
+      &router,
+      "PUT",
+      &format!("/api/v1/environments/{environment_id}/secrets/{key}"),
+      Some(&token),
+      Some(json!({"value":format!("value-for-{key}")})),
+    )
+    .await;
+    assert_eq!(status, 200);
+  }
+
+  let (status, report, _) = call(
+    &router,
+    "GET",
+    "/api/v1/audit-events/verify",
+    Some(&token),
+    None,
+  )
+  .await;
+  assert_eq!(status, 200);
+  assert_eq!(report["data"]["ok"], json!(true));
+  assert_eq!(report["data"]["unsequenced"], json!(0));
+  assert_eq!(report["data"]["broken"], Value::Null);
+  let records = report["data"]["records"].as_u64().unwrap();
+  assert!(
+    records >= 5,
+    "expected bootstrap, login, project, environment and secret records, got {records}"
+  );
+  assert_eq!(report["data"]["headSeq"].as_u64(), Some(records));
+
+  // Reviewing the chain is administrator-only, like the audit log itself.
+  let (status, _, _) = call(&router, "GET", "/api/v1/audit-events/verify", None, None).await;
+  assert_eq!(status, 401);
+  let (_, created, _) = call(
+    &router,
+    "POST",
+    &format!("/api/v1/environments/{environment_id}/tokens"),
+    Some(&token),
+    Some(json!({"name":"deploy","role":"runner"})),
+  )
+  .await;
+  let runner_token = created["data"]["plaintextToken"].as_str().unwrap();
+  let (status, _, _) = call(
+    &router,
+    "GET",
+    "/api/v1/audit-events/verify",
+    Some(runner_token),
+    None,
+  )
+  .await;
+  assert_eq!(status, 403);
+
+  // An anchor saved from this report matches until history changes.
+  let head_seq = report["data"]["headSeq"].as_i64().unwrap();
+  let head_hash = report["data"]["headHash"].as_str().unwrap().to_owned();
+  let anchored = format!("/api/v1/audit-events/verify?anchorSeq={head_seq}&anchorHash={head_hash}");
+  let (status, anchored_report, _) = call(&router, "GET", &anchored, Some(&token), None).await;
+  assert_eq!(status, 200);
+  assert_eq!(anchored_report["data"]["anchor"]["status"], "matched");
+  assert_eq!(anchored_report["data"]["ok"], json!(true));
+  let (status, _, _) = call(
+    &router,
+    "GET",
+    "/api/v1/audit-events/verify?anchorSeq=1",
+    Some(&token),
+    None,
+  )
+  .await;
+  assert_eq!(
+    status, 400,
+    "an anchor needs both its sequence and its hash"
+  );
+
+  // Editing a record in place breaks the chain at exactly that record. The
+  // guard trigger only stops application bugs, so an attacker drops it.
+  sqlx::query("DROP TRIGGER audit_events_sealed_immutable")
+    .execute(state.db.pool())
+    .await
+    .unwrap();
+  sqlx::query("UPDATE audit_events SET action='tampered.for.test' WHERE seq=2")
+    .execute(state.db.pool())
+    .await
+    .unwrap();
+  let (status, report, _) = call(
+    &router,
+    "GET",
+    "/api/v1/audit-events/verify",
+    Some(&token),
+    None,
+  )
+  .await;
+  assert_eq!(status, 200);
+  assert_eq!(report["data"]["ok"], json!(false));
+  assert_eq!(report["data"]["records"], json!(1));
+  assert_eq!(report["data"]["broken"]["seq"], json!(2));
+  assert!(
+    report["data"]["broken"]["reason"]
+      .as_str()
+      .unwrap()
+      .contains("hash"),
+    "unexpected reason: {}",
+    report["data"]["broken"]["reason"]
+  );
+  state.db.close().await;
+}
+
+#[tokio::test]
 async fn health_and_openapi_are_available() {
   let (_directory, state, router) = test_app().await;
   let (status, body, _) = call(&router, "GET", "/api/v1/health", None, None).await;
@@ -1269,3 +1380,93 @@ async fn disabled_web_ui_blocks_pages_and_assets_but_keeps_cli_api_and_optional_
 
 #[path = "modules/secrets/import.rs"]
 mod secrets_import;
+
+#[tokio::test]
+async fn audit_records_store_the_client_ip_through_trusted_proxies_only() {
+  use axum::extract::ConnectInfo;
+  use std::net::SocketAddr;
+
+  let directory = TempDir::new().unwrap();
+  let config = ServerConfig {
+    data_dir: directory.path().to_path_buf(),
+    database_url: format!("sqlite://{}", directory.path().join("dopbase.db").display()),
+    master_key: app::config::MasterKeyConfig {
+      provider: "file".into(),
+      path: directory.path().join("master.key"),
+    },
+    trusted_proxies: vec!["10.0.0.0/8".parse().unwrap()],
+    ..ServerConfig::default()
+  };
+  let state = server::build_setup_state(config).await.unwrap();
+  let router = server::router(state.clone());
+  let token = bootstrap_admin(&state, &router).await;
+
+  // Each request carries the connection's peer address, as the real server
+  // supplies it, plus a forwarding header naming another address.
+  let create = |peer: &str, name: &str| {
+    let mut request = Request::builder()
+      .method("POST")
+      .uri("/api/v1/projects")
+      .header(header::AUTHORIZATION, format!("Bearer {token}"))
+      .header(header::CONTENT_TYPE, "application/json")
+      .header("x-forwarded-for", "198.51.100.9, 203.0.113.7")
+      .body(Body::from(json!({ "name": name }).to_string()))
+      .unwrap();
+    request
+      .extensions_mut()
+      .insert(ConnectInfo(peer.parse::<SocketAddr>().unwrap()));
+    router.clone().oneshot(request)
+  };
+  assert_eq!(
+    create("10.0.0.2:40000", "via-proxy")
+      .await
+      .unwrap()
+      .status(),
+    201
+  );
+  assert_eq!(
+    create("192.0.2.50:40000", "direct").await.unwrap().status(),
+    201
+  );
+
+  let ip_for = |name: &'static str| {
+    let pool = state.db.pool().clone();
+    async move {
+      sqlx::query_scalar::<_, Option<String>>(
+        "SELECT ip_address FROM audit_events WHERE action='project.created' AND json_extract(metadata,'$.name')=?",
+      )
+      .bind(name)
+      .fetch_one(&pool)
+      .await
+      .unwrap()
+    }
+  };
+  // Behind a trusted proxy the nearest untrusted hop is the client; a
+  // direct client cannot choose its address by sending the header.
+  assert_eq!(ip_for("via-proxy").await.as_deref(), Some("203.0.113.7"));
+  assert_eq!(ip_for("direct").await.as_deref(), Some("192.0.2.50"));
+
+  // The list API returns it, and it is covered by the chain's hashes.
+  let (status, page, _) = call(
+    &router,
+    "GET",
+    "/api/v1/audit-events?limit=5",
+    Some(&token),
+    None,
+  )
+  .await;
+  assert_eq!(status, 200);
+  assert!(
+    page["data"]["items"]
+      .as_array()
+      .unwrap()
+      .iter()
+      .any(|item| item["ipAddress"] == "203.0.113.7"),
+    "{page}"
+  );
+  let report = app::services::audit_chain::verify(state.db.pool())
+    .await
+    .unwrap();
+  assert!(report.ok, "chain broke: {:?}", report.broken);
+  state.db.close().await;
+}

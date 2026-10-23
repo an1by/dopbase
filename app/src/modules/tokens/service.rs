@@ -72,8 +72,8 @@ pub async fn create(
     return Err(HttpError::from(error));
   }
   common::audit(
-    &mut *tx,
-    "admin",
+    &mut tx,
+    identity.audit_actor_type(),
     Some(admin_id),
     Some(email),
     "token.created",
@@ -129,8 +129,8 @@ pub async fn revoke(
     ));
   }
   common::audit(
-    &mut *tx,
-    "admin",
+    &mut tx,
+    identity.audit_actor_type(),
     Some(admin_id),
     Some(email),
     "token.revoked",

@@ -9,7 +9,7 @@ const { controller } = await vi.hoisted(async () => {
       items: ref([
         {
           id: "aud_1",
-          actorType: "admin",
+          actorType: "root",
           actorId: "usr_1",
           actorLabel: "admin@example.com",
           action: "secret.revealed",
@@ -17,6 +17,7 @@ const { controller } = await vi.hoisted(async () => {
           environmentId: null,
           resourceType: null,
           resourceId: null,
+          ipAddress: "203.0.113.7",
           metadata: {},
           createdAt: "2026-09-26T10:15:30.123Z",
         },
@@ -70,7 +71,7 @@ afterEach(() => {
 });
 
 describe("AuditPage", () => {
-  it("shows the raw timestamp when an event is expanded", async () => {
+  it("shows the raw timestamp, actor type, and IP when an event is expanded", async () => {
     const host = document.createElement("div");
     document.body.append(host);
     app = createApp({ render: () => h(AuditPage) });
@@ -84,5 +85,9 @@ describe("AuditPage", () => {
 
     expect(host.textContent).toContain("timestamp:");
     expect(host.textContent).toContain("2026-09-26T10:15:30.123Z");
+    expect(host.textContent).toContain("actor type:");
+    expect(host.textContent).toContain("root");
+    expect(host.textContent).toContain("ip address:");
+    expect(host.textContent).toContain("203.0.113.7");
   });
 });

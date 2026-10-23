@@ -217,9 +217,17 @@ function toggle(event: AuditEvent): void {
                       <span class="text-ink-muted">event:</span>
                       {{ event.id }}
                     </p>
+                    <p>
+                      <span class="text-ink-muted">actor type:</span>
+                      {{ event.actorType }}
+                    </p>
                     <p v-if="event.actorId">
                       <span class="text-ink-muted">actor id:</span>
                       {{ event.actorId }}
+                    </p>
+                    <p v-if="event.ipAddress">
+                      <span class="text-ink-muted">ip address:</span>
+                      {{ event.ipAddress }}
                     </p>
                     <p v-if="event.resourceType">
                       <span class="text-ink-muted">resource:</span>

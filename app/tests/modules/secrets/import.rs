@@ -207,7 +207,8 @@ async fn import_preview_audits_metadata_and_fails_closed_when_audit_fails() {
     200
   );
   let (actor_type, environment_id, metadata): (String, String, String) = sqlx::query_as("SELECT actor_type,environment_id,metadata FROM audit_events WHERE action='secret.import_previewed'").fetch_one(state.db.pool()).await.unwrap();
-  assert_eq!(actor_type, "admin");
+  // The fixture signs in as the root user.
+  assert_eq!(actor_type, "root");
   assert_eq!(environment_id, id);
   assert_eq!(
     serde_json::from_str::<Value>(&metadata).unwrap(),

@@ -2,7 +2,10 @@ import { apiRequest } from "./http.client";
 
 export interface AuditEvent {
   id: string;
-  /** `"admin"`, `"anonymous"`, or `"runner"`. */
+  /**
+   * `"root"` for the root user, `"admin"` for other administrators,
+   * `"runner"`, `"anonymous"`, `"bootstrap"`, or `"system"`.
+   */
   actorType: string;
   actorId: string | null;
   actorLabel: string | null;
@@ -12,6 +15,8 @@ export interface AuditEvent {
   environmentId: string | null;
   resourceType: string | null;
   resourceId: string | null;
+  /** Client address, or null for records written outside a request. */
+  ipAddress: string | null;
   metadata: Record<string, unknown>;
   createdAt: string;
 }

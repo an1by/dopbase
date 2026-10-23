@@ -30,6 +30,7 @@ fn route_templates_match_the_public_contract() {
     api::tokens::COLLECTION,
     api::tokens::REVOKE,
     api::audit::COLLECTION,
+    api::audit::VERIFY,
     api::instance::ROOT,
     api::instance::PUBLIC_STATUS,
     api::instance::FACTORY_RESET,
@@ -72,6 +73,7 @@ fn route_templates_match_the_public_contract() {
     "/api/v1/environments/{environment_id}/tokens",
     "/api/v1/tokens/{token_id}/revoke",
     "/api/v1/audit-events",
+    "/api/v1/audit-events/verify",
     "/api/v1/instance",
     "/api/v1/status",
     "/api/v1/instance/factory-reset",
@@ -124,6 +126,16 @@ fn query_builders_keep_the_existing_encoding() {
   assert_eq!(
     api::environments::resolve("payment service/main"),
     "/api/v1/environments/resolve?reference=payment+service%2Fmain"
+  );
+  assert_eq!(api::audit::collection(&[]), "/api/v1/audit-events");
+  assert_eq!(
+    api::audit::collection(&[("action", "secret.updated"), ("limit", "200")]),
+    "/api/v1/audit-events?action=secret.updated&limit=200"
+  );
+  // Empty filter values are skipped instead of sent as blank parameters.
+  assert_eq!(
+    api::audit::collection(&[("action", ""), ("actor", "admin@example.com")]),
+    "/api/v1/audit-events?actor=admin%40example.com"
   );
 }
 

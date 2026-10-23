@@ -58,7 +58,7 @@ async fn creates_owner_only_database_file() {
 
 #[tokio::test]
 async fn migrations_apply_rollback_and_reapply() {
-  const TABLES: [&str; 11] = [
+  const TABLES: [&str; 13] = [
     "instance_metadata",
     "admins",
     "sessions",
@@ -70,12 +70,16 @@ async fn migrations_apply_rollback_and_reapply() {
     "environment_env_layout",
     "service_accounts",
     "agent_tokens",
+    "audit_chain_anchor",
+    "audit_chain_genesis",
   ];
-  const INDEXES: [&str; 10] = [
+  const TRIGGERS: [&str; 1] = ["audit_events_sealed_immutable"];
+  const INDEXES: [&str; 11] = [
     "sessions_token_hash_idx",
     "runner_tokens_token_hash_idx",
     "audit_events_created_idx",
     "audit_events_action_idx",
+    "audit_events_seq_idx",
     "sessions_revoked_retention_idx",
     "sessions_idle_retention_idx",
     "sessions_absolute_retention_idx",
@@ -94,6 +98,7 @@ async fn migrations_apply_rollback_and_reapply() {
   MIGRATOR.run(db.pool()).await.unwrap();
   assert_schema_objects(&db, "table", &TABLES, true).await;
   assert_schema_objects(&db, "index", &INDEXES, true).await;
+  assert_schema_objects(&db, "trigger", &TRIGGERS, true).await;
   let expiry_column: String = sqlx::query_scalar(
     "SELECT name FROM pragma_table_info('runner_tokens') WHERE name='expires_at'",
   )
@@ -101,14 +106,32 @@ async fn migrations_apply_rollback_and_reapply() {
   .await
   .unwrap();
   assert_eq!(expiry_column, "expires_at");
+  for column in ["seq", "prev_hash", "record_hash"] {
+    let chain_column: String =
+      sqlx::query_scalar("SELECT name FROM pragma_table_info('audit_events') WHERE name=?")
+        .bind(column)
+        .fetch_one(db.pool())
+        .await
+        .unwrap();
+    assert_eq!(chain_column, column);
+  }
+  let user_agent: i64 = sqlx::query_scalar(
+    "SELECT COUNT(*) FROM pragma_table_info('audit_events') WHERE name='user_agent'",
+  )
+  .fetch_one(db.pool())
+  .await
+  .unwrap();
+  assert_eq!(user_agent, 0, "the unused user_agent column is dropped");
 
   MIGRATOR.undo(db.pool(), 0).await.unwrap();
   assert_schema_objects(&db, "table", &TABLES, false).await;
   assert_schema_objects(&db, "index", &INDEXES, false).await;
+  assert_schema_objects(&db, "trigger", &TRIGGERS, false).await;
 
   MIGRATOR.run(db.pool()).await.unwrap();
   assert_schema_objects(&db, "table", &TABLES, true).await;
   assert_schema_objects(&db, "index", &INDEXES, true).await;
+  assert_schema_objects(&db, "trigger", &TRIGGERS, true).await;
   db.close().await;
 }
 

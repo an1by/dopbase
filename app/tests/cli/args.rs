@@ -1,5 +1,6 @@
 use app::cli::args::{
-  AdminCommand, Cli, Command, ExportArgs, ImportArgs, InitArgs, RunArgs, ServerCommand,
+  AdminCommand, AuditCommand, Cli, Command, ExportArgs, ImportArgs, InitArgs, RunArgs,
+  ServerCommand,
 };
 use app::cli::secret_format::{ExportFormat, SecretFormat};
 use app::constants::config::executable_environment_names;
@@ -591,6 +592,123 @@ fn token_create_expiry_flag_accepts_hours_days_and_never() {
 }
 
 #[test]
+fn audit_verify_anchor_takes_a_sequence_and_a_full_hash() {
+  let hash = "9F86D081884C7D659A2FEAA0C55AD015A3BF4F1B2B0B822CD15D6C15B0F00A08";
+  let cli = Cli::try_parse_from([
+    "dopbase",
+    "audit",
+    "verify",
+    "--anchor",
+    &format!("42:{hash}"),
+  ])
+  .unwrap();
+  let Command::Audit {
+    command: AuditCommand::Verify {
+      anchor: Some((seq, parsed)),
+    },
+  } = cli.command
+  else {
+    panic!("expected audit verify with an anchor");
+  };
+  assert_eq!(seq, 42);
+  assert_eq!(parsed, hash.to_ascii_lowercase());
+  for value in [
+    "42",
+    "0:9f86d081884c7d659a2feaa0c55ad015a3bf4f1b2b0b822cd15d6c15b0f00a08",
+    "-1:9f86d081884c7d659a2feaa0c55ad015a3bf4f1b2b0b822cd15d6c15b0f00a08",
+    "42:9f86d0",
+    "42:zz86d081884c7d659a2feaa0c55ad015a3bf4f1b2b0b822cd15d6c15b0f00a08",
+  ] {
+    assert!(
+      Cli::try_parse_from(["dopbase", "audit", "verify", "--anchor", value]).is_err(),
+      "accepted {value}"
+    );
+  }
+}
+
+#[test]
+fn audit_verify_parses_with_the_global_json_flag() {
+  let cli = Cli::try_parse_from(["dopbase", "audit", "verify"]).unwrap();
+  assert!(matches!(
+    cli.command,
+    Command::Audit {
+      command: AuditCommand::Verify { anchor: None }
+    }
+  ));
+  let cli = Cli::try_parse_from(["dopbase", "--json", "audit", "verify"]).unwrap();
+  assert!(cli.json);
+  assert!(matches!(
+    cli.command,
+    Command::Audit {
+      command: AuditCommand::Verify { anchor: None }
+    }
+  ));
+}
+
+#[test]
+fn audit_export_parses_its_filters_and_output() {
+  let cli = Cli::try_parse_from(["dopbase", "audit", "export"]).unwrap();
+  assert!(matches!(
+    cli.command,
+    Command::Audit {
+      command: AuditCommand::Export {
+        output: None,
+        force: false,
+        limit: None,
+        ..
+      }
+    }
+  ));
+  let cli = Cli::try_parse_from([
+    "dopbase",
+    "--json",
+    "audit",
+    "export",
+    "--output",
+    "audit.jsonl",
+    "--force",
+    "--action",
+    "secret.updated",
+    "--project",
+    "fixture",
+    "--environment",
+    "fixture/local",
+    "--actor",
+    "admin@example.com",
+    "--limit",
+    "10",
+  ])
+  .unwrap();
+  assert!(cli.json);
+  match cli.command {
+    Command::Audit {
+      command:
+        AuditCommand::Export {
+          output,
+          force,
+          action,
+          project,
+          environment,
+          actor,
+          limit,
+        },
+    } => {
+      assert_eq!(output.unwrap().to_str().unwrap(), "audit.jsonl");
+      assert!(force);
+      assert_eq!(action.unwrap(), "secret.updated");
+      assert_eq!(project.unwrap(), "fixture");
+      assert_eq!(environment.unwrap(), "fixture/local");
+      assert_eq!(actor.unwrap(), "admin@example.com");
+      assert_eq!(limit, Some(10));
+    }
+    unexpected => {
+      let _ = unexpected;
+      panic!("expected audit export");
+    }
+  }
+}
+
+#[test]
 fn incomplete_secret_commands_show_examples_and_environment_help() {
   let cases: &[(&[&str], &[&str])] = &[
     (
@@ -892,6 +1010,8 @@ fn parses_each_public_command_and_detects_missing_cases() {
     ],
     &["dopbase", "token", "list", "billing/local"],
     &["dopbase", "token", "revoke", "tok_01"],
+    &["dopbase", "audit", "verify"],
+    &["dopbase", "audit", "export"],
     &["dopbase", "run", "--", "true"],
     &["dopbase", "cache", "list"],
     &["dopbase", "cache", "clean"],

@@ -127,8 +127,8 @@ pub async fn create(
   }
   let (actor_id, actor_email) = actor(identity);
   common::audit(
-    &mut *tx,
-    "admin",
+    &mut tx,
+    identity.audit_actor_type(),
     Some(actor_id),
     Some(actor_email),
     "admin.created",
@@ -240,8 +240,8 @@ pub async fn update(
     .await?;
   let (_, actor_email) = actor(identity);
   common::audit(
-    &mut *tx,
-    "admin",
+    &mut tx,
+    identity.audit_actor_type(),
     Some(actor_id),
     Some(actor_email),
     "admin.updated",
@@ -304,8 +304,8 @@ pub async fn delete(
     .execute(&mut *tx)
     .await?;
   common::audit(
-    &mut *tx,
-    "admin",
+    &mut tx,
+    identity.audit_actor_type(),
     Some(actor_id),
     Some(actor_email),
     "admin.deleted",

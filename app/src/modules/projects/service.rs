@@ -53,8 +53,8 @@ pub async fn create(
     .await
     .map_err(map_unique)?;
   common::audit(
-    &mut *tx,
-    "admin",
+    &mut tx,
+    identity.audit_actor_type(),
     Some(admin_id),
     Some(email),
     "project.created",
@@ -93,8 +93,8 @@ pub async fn rename(
     ));
   }
   common::audit(
-    &mut *tx,
-    "admin",
+    &mut tx,
+    identity.audit_actor_type(),
     Some(admin_id),
     Some(email),
     "project.renamed",
@@ -133,7 +133,7 @@ pub async fn delete(
       "The requested project was not found.",
     ));
   }
-  common::audit(&mut *tx,"admin",Some(admin_id),Some(email),"project.deleted",Some(&project.id),None,Some("project"),Some(&project.id),serde_json::json!({"name":project.name,"environments":environments,"secrets":secrets,"tokens":tokens})).await?;
+  common::audit(&mut tx,identity.audit_actor_type(),Some(admin_id),Some(email),"project.deleted",Some(&project.id),None,Some("project"),Some(&project.id),serde_json::json!({"name":project.name,"environments":environments,"secrets":secrets,"tokens":tokens})).await?;
   tx.commit().await?;
   Ok(DeleteProjectResponse {
     affected: AffectedCounts {
@@ -214,8 +214,8 @@ pub async fn init(
     sqlx::query("INSERT INTO secrets(environment_id,key,version,ciphertext,value_nonce,wrapped_key,key_nonce,created_at,updated_at)VALUES(?,?,1,?,?,?,?,?,?)").bind(&environment_id).bind(&entry.key).bind(value.ciphertext).bind(value.value_nonce).bind(value.wrapped_key).bind(value.key_nonce).bind(&now).bind(&now).execute(&mut *tx).await?;
   }
   common::audit(
-    &mut *tx,
-    "admin",
+    &mut tx,
+    identity.audit_actor_type(),
     Some(admin_id),
     Some(email),
     "project.initialized",

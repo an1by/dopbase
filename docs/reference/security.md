@@ -56,6 +56,12 @@ Networked clients need an authenticated, encrypted connection to the server. Loc
 
 Authorized users may need to reveal or export a value. These operations should be explicit, permission-controlled, and audited. Secret names can also disclose information, so access to metadata still needs authorization.
 
+## Audit integrity
+
+Audit records form a hash chain: each record stores its position, the hash of the record before it, and the hash of its own contents. Editing a record, removing one, or inserting one out of order breaks the chain at that point, which `dopbase audit verify` and `GET /api/v1/audit-events/verify` report.
+
+The chain is tamper evidence, not access control. Someone who can write the database file can rewrite every hash or delete the newest records, and the chain alone still verifies. That is detected only against a copy of the head kept outside the server: verify with `--anchor SEQ:HASH`, ship the `audit checkpoint` lines the server logs, or stream `dopbase audit export` to write-once storage. Records written before the chain existed are reported as legacy and are not protected. A restore archives the current log before replacing it. See [audit events](/reference/audit-events#integrity-and-verification) for the full threat model and what to do when verification fails.
+
 ## Terminal editor sessions
 
 `dopbase env edit` checks environment and secret metadata before password

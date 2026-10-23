@@ -89,7 +89,12 @@ pub struct Fixture {
 
 impl Fixture {
   pub async fn new() -> Self {
-    let mut fixture = Self::uninitialized().await;
+    Self::with_config(|_| {}).await
+  }
+
+  /// A signed-in fixture whose server configuration is adjusted first.
+  pub async fn with_config(configure: impl FnOnce(&mut ServerConfig)) -> Self {
+    let mut fixture = Self::uninitialized_with_config(configure).await;
     let setup_token = fixture.state.setup.read().await.token.clone().unwrap();
     service::create(
       &fixture.state,
@@ -118,10 +123,14 @@ impl Fixture {
   }
 
   pub async fn uninitialized() -> Self {
+    Self::uninitialized_with_config(|_| {}).await
+  }
+
+  async fn uninitialized_with_config(configure: impl FnOnce(&mut ServerConfig)) -> Self {
     let directory = TempDir::new().unwrap();
     let data_dir = directory.path().join("server");
     let client_dir = directory.path().join("client");
-    let config = ServerConfig {
+    let mut config = ServerConfig {
       data_dir: data_dir.clone(),
       database_url: app::config::sqlite_url(&data_dir.join("dopbase.db")),
       master_key: MasterKeyConfig {
@@ -130,6 +139,7 @@ impl Fixture {
       },
       ..ServerConfig::default()
     };
+    configure(&mut config);
     let state = server::build_setup_state(config).await.unwrap();
     let (url, task) = serve(server::router(state.clone())).await;
     Self {

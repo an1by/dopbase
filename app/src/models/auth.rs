@@ -25,6 +25,19 @@ pub enum AuthIdentity {
   },
 }
 
+impl AuthIdentity {
+  /// The actor type audit records store for this identity. The root user
+  /// is recorded as `root` so its actions stand apart from other
+  /// administrators.
+  pub fn audit_actor_type(&self) -> &'static str {
+    match self {
+      Self::Admin { role, .. } => role.audit_actor_type(),
+      Self::Runner { .. } => "runner",
+      Self::ServiceAccount { .. } => "service_account",
+    }
+  }
+}
+
 #[derive(Clone, Copy, Debug, Deserialize, Serialize, ToSchema, PartialEq, Eq)]
 #[serde(rename_all = "lowercase")]
 pub enum AdminRole {
@@ -35,6 +48,15 @@ pub enum AdminRole {
 }
 
 impl AdminRole {
+  /// The actor type audit records store for a user with this role: `root`
+  /// for the root user, `admin` for everyone else.
+  pub fn audit_actor_type(self) -> &'static str {
+    match self {
+      Self::Root => "root",
+      _ => "admin",
+    }
+  }
+
   pub fn as_str(self) -> &'static str {
     match self {
       Self::Root => "root",

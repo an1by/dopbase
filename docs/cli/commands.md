@@ -514,6 +514,75 @@ assigned environment. It cannot modify secrets or access another environment.
 Export audit entries identify the runner token and secret count without storing
 values.
 
+## Audit commands
+
+The audit log answers who performed a sensitive action, where it happened, and
+when. Administrators review it on the Audit page in the Admin UI, verify its
+integrity from the terminal, and export it as JSON lines for external,
+write-once storage:
+
+```bash
+dopbase audit verify
+dopbase audit verify --anchor 42:<HEAD_HASH>
+dopbase audit export --output audit-2026-10-17.jsonl
+dopbase --json audit verify
+```
+
+| Command                | Purpose                               |
+| ---------------------- | ------------------------------------- |
+| `dopbase audit verify` | Recompute the audit log's hash chain  |
+| `dopbase audit export` | Stream matching records as JSON lines |
+
+Every audit record stores the hash of the record before it, so a record that
+was modified, removed, or inserted after the fact stands out at that point in
+the log. Verification walks the records in sequence order, stops at the first
+break, and reports how many records were checked before it. It reads no secret
+values.
+
+The command requires an administrator account. It exits with code `0` when the
+chain is intact and `2` when it is broken, so monitoring can alert on the
+result. When the chain is intact it prints the head sequence and hash, which
+you can save for external anchoring, and `--json` prints the full report. Records written before the chain existed are
+listed as legacy records; they carry no hashes but do not fail verification.
+
+The chain alone cannot tell a fully rewritten log, or one whose newest records
+were deleted, from an honest one. Save the head sequence and hash somewhere
+outside the server and pass them back with `--anchor SEQ:HASH`: the check fails
+when that record changed (`MISMATCH`) or no longer exists (`MISSING`). When
+[retention](/reference/audit-events#retention) has removed records,
+verification continues from the pruning anchor and reports
+`Pruned through: sequence N` instead of a gap. See
+[audit events](/reference/audit-events#integrity-and-verification) for what the
+chain does and does not prove.
+
+`dopbase audit export` writes one JSON object per line to standard output, or
+to a file with `--output <FILE>` (mode `0600`, never replacing an existing
+file without `--force`). Each line is the record exactly as the audit list API
+returns it, chain fields `seq`, `prevHash` and `recordHash` included, so any
+exported record can later serve as an `--anchor`:
+
+```bash
+dopbase audit export > audit.jsonl
+dopbase audit export --action secret.updated --limit 500
+dopbase audit export --project production --environment production/main
+```
+
+| Option                            | Purpose                                                     |
+| --------------------------------- | ----------------------------------------------------------- |
+| `--action <ACTION>`               | Only records with this action, for example `secret.updated` |
+| `--project <PROJECT_REF>`         | Only records for this project (name or ID)                  |
+| `--environment <ENVIRONMENT_REF>` | Only records for this environment (`PROJECT/NAME` or ID)    |
+| `--actor <ACTOR>`                 | Only records for this actor (email or actor ID)             |
+| `--limit <N>`                     | Stop after `N` records                                      |
+| `--output <FILE>`                 | Write to a file instead of standard output                  |
+| `--force`                         | Replace an existing output file                             |
+
+Without filters the whole log is exported by following pagination to the end.
+Export requires an administrator account, reads no secret values, and leaves
+standard output as raw JSON lines in every mode so it can be piped directly;
+with `--output` and `--json` the summary is printed as
+`{"exported":N,"path":"FILE"}` instead.
+
 ## Run a process
 
 Pass the environment directly:

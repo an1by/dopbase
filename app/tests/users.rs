@@ -135,6 +135,23 @@ async fn root_can_manage_admins_but_cannot_delete_root_and_can_reset() {
   let (status, listed, _) = call(&router, "GET", "/api/v1/users", Some(&cookie), None, None).await;
   assert_eq!(status, 200);
   assert_eq!(listed["data"].as_array().unwrap().len(), 2);
+  // The root user's actions are recorded as `root`; other administrators
+  // stay `admin`.
+  for (action, actor_label, expected) in [
+    ("admin.bootstrapped", "root@example.com", "root"),
+    ("admin.created", "root@example.com", "root"),
+    ("login.succeeded", "admin@example.com", "admin"),
+  ] {
+    let actor_type: String = sqlx::query_scalar(
+      "SELECT actor_type FROM audit_events WHERE action=? AND actor_label=? ORDER BY seq DESC LIMIT 1",
+    )
+    .bind(action)
+    .bind(actor_label)
+    .fetch_one(state.db.pool())
+    .await
+    .unwrap();
+    assert_eq!(actor_type, expected, "{action} by {actor_label}");
+  }
   let root_id = listed["data"][0]["id"].as_str().unwrap();
   let (status, body, _) = call(
     &router,

@@ -21,20 +21,20 @@ in your installed version.
 
 ## Resource areas
 
-| Area                                        | Base paths                                           |
-| ------------------------------------------- | ---------------------------------------------------- |
-| Health and compatibility                    | `/api/v1/health`                                     |
-| Initial administrator                       | `/api/v1/bootstrap`                                  |
-| Login and sessions                          | `/api/v1/auth`                                       |
-| Projects                                    | `/api/v1/projects`                                   |
-| Environments                                | `/api/v1/environments`                               |
-| Secrets, import, export, and runtime values | `/api/v1/environments/{id}/secrets`                  |
-| Runner tokens                               | `/api/v1/environments/{id}/tokens`, `/api/v1/tokens` |
-| System backups and restoration              | `/api/v1/backups`, `/api/v1/bootstrap/restore`       |
-| Audit and instance status                   | `/api/v1/audit-events`, `/api/v1/instance`           |
-| Human users                                 | `/api/v1/users`                                      |
-| AI service accounts                         | `/api/v1/service-accounts`                           |
-| Instance summary                            | `/api/v1/status`                                     |
+| Area                                               | Base paths                                           |
+| -------------------------------------------------- | ---------------------------------------------------- |
+| Health and compatibility                           | `/api/v1/health`                                     |
+| Initial administrator                              | `/api/v1/bootstrap`                                  |
+| Login and sessions                                 | `/api/v1/auth`                                       |
+| Projects                                           | `/api/v1/projects`                                   |
+| Environments                                       | `/api/v1/environments`                               |
+| Secrets, import, export, and runtime values        | `/api/v1/environments/{id}/secrets`                  |
+| Runner tokens                                      | `/api/v1/environments/{id}/tokens`, `/api/v1/tokens` |
+| System backups and restoration                     | `/api/v1/backups`, `/api/v1/bootstrap/restore`       |
+| Audit log, chain verification, and instance status | `/api/v1/audit-events`, `/api/v1/instance`           |
+| Human users                                        | `/api/v1/users`                                      |
+| AI service accounts                                | `/api/v1/service-accounts`                           |
+| Instance summary                                   | `/api/v1/status`                                     |
 
 Consult Swagger for request bodies, parameters, authentication schemes, and
 the responses supported by each operation.
@@ -102,6 +102,35 @@ slots containing values, return `422` with `ENV_LAYOUT_INVALID`.
 
 Existing export clients can ignore the added fields. `env edit` requires a
 server that supplies the snapshot revision and fails safely when it is missing.
+
+## Audit chain verification
+
+`GET /api/v1/audit-events/verify` walks the audit log in sequence order,
+recomputes every record's hash from its stored contents, and reports the first
+inconsistency. Administrators only, like reading the audit log; runner tokens
+and AI service accounts are refused with `403`.
+
+The response carries `ok`, the number of `records` checked before the first
+break, `headSeq` and `headHash` for external anchoring, `legacy` for records
+written before the chain existed (not a failure), `unsequenced` for records
+inserted outside the chain after it existed (a failure), `prunedSeq` when
+[retention](/reference/audit-events#retention) removed records (the chain
+continues after it), and `broken` with the sequence number, record ID, and
+reason when something does not match.
+
+Pass `anchorSeq` and `anchorHash`, saved from an earlier `headSeq` and
+`headHash`, to compare the log with that outside copy. The response then
+carries `anchor` with `seq` and a `status` of `matched`, `mismatch`, `missing`,
+or `pruned`; `mismatch` and `missing` set `ok` to `false`. Passing only one of
+the two returns `400`.
+
+The chain columns are additive: the audit list keeps its shape and filters,
+and every item now carries `ipAddress`, `seq`, `prevHash`, and `recordHash`, so an exported
+record can serve as an anchor. Recomputing hashes from an export is not
+supported yet: the list returns metadata re-serialized, so it does not match
+the stored bytes the hash covers. Verification reads no secret values. `dopbase audit
+verify` runs the same check from the terminal, and `dopbase audit export`
+streams the filtered list as JSON lines.
 
 ## Authentication
 

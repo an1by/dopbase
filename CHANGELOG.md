@@ -4,6 +4,81 @@ All notable changes to Dopbase are documented in this file.
 
 ## Unreleased
 
+[Dopbase](https://dopbase.com) Unreleased. The audit log
+becomes tamper-evident: every record joins a hash chain that `dopbase audit
+verify` checks, `dopbase audit export` ships the log as JSON lines, and a
+configurable retention archives expired records before deleting them.
+
+### Added
+
+- The audit log is now a hash chain. Every audit record stores its position,
+  the hash of the record before it, and the hash of its own contents, so a
+  record that was modified, removed, or inserted after the fact stands out at
+  that point in the chain. `dopbase audit verify` recomputes every hash in
+  sequence order, stops at the first break, and exits with code `0` when the
+  chain is intact and `2` when it is broken. It prints the head sequence and
+  hash for external anchoring, and `--json` prints the full report.
+  `GET /api/v1/audit-events/verify` serves the same check to scripts and is
+  restricted to administrators, like the audit log itself.
+
+  Records written before this release are never sealed after the fact:
+  verification reports them as `legacy` without failing, and any record
+  without a chain position that is newer than the chain fails verification.
+  The database rejects updates of sealed records. The chain columns are
+  additive: existing audit endpoints, filters, and clients keep their shape,
+  and verification reads no secret values.
+
+- `dopbase audit verify --anchor SEQ:HASH`, or `anchorSeq` and `anchorHash`
+  on the verify endpoint, compares the log with a head saved outside the
+  server and reports `matched`, `mismatch`, `missing`, or `pruned`. This
+  catches what the chain alone cannot: a fully rewritten log, or deleted
+  newest records. The server also logs the head as an `audit checkpoint` at
+  startup, at shutdown, and after every verification.
+
+- `dopbase audit export` streams audit records as JSON lines to standard
+  output or, with `--output <FILE>`, to a file written with owner-only
+  permissions that is never replaced without `--force`. `--action`,
+  `--project`, `--environment`, and `--actor` narrow the stream, and `--limit`
+  caps it; without filters every record is exported by following pagination to
+  the end. Each line is the record exactly as the audit list API returns it,
+  chain fields (`seq`, `prevHash`, `recordHash`) included, so any exported
+  record can serve as a verification anchor. Export requires an
+  administrator account and reads no secret values.
+
+- `audit_retention_days` in `server.toml`, or `DOPBASE_AUDIT_RETENTION_DAYS`,
+  sets how many days audit records are kept; unset keeps them forever. New
+  instances start with `audit_retention_days = 365` in the generated
+  `server.toml`. Existing instances keep their whole log until you add the
+  setting. Older records are archived as JSON lines to `audit-archive/` in
+  the data directory before they are deleted, and an `audit.pruned` record
+  marks where the chain continues, so `dopbase audit verify` still passes.
+  Retention runs at startup and then once a day, never inside the request
+  that writes a record.
+  Back up `audit-archive/` separately: snapshots store the database only.
+
+### Changed
+
+- The unused `user_agent` column is removed from `audit_events`; nothing
+  ever recorded a value in it.
+
+- Audit records store the client's IP address, which was always empty
+  before. Behind a reverse proxy, list it in `trusted_proxies` in
+  `server.toml` or `DOPBASE_TRUSTED_PROXIES`, and the address comes from
+  `X-Forwarded-For` for that proxy's connections only, so a client cannot
+  choose the address it is recorded under. The audit list API returns
+  `ipAddress`, and the Audit page shows it with the actor type when an
+  event is expanded.
+
+- Audit records name the root user's actions with the actor type `root`
+  instead of `admin`, so they stand apart from other administrators. Other
+  administrators keep `admin`.
+
+- Restoring a backup archives the current audit log to
+  `audit-archive/pre-restore-<TIME>.jsonl` before replacing it, so records
+  written after the snapshot are kept; the restore stops if the archive
+  cannot be written. `backup.restored` names the archive, its record count,
+  and the replaced chain's head.
+
 ### Security Update
 
 - Improved security to prevent secret value guessing.
