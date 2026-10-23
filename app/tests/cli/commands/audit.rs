@@ -25,7 +25,12 @@ async fn audit_verify_reports_an_intact_chain_and_flags_tampering() {
   assert_eq!(report["headSeq"].as_u64(), report["records"].as_u64());
 
   // Editing a record in place makes verification fail with exit code 2, so
-  // monitoring can alert on it.
+  // monitoring can alert on it. The guard trigger only stops application
+  // bugs, so someone editing the file drops it first.
+  sqlx::query("DROP TRIGGER audit_events_sealed_immutable")
+    .execute(fixture.state.db.pool())
+    .await
+    .unwrap();
   sqlx::query("UPDATE audit_events SET action='tampered.for.test' WHERE seq=2")
     .execute(fixture.state.db.pool())
     .await
@@ -280,6 +285,11 @@ async fn audit_retention_archives_expired_records_and_verification_continues() {
   // far is older than it.
   let before: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM audit_events")
     .fetch_one(fixture.state.db.pool())
+    .await
+    .unwrap();
+  // Backdating sealed records needs the guard trigger out of the way.
+  sqlx::query("DROP TRIGGER audit_events_sealed_immutable")
+    .execute(fixture.state.db.pool())
     .await
     .unwrap();
   sqlx::query("UPDATE audit_events SET created_at='2000-01-01T00:00:00+00:00'")

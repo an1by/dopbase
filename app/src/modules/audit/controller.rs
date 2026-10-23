@@ -41,8 +41,9 @@ pub async fn list(
 /// Walks every audit record in sequence order, recomputes each record's
 /// hash from its stored contents, and reports the first inconsistency. The
 /// walk stops at the first break, so `records` counts the records checked
-/// before it. `unsequenced` counts records written before the chain
-/// existed and not yet sealed; it should stay at zero.
+/// before it. `legacy` counts records written before the chain existed,
+/// which carry no hashes. `unsequenced` counts records without a chain
+/// position written after it existed; it should stay at zero.
 #[utoipa::path(
   get,
   path = crate::constants::api::audit::VERIFY,

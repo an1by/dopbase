@@ -623,7 +623,12 @@ async fn audit_verification_chains_real_requests_and_reports_tampering() {
   .await;
   assert_eq!(status, 403);
 
-  // Editing a record in place breaks the chain at exactly that record.
+  // Editing a record in place breaks the chain at exactly that record. The
+  // guard trigger only stops application bugs, so an attacker drops it.
+  sqlx::query("DROP TRIGGER audit_events_sealed_immutable")
+    .execute(state.db.pool())
+    .await
+    .unwrap();
   sqlx::query("UPDATE audit_events SET action='tampered.for.test' WHERE seq=2")
     .execute(state.db.pool())
     .await

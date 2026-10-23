@@ -6,12 +6,15 @@
 //! sequence order therefore detects any record that was modified, inserted,
 //! or removed after the fact.
 //!
-//! Two invariants keep the chain sound:
+//! These invariants keep the chain sound:
 //!
 //! - Appends read the chain head and insert in the same write transaction,
 //!   so SQLite's single-writer lock makes them atomic.
 //! - The digest is computed from the values as stored, never from a
 //!   re-serialization, so verification hashes exactly what it reads back.
+//! - Nothing is ever sealed after the fact. Records written before the chain
+//!   existed stay unsequenced and are reported as legacy; any record without
+//!   a position that is newer than the chain's genesis fails verification.
 //! - Retention archives expired records to the data directory before
 //!   deleting them, and leaves an anchor so the surviving records still
 //!   verify as one unbroken chain.
@@ -196,44 +199,11 @@ pub async fn append(
     .execute(&mut *connection).await.map(|_| ())
 }
 
-/// Give records written before the chain existed their chain columns.
-///
-/// Runs during every migration pass and is a no-op once no record is left
-/// without a sequence number, so restored backups from older releases are
-/// sealed on the next startup. Returns how many records were sequenced.
-pub async fn backfill(pool: &SqlitePool) -> Result<u64, sqlx::Error> {
-  let mut transaction = pool.begin_with("BEGIN IMMEDIATE").await?;
-  let sequenced = backfill_connection(&mut transaction).await?;
-  transaction.commit().await?;
-  Ok(sequenced)
-}
-
-/// Seal unsequenced records on a connection that already holds the write
-/// lock, for callers that restore or rebuild tables inside their own
-/// transaction.
-pub async fn backfill_connection(connection: &mut SqliteConnection) -> Result<u64, sqlx::Error> {
-  let (mut seq, mut prev_hash) = head(connection).await?.unwrap_or((0, GENESIS.to_owned()));
-  let legacy = sqlx::query_as::<_, Record>(&format!(
-    "SELECT {COLUMNS} FROM audit_events WHERE seq IS NULL ORDER BY created_at,id"
-  ))
-  .fetch_all(&mut *connection)
-  .await?;
-  let mut sequenced = 0;
-  for record in legacy {
-    seq += 1;
-    let record_hash = record.digest(seq, &prev_hash);
-    sqlx::query("UPDATE audit_events SET seq=?,prev_hash=?,record_hash=? WHERE id=?")
-      .bind(seq)
-      .bind((seq > 1).then_some(prev_hash.as_str()))
-      .bind(&record_hash)
-      .bind(&record.id)
-      .execute(&mut *connection)
-      .await?;
-    prev_hash = record_hash;
-    sequenced += 1;
-  }
-  Ok(sequenced)
-}
+/// Matches records without a chain position that predate the chain's
+/// genesis. Without a genesis row (a factory reset removed it), no record
+/// qualifies, so every unsequenced record is suspect.
+const LEGACY: &str =
+  "seq IS NULL AND created_at < (SELECT started_at FROM audit_chain_genesis WHERE id='chain')";
 
 /// The first inconsistency found while walking the chain.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -251,7 +221,11 @@ pub struct ChainReport {
   pub records: u64,
   pub head_seq: Option<i64>,
   pub head_hash: Option<String>,
-  /// Records with no chain position. Should stay at zero.
+  /// Records written before the chain existed. They carry no hashes, so
+  /// the chain cannot vouch for them, but they are not a failure.
+  pub legacy: u64,
+  /// Records with no chain position written after the chain existed. Any
+  /// such record was inserted outside Dopbase and fails verification.
   pub unsequenced: u64,
   /// Sequence number retention removed up to, when records were pruned.
   /// The surviving records continue the chain after it.
@@ -261,16 +235,19 @@ pub struct ChainReport {
 
 /// Walk the chain in sequence order and recompute every hash.
 pub async fn verify(pool: &SqlitePool) -> Result<ChainReport, sqlx::Error> {
-  let unsequenced = sqlx::query("SELECT COUNT(*) AS records FROM audit_events WHERE seq IS NULL")
-    .fetch_one(pool)
-    .await?
-    .get::<i64, _>("records")
-    .max(0) as u64;
+  let counts = sqlx::query(&format!(
+    "SELECT COUNT(*) AS total, COALESCE(SUM({LEGACY}),0) AS legacy FROM audit_events WHERE seq IS NULL"
+  ))
+  .fetch_one(pool)
+  .await?;
+  let legacy = counts.get::<i64, _>("legacy").max(0) as u64;
+  let unsequenced = (counts.get::<i64, _>("total").max(0) as u64).saturating_sub(legacy);
   let mut report = ChainReport {
     ok: true,
     records: 0,
     head_seq: None,
     head_hash: None,
+    legacy,
     unsequenced,
     pruned_seq: None,
     broken: None,
@@ -380,6 +357,60 @@ impl Retention {
     connection: &mut SqliteConnection,
     cutoff: &str,
   ) -> anyhow::Result<u64> {
+    let legacy = self.prune_legacy(connection, cutoff).await?;
+    Ok(legacy + self.prune_chained(connection, cutoff).await?)
+  }
+
+  /// Legacy records sit outside the chain, so removing them needs no
+  /// anchor. They are archived like chained ones before they go.
+  async fn prune_legacy(
+    &self,
+    connection: &mut SqliteConnection,
+    cutoff: &str,
+  ) -> anyhow::Result<u64> {
+    let expired = sqlx::query_as::<_, Record>(&format!(
+      "SELECT {COLUMNS} FROM audit_events WHERE {LEGACY} AND created_at < ? ORDER BY created_at,id"
+    ))
+    .bind(cutoff)
+    .fetch_all(&mut *connection)
+    .await?;
+    let (Some(first), Some(last)) = (expired.first(), expired.last()) else {
+      return Ok(0);
+    };
+    // Named after the first and last record, so a retry rewrites the same
+    // file and a later run never overwrites an earlier archive.
+    self.archive(
+      &format!("audit-legacy-{}-{}.jsonl", first.id, last.id),
+      &expired,
+    )?;
+    sqlx::query(&format!(
+      "DELETE FROM audit_events WHERE {LEGACY} AND created_at < ?"
+    ))
+    .bind(cutoff)
+    .execute(&mut *connection)
+    .await?;
+    Ok(expired.len() as u64)
+  }
+
+  fn archive(
+    &self,
+    name: &str,
+    records: &[Record],
+  ) -> anyhow::Result<()> {
+    fs::create_dir_all(&self.archive_dir)?;
+    let mut contents = Vec::new();
+    for record in records {
+      serde_json::to_writer(&mut contents, &record.archived())?;
+      contents.push(b'\n');
+    }
+    crate::utils::private_file::write(&self.archive_dir.join(name), &contents, true)
+  }
+
+  async fn prune_chained(
+    &self,
+    connection: &mut SqliteConnection,
+    cutoff: &str,
+  ) -> anyhow::Result<u64> {
     let expired = sqlx::query_as::<_, Record>(&format!(
       "SELECT {COLUMNS} FROM audit_events WHERE seq IS NOT NULL AND created_at < ? ORDER BY seq"
     ))
@@ -412,18 +443,10 @@ impl Retention {
     // The archive is named after the sequence range it holds, so a retry
     // after a failed transaction rewrites the same file instead of leaving
     // two copies of one range for an offline verifier to double-count.
-    fs::create_dir_all(&self.archive_dir)?;
-    let path = self.archive_dir.join(format!(
-      "audit-{:06}-{:06}.jsonl",
-      position(first),
-      position(latest)
-    ));
-    let mut contents = Vec::new();
-    for record in &prefix {
-      serde_json::to_writer(&mut contents, &record.archived())?;
-      contents.push(b'\n');
-    }
-    crate::utils::private_file::write(&path, &contents, true)?;
+    self.archive(
+      &format!("audit-{:06}-{:06}.jsonl", position(first), position(latest)),
+      &prefix,
+    )?;
     sqlx::query("DELETE FROM audit_events WHERE seq IS NOT NULL AND seq <= ?")
       .bind(position(latest))
       .execute(&mut *connection)

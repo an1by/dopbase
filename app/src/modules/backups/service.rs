@@ -731,11 +731,6 @@ pub async fn restore_database_from_archive(
     sqlx::query("INSERT INTO runner_tokens SELECT * FROM backup_db.runner_tokens").execute(&mut *tx).await?;
     sqlx::query("INSERT INTO audit_events SELECT * FROM backup_db.audit_events").execute(&mut *tx).await?;
 
-    // Archives created before the audit chain existed carry records without
-    // chain columns. Seal them here, before the restore appends its own
-    // record, so the restored log verifies from its first entry.
-    crate::services::audit_chain::backfill_connection(&mut tx).await?;
-
     let mut effective_admin_id = preserve_admin.map(|(id, _, _)| id.to_string());
 
     // Re-preserve current admin and session if requested

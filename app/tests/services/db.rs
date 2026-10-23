@@ -58,7 +58,7 @@ async fn creates_owner_only_database_file() {
 
 #[tokio::test]
 async fn migrations_apply_rollback_and_reapply() {
-  const TABLES: [&str; 11] = [
+  const TABLES: [&str; 13] = [
     "instance_metadata",
     "admins",
     "sessions",
@@ -70,7 +70,10 @@ async fn migrations_apply_rollback_and_reapply() {
     "environment_env_layout",
     "service_accounts",
     "agent_tokens",
+    "audit_chain_anchor",
+    "audit_chain_genesis",
   ];
+  const TRIGGERS: [&str; 1] = ["audit_events_sealed_immutable"];
   const INDEXES: [&str; 11] = [
     "sessions_token_hash_idx",
     "runner_tokens_token_hash_idx",
@@ -95,6 +98,7 @@ async fn migrations_apply_rollback_and_reapply() {
   MIGRATOR.run(db.pool()).await.unwrap();
   assert_schema_objects(&db, "table", &TABLES, true).await;
   assert_schema_objects(&db, "index", &INDEXES, true).await;
+  assert_schema_objects(&db, "trigger", &TRIGGERS, true).await;
   let expiry_column: String = sqlx::query_scalar(
     "SELECT name FROM pragma_table_info('runner_tokens') WHERE name='expires_at'",
   )
@@ -115,10 +119,12 @@ async fn migrations_apply_rollback_and_reapply() {
   MIGRATOR.undo(db.pool(), 0).await.unwrap();
   assert_schema_objects(&db, "table", &TABLES, false).await;
   assert_schema_objects(&db, "index", &INDEXES, false).await;
+  assert_schema_objects(&db, "trigger", &TRIGGERS, false).await;
 
   MIGRATOR.run(db.pool()).await.unwrap();
   assert_schema_objects(&db, "table", &TABLES, true).await;
   assert_schema_objects(&db, "index", &INDEXES, true).await;
+  assert_schema_objects(&db, "trigger", &TRIGGERS, true).await;
   db.close().await;
 }
 

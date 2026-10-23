@@ -18,7 +18,7 @@ pub struct AuditEvent {
   pub created_at: String,
   /// Position in the audit hash chain, and the hashes of the record before
   /// this one and of this record's own contents. Absent only for records
-  /// that predate the chain and have not been sealed yet.
+  /// that predate the chain, which are never sealed.
   pub seq: Option<i64>,
   pub prev_hash: Option<String>,
   pub record_hash: Option<String>,
@@ -59,7 +59,11 @@ pub struct ChainVerifyReport {
   pub records: u64,
   pub head_seq: Option<i64>,
   pub head_hash: Option<String>,
-  /// Records with no chain position. Should stay at zero.
+  /// Records written before the chain existed. They carry no hashes, so the
+  /// chain cannot vouch for them, but they do not fail verification.
+  pub legacy: u64,
+  /// Records with no chain position written after the chain existed. Any
+  /// such record was inserted outside Dopbase; it should stay at zero.
   pub unsequenced: u64,
   /// Sequence number retention removed up to, when records were pruned. The
   /// surviving records continue the chain after it.
@@ -74,6 +78,7 @@ impl From<crate::services::audit_chain::ChainReport> for ChainVerifyReport {
       records: report.records,
       head_seq: report.head_seq,
       head_hash: report.head_hash,
+      legacy: report.legacy,
       unsequenced: report.unsequenced,
       pruned_seq: report.pruned_seq,
       broken: report.broken.map(|chain_break| ChainVerifyBreak {

@@ -215,7 +215,7 @@ fn print_report(report: &Value) {
       ("Chain:", "intact".to_owned()),
       ("Records verified:", records.to_string()),
       (
-        "Head sequence",
+        "Head sequence:",
         report
           .get("headSeq")
           .and_then(Value::as_i64)
@@ -225,6 +225,10 @@ fn print_report(report: &Value) {
   };
   if unsequenced > 0 {
     fields.push(("Unsequenced records:", unsequenced.to_string()));
+  }
+  let legacy = output::number(report, "legacy");
+  if legacy > 0 {
+    fields.push(("Legacy records (not chained):", legacy.to_string()));
   }
   if let Some(pruned) = report.get("prunedSeq").and_then(Value::as_i64) {
     fields.push(("Pruned through:", format!("sequence {pruned}")));
