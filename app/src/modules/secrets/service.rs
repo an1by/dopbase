@@ -109,7 +109,7 @@ pub async fn set(
   sqlx::query("INSERT INTO secrets(environment_id,key,version,ciphertext,value_nonce,wrapped_key,key_nonce,created_at,updated_at)VALUES(?,?,?,?,?,?,?,?,?) ON CONFLICT(environment_id,key) DO UPDATE SET version=excluded.version,ciphertext=excluded.ciphertext,value_nonce=excluded.value_nonce,wrapped_key=excluded.wrapped_key,key_nonce=excluded.key_nonce,updated_at=excluded.updated_at").bind(id).bind(&key).bind(version).bind(encrypted.ciphertext).bind(encrypted.value_nonce).bind(encrypted.wrapped_key).bind(encrypted.key_nonce).bind(&created_at).bind(&now).execute(&mut *tx).await?;
   common::audit(
     &mut tx,
-    "admin",
+    identity.audit_actor_type(),
     Some(admin_id),
     Some(email),
     action,
@@ -145,7 +145,7 @@ pub async fn delete(
   }
   common::audit(
     &mut tx,
-    "admin",
+    identity.audit_actor_type(),
     Some(admin_id),
     Some(email),
     "secret.deleted",
@@ -190,7 +190,7 @@ pub async fn reveal(
   let value = decrypt_row(state, id, &row)?;
   common::audit_standalone(
     state.db.pool(),
-    "admin",
+    identity.audit_actor_type(),
     Some(admin_id),
     Some(email),
     "secret.revealed",
@@ -328,7 +328,7 @@ pub async fn import(
     tx.rollback().await?;
     common::audit_standalone(
       state.db.pool(),
-      "admin",
+      identity.audit_actor_type(),
       Some(admin_id),
       Some(email),
       "secret.import_previewed",
@@ -394,7 +394,7 @@ pub async fn import(
       .fetch_optional(&mut *tx)
       .await?;
   let revision = collection_revision(id, resulting_rows.iter(), resulting_layout.as_deref());
-  common::audit(&mut tx,"admin",Some(admin_id),Some(email),"secret.imported",Some(&env.project_id),Some(id),Some("environment"),Some(id),serde_json::json!({"added":added,"updated":updated,"unchanged":unchanged,"deleted":deleted,"layout":request.env_layout.is_some()})).await?;
+  common::audit(&mut tx,identity.audit_actor_type(),Some(admin_id),Some(email),"secret.imported",Some(&env.project_id),Some(id),Some("environment"),Some(id),serde_json::json!({"added":added,"updated":updated,"unchanged":unchanged,"deleted":deleted,"layout":request.env_layout.is_some()})).await?;
   tx.commit().await?;
   Ok(ImportSecretsResponse {
     added_keys: added,
@@ -462,7 +462,7 @@ pub async fn export(
     AuthIdentity::Admin { .. } => {
       require_recent_browser_auth(identity)?;
       let (admin_id, email) = require_project_manager(identity)?;
-      ("admin", admin_id, Some(email))
+      (identity.audit_actor_type(), admin_id, Some(email))
     }
     AuthIdentity::Runner {
       token_id,
@@ -529,7 +529,11 @@ pub async fn runtime(
   let (actor_type, actor_id, actor_label) = match identity {
     AuthIdentity::Admin {
       admin_id, email, ..
-    } => ("admin", admin_id.as_str(), Some(email.as_str())),
+    } => (
+      identity.audit_actor_type(),
+      admin_id.as_str(),
+      Some(email.as_str()),
+    ),
     AuthIdentity::Runner {
       token_id,
       environment_id,

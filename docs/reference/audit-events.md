@@ -158,6 +158,11 @@ IP address
 user agent
 ```
 
+The actor type is `root` for the root user and `admin` for every other
+administrator, so actions taken with the root account stand out. Runner tokens
+record `runner`, failed sign-ins `anonymous`, a restore during setup
+`bootstrap`, and retention and local maintenance commands `system`.
+
 It must never contain the plaintext secret value, a usable authentication token, or a request body that carries credentials.
 
 ## Example

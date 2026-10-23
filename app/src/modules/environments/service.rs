@@ -105,7 +105,7 @@ pub async fn create(
   let id = insert_generated(&mut tx, &project.id, &request.name, &now).await?;
   common::audit(
     &mut tx,
-    "admin",
+    identity.audit_actor_type(),
     Some(admin_id),
     Some(email),
     "environment.created",
@@ -144,7 +144,7 @@ pub async fn rename(
   }
   common::audit(
     &mut tx,
-    "admin",
+    identity.audit_actor_type(),
     Some(admin_id),
     Some(email),
     "environment.renamed",
@@ -186,7 +186,7 @@ pub async fn delete(
   }
   common::audit(
     &mut tx,
-    "admin",
+    identity.audit_actor_type(),
     Some(admin_id),
     Some(email),
     "environment.deleted",

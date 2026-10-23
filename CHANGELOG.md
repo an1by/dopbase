@@ -63,6 +63,10 @@ configurable retention archives expired records before deleting them.
 
 ### Changed
 
+- Audit records name the root user's actions with the actor type `root`
+  instead of `admin`, so they stand apart from other administrators. Other
+  administrators keep `admin`.
+
 - Restoring a backup archives the current audit log to
   `audit-archive/pre-restore-<TIME>.jsonl` before replacing it, so records
   written after the snapshot are kept; the restore stops if the archive

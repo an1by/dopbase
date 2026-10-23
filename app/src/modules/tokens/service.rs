@@ -73,7 +73,7 @@ pub async fn create(
   }
   common::audit(
     &mut tx,
-    "admin",
+    identity.audit_actor_type(),
     Some(admin_id),
     Some(email),
     "token.created",
@@ -130,7 +130,7 @@ pub async fn revoke(
   }
   common::audit(
     &mut tx,
-    "admin",
+    identity.audit_actor_type(),
     Some(admin_id),
     Some(email),
     "token.revoked",

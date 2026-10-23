@@ -75,7 +75,7 @@ pub(crate) async fn create_root(
   .await?;
   common::audit(
     &mut *tx,
-    "admin",
+    AdminRole::Root.audit_actor_type(),
     Some(&admin_id),
     Some(&credentials.email),
     "admin.bootstrapped",

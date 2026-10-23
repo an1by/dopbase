@@ -54,7 +54,7 @@ pub async fn create(
     .map_err(map_unique)?;
   common::audit(
     &mut tx,
-    "admin",
+    identity.audit_actor_type(),
     Some(admin_id),
     Some(email),
     "project.created",
@@ -94,7 +94,7 @@ pub async fn rename(
   }
   common::audit(
     &mut tx,
-    "admin",
+    identity.audit_actor_type(),
     Some(admin_id),
     Some(email),
     "project.renamed",
@@ -133,7 +133,7 @@ pub async fn delete(
       "The requested project was not found.",
     ));
   }
-  common::audit(&mut tx,"admin",Some(admin_id),Some(email),"project.deleted",Some(&project.id),None,Some("project"),Some(&project.id),serde_json::json!({"name":project.name,"environments":environments,"secrets":secrets,"tokens":tokens})).await?;
+  common::audit(&mut tx,identity.audit_actor_type(),Some(admin_id),Some(email),"project.deleted",Some(&project.id),None,Some("project"),Some(&project.id),serde_json::json!({"name":project.name,"environments":environments,"secrets":secrets,"tokens":tokens})).await?;
   tx.commit().await?;
   Ok(DeleteProjectResponse {
     affected: AffectedCounts {
@@ -215,7 +215,7 @@ pub async fn init(
   }
   common::audit(
     &mut tx,
-    "admin",
+    identity.audit_actor_type(),
     Some(admin_id),
     Some(email),
     "project.initialized",

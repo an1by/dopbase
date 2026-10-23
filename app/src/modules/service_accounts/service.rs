@@ -174,7 +174,7 @@ pub async fn create(
   let (aid, email) = actor(identity);
   common::audit(
     &mut tx,
-    "admin",
+    identity.audit_actor_type(),
     Some(aid),
     Some(email),
     "service_account.created",
@@ -212,7 +212,7 @@ pub async fn delete(
     .await?;
   common::audit(
     &mut tx,
-    "admin",
+    identity.audit_actor_type(),
     Some(aid),
     Some(email),
     "service_account.deleted",
@@ -267,7 +267,7 @@ pub async fn create_token(
   let (aid, email) = actor(identity);
   common::audit(
     &mut tx,
-    "admin",
+    identity.audit_actor_type(),
     Some(aid),
     Some(email),
     "service_account.token_created",
@@ -314,7 +314,7 @@ pub async fn revoke_token(
   let (aid, email) = actor(identity);
   common::audit(
     &mut tx,
-    "admin",
+    identity.audit_actor_type(),
     Some(aid),
     Some(email),
     "service_account.token_revoked",

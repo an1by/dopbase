@@ -2,7 +2,10 @@ import { apiRequest } from "./http.client";
 
 export interface AuditEvent {
   id: string;
-  /** `"admin"`, `"anonymous"`, or `"runner"`. */
+  /**
+   * `"root"` for the root user, `"admin"` for other administrators,
+   * `"runner"`, `"anonymous"`, `"bootstrap"`, or `"system"`.
+   */
   actorType: string;
   actorId: string | null;
   actorLabel: string | null;

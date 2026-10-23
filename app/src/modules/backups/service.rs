@@ -200,7 +200,7 @@ pub async fn create(
   // Audit
   let _ = common::audit_standalone(
     state.db.pool(),
-    "admin",
+    identity.audit_actor_type(),
     Some(admin_id),
     Some(email),
     "backup.created",
@@ -241,7 +241,7 @@ pub async fn read_for_download(
 
   let _ = common::audit_standalone(
     state.db.pool(),
-    "admin",
+    identity.audit_actor_type(),
     Some(admin_id),
     Some(email),
     "backup.downloaded",
@@ -477,7 +477,7 @@ pub async fn upload(
 
   let _ = common::audit_standalone(
     state.db.pool(),
-    "admin",
+    identity.audit_actor_type(),
     Some(admin_id),
     Some(email),
     "backup.uploaded",
@@ -542,7 +542,12 @@ pub async fn restore(
     state,
     decrypted,
     source_key_to_rekey,
-    Some((admin_id, email, session_id_from_identity(identity))),
+    Some((
+      admin_id,
+      email,
+      session_id_from_identity(identity),
+      identity.audit_actor_type(),
+    )),
     Some(&safe_key),
   )
   .await
@@ -552,7 +557,7 @@ pub async fn restore_database_from_archive(
   state: &AppState,
   decrypted: Vec<u8>,
   source_master_key_to_rekey: Option<&[u8]>,
-  preserve_admin: Option<(&str, &str, &str)>,
+  preserve_admin: Option<(&str, &str, &str, &str)>,
   audit_key: Option<&str>,
 ) -> Result<(), HttpError> {
   let temp_dir = tempfile::tempdir().map_err(|_| HttpError::internal())?;
@@ -686,7 +691,7 @@ pub async fn restore_database_from_archive(
     let mut current_admin: Option<AdminRowTuple> = None;
     let mut current_session: Option<SessionRowTuple> = None;
 
-    if let Some((admin_id, _, session_id)) = preserve_admin {
+    if let Some((admin_id, _, session_id, _)) = preserve_admin {
       current_admin = sqlx::query_as(
         "SELECT id, email, password_hash, role, created_at, updated_at FROM admins WHERE id = ?",
       )
@@ -750,7 +755,7 @@ pub async fn restore_database_from_archive(
     sqlx::query("INSERT INTO audit_chain_anchor SELECT * FROM backup_db.audit_chain_anchor").execute(&mut *tx).await?;
     sqlx::query("INSERT INTO audit_chain_genesis SELECT * FROM backup_db.audit_chain_genesis").execute(&mut *tx).await?;
 
-    let mut effective_admin_id = preserve_admin.map(|(id, _, _)| id.to_string());
+    let mut effective_admin_id = preserve_admin.map(|(id, _, _, _)| id.to_string());
 
     // Re-preserve current admin and session if requested
     if let (Some(admin), Some(mut sess)) = (current_admin, current_session) {
@@ -780,11 +785,11 @@ pub async fn restore_database_from_archive(
         .execute(&mut *tx).await?;
     }
 
-    if let Some((_, email, _)) = preserve_admin {
+    if let Some((_, email, _, actor_type)) = preserve_admin {
       let key_str = audit_key.unwrap_or("unknown");
       common::audit(
         &mut tx,
-        "admin",
+        actor_type,
         effective_admin_id.as_deref(),
         Some(email),
         "backup.restored",
@@ -865,7 +870,7 @@ pub async fn delete(
 
   let _ = common::audit_standalone(
     state.db.pool(),
-    "admin",
+    identity.audit_actor_type(),
     Some(admin_id),
     Some(email),
     "backup.deleted",

@@ -99,7 +99,7 @@ pub async fn login(
   sqlx::query("INSERT INTO sessions(id,admin_id,kind,token_hash,csrf_hash,created_at,last_used_at,recent_auth_at,idle_expires_at,absolute_expires_at) VALUES(?,?,?,?,?,?,?,?,?,?)").bind(&session_id).bind(&admin_id).bind(request.session_kind.as_str()).bind(token::hash(&raw)).bind(csrf.as_ref().map(|v|token::hash(v))).bind(now.to_rfc3339()).bind(now.to_rfc3339()).bind(now.to_rfc3339()).bind(idle.to_rfc3339()).bind(absolute.to_rfc3339()).execute(&mut *tx).await?;
   common::audit(
     &mut tx,
-    "admin",
+    role.audit_actor_type(),
     Some(&admin_id),
     Some(&email),
     "login.succeeded",
@@ -172,7 +172,7 @@ pub async fn logout(
     .await?;
   common::audit(
     &mut tx,
-    "admin",
+    identity.audit_actor_type(),
     Some(admin_id),
     Some(email),
     "logout.succeeded",
@@ -225,7 +225,7 @@ pub async fn reauthenticate(
     .await?;
   common::audit(
     &mut tx,
-    "admin",
+    identity.audit_actor_type(),
     Some(admin_id),
     Some(email),
     "admin.reauthenticated",
@@ -282,7 +282,7 @@ pub async fn change_password(
     .await?;
   common::audit(
     &mut tx,
-    "admin",
+    identity.audit_actor_type(),
     Some(admin_id),
     Some(email),
     "admin.password_changed",
