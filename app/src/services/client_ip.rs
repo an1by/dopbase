@@ -110,10 +110,10 @@ fn canonical(address: IpAddr) -> IpAddr {
 }
 
 /// The client address for a request, given its peer address and its
-/// `X-Forwarded-For` header.
+/// `X-Forwarded-For` header (empty when the request has none).
 pub fn resolve(
   peer: Option<IpAddr>,
-  forwarded_for: Option<&str>,
+  forwarded_for: &str,
   trusted: &[ProxyNetwork],
 ) -> Option<IpAddr> {
   let peer = canonical(peer?);
@@ -122,7 +122,7 @@ pub fn resolve(
     return Some(peer);
   }
   let mut client = peer;
-  for hop in forwarded_for.unwrap_or_default().rsplit(',') {
+  for hop in forwarded_for.rsplit(',') {
     // An entry that is not an address means the chain cannot be trusted
     // past this point, so the last trusted hop is the best answer.
     let Some(address) = parse_hop(hop) else {

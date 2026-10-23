@@ -13,7 +13,7 @@ use serde_json::Value;
 use crate::{
   constants::errors::{EMAIL_INVAILD, EMAIL_INVAILD_MESSAGE},
   http::HttpError,
-  services::token,
+  services::{audit_chain::AuditEntry, token},
 };
 
 pub fn validate_slug(
@@ -136,6 +136,8 @@ pub async fn verify_password_async(
 /// write lock: pass an immediate transaction, or a transaction whose first
 /// statement was a write. Every business transaction that audits already
 /// writes first, and [`audit_standalone`] handles the remaining cases.
+///
+/// The client IP comes from the current request, when there is one.
 #[allow(clippy::too_many_arguments)]
 pub async fn audit(
   connection: &mut sqlx::SqliteConnection,
@@ -154,27 +156,22 @@ pub async fn audit(
   let ip_address = crate::services::client_ip::current().map(|address| address.to_string());
   crate::services::audit_chain::append(
     connection,
-    &token::public_id("aud_"),
-    actor_type,
-    actor_id,
-    actor_label,
-    action,
-    project_id,
-    environment_id,
-    resource_type,
-    resource_id,
-    ip_address.as_deref(),
-    &metadata,
-    &created_at,
+    &AuditEntry {
+      id: &token::public_id("aud_"),
+      actor_type,
+      actor_id,
+      actor_label,
+      action,
+      project_id,
+      environment_id,
+      resource_type,
+      resource_id,
+      ip_address: ip_address.as_deref(),
+      metadata: &metadata,
+      created_at: &created_at,
+    },
   )
-  .await?;
-  // Retention runs in the caller's transaction, after the append, so it
-  // cannot remove the record being written and needs no second lock. A
-  // failure to prune must not fail the operation that was audited.
-  if let Err(error) = crate::services::audit_chain::prune_configured(connection).await {
-    tracing::warn!(%error, "audit retention could not be applied");
-  }
-  Ok(())
+  .await
 }
 
 /// Record an audit event in its own committed transaction.

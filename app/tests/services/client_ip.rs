@@ -14,12 +14,12 @@ fn proxies(values: &[&str]) -> Vec<ProxyNetwork> {
 fn an_untrusted_peer_is_the_client_even_when_it_sends_forwarded_for() {
   let trusted = proxies(&["10.0.0.0/8"]);
   assert_eq!(
-    client_ip::resolve(Some(ip("203.0.113.7")), Some("198.51.100.1"), &trusted),
+    client_ip::resolve(Some(ip("203.0.113.7")), "198.51.100.1", &trusted),
     Some(ip("203.0.113.7"))
   );
   // Without trusted proxies the header is never read.
   assert_eq!(
-    client_ip::resolve(Some(ip("127.0.0.1")), Some("198.51.100.1"), &[]),
+    client_ip::resolve(Some(ip("127.0.0.1")), "198.51.100.1", &[]),
     Some(ip("127.0.0.1"))
   );
 }
@@ -32,18 +32,18 @@ fn a_trusted_proxy_reports_the_nearest_untrusted_hop() {
   assert_eq!(
     client_ip::resolve(
       Some(ip("127.0.0.1")),
-      Some("1.1.1.1, 203.0.113.7, 10.0.0.5"),
+      "1.1.1.1, 203.0.113.7, 10.0.0.5",
       &trusted
     ),
     Some(ip("203.0.113.7"))
   );
   // Proxies that write a port or a bracketed IPv6 address still resolve.
   assert_eq!(
-    client_ip::resolve(Some(ip("10.0.0.2")), Some("203.0.113.7:51000"), &trusted),
+    client_ip::resolve(Some(ip("10.0.0.2")), "203.0.113.7:51000", &trusted),
     Some(ip("203.0.113.7"))
   );
   assert_eq!(
-    client_ip::resolve(Some(ip("10.0.0.2")), Some("[2001:db8::1]:443"), &trusted),
+    client_ip::resolve(Some(ip("10.0.0.2")), "[2001:db8::1]:443", &trusted),
     Some(ip("2001:db8::1"))
   );
 }
@@ -52,18 +52,15 @@ fn a_trusted_proxy_reports_the_nearest_untrusted_hop() {
 fn a_trusted_proxy_without_a_usable_header_is_the_client() {
   let trusted = proxies(&["10.0.0.0/8"]);
   assert_eq!(
-    client_ip::resolve(Some(ip("10.0.0.2")), None, &trusted),
+    client_ip::resolve(Some(ip("10.0.0.2")), "", &trusted),
     Some(ip("10.0.0.2"))
   );
   // A malformed entry stops the walk at the last trusted hop.
   assert_eq!(
-    client_ip::resolve(Some(ip("10.0.0.2")), Some("not-an-ip"), &trusted),
+    client_ip::resolve(Some(ip("10.0.0.2")), "not-an-ip", &trusted),
     Some(ip("10.0.0.2"))
   );
-  assert_eq!(
-    client_ip::resolve(None, Some("203.0.113.7"), &trusted),
-    None
-  );
+  assert_eq!(client_ip::resolve(None, "203.0.113.7", &trusted), None);
 }
 
 #[test]

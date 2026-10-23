@@ -32,6 +32,7 @@ use crate::{
   config::{ServerConfig, database_path, ensure_data_dir},
   constants::{
     api,
+    config::AUDIT_RETENTION_INTERVAL,
     errors::{INTERNAL_ERROR, REQUEST_INVALID},
   },
   http::HttpError,
@@ -178,10 +179,6 @@ pub fn router(state: AppState) -> Router {
     .layer(middleware::from_fn_with_state(
       state.clone(),
       middlewares::client_ip::capture,
-    ))
-    .layer(middleware::from_fn_with_state(
-      state.clone(),
-      middlewares::audit_retention::scope,
     ))
     .with_state(state)
 }
@@ -472,6 +469,15 @@ async fn serve_instance(
   // The audit head goes to the log at startup and shutdown, so the log
   // collector keeps a copy of it outside the database.
   crate::services::audit_chain::log_checkpoint(state.db.pool()).await;
+  // Startup already applied retention in prepare_instance; this keeps it
+  // applied while the server runs.
+  let retention_task = state.config.audit_retention().map(|retention| {
+    crate::services::audit_chain::spawn_retention(
+      state.db.pool().clone(),
+      retention,
+      AUDIT_RETENTION_INTERVAL,
+    )
+  });
   // Connection info carries the peer address the audit log records.
   let serve_result = axum::serve(
     listener,
@@ -479,6 +485,9 @@ async fn serve_instance(
   )
   .with_graceful_shutdown(shutdown_signal())
   .await;
+  if let Some(task) = retention_task {
+    task.abort();
+  }
   if daemonized {
     let _ = crate::daemon::remove_pid_file(&crate::daemon::pid_file_path(&state.config.data_dir));
   }

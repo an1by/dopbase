@@ -29,10 +29,6 @@ pub async fn capture(
     .filter_map(|value| value.to_str().ok())
     .collect::<Vec<_>>()
     .join(",");
-  let address = client_ip::resolve(
-    peer,
-    Some(forwarded_for.as_str()).filter(|value| !value.is_empty()),
-    &state.config.trusted_proxies,
-  );
+  let address = client_ip::resolve(peer, &forwarded_for, &state.config.trusted_proxies);
   client_ip::scope(address, next.run(request)).await
 }

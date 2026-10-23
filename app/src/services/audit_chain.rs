@@ -17,11 +17,13 @@
 //!   a position that is newer than the chain's genesis fails verification.
 //! - Retention archives expired records to the data directory before
 //!   deleting them, and leaves an anchor so the surviving records still
-//!   verify as one unbroken chain.
+//!   verify as one unbroken chain. It runs at startup and then on a timer
+//!   ([`spawn_retention`]), never inside the request that writes a record.
 
 use std::{
   fs,
   path::{Path, PathBuf},
+  time::Duration,
 };
 
 use serde_json::{Value, json};
@@ -82,29 +84,73 @@ impl Record {
     })
   }
 
-  /// Hash the record's stored values together with its chain position.
+  /// The stored values the chain hashes, borrowed from this record.
+  fn entry(&self) -> AuditEntry<'_> {
+    AuditEntry {
+      id: &self.id,
+      actor_type: &self.actor_type,
+      actor_id: self.actor_id.as_deref(),
+      actor_label: self.actor_label.as_deref(),
+      action: &self.action,
+      project_id: self.project_id.as_deref(),
+      environment_id: self.environment_id.as_deref(),
+      resource_type: self.resource_type.as_deref(),
+      resource_id: self.resource_id.as_deref(),
+      ip_address: self.ip_address.as_deref(),
+      metadata: &self.metadata,
+      created_at: &self.created_at,
+    }
+  }
+}
+
+/// One audit record's values, as [`append`] stores them and the chain
+/// hashes them. The chain columns (`seq`, `prev_hash`, `record_hash`) are
+/// derived from the chain head, so they are not part of it.
+#[derive(Clone, Copy, Debug)]
+pub struct AuditEntry<'a> {
+  pub id: &'a str,
+  pub actor_type: &'a str,
+  pub actor_id: Option<&'a str>,
+  pub actor_label: Option<&'a str>,
+  pub action: &'a str,
+  pub project_id: Option<&'a str>,
+  pub environment_id: Option<&'a str>,
+  pub resource_type: Option<&'a str>,
+  pub resource_id: Option<&'a str>,
+  /// Absent for records written outside a request.
+  pub ip_address: Option<&'a str>,
+  /// Serialized JSON, hashed exactly as stored.
+  pub metadata: &'a str,
+  pub created_at: &'a str,
+}
+
+impl AuditEntry<'_> {
+  /// The record hash at a chain position.
   ///
-  /// A missing `ip_address`, as on records written outside a request,
-  /// hashes as an empty string.
-  fn digest(
+  /// This is the only definition of what the chain covers: appending and
+  /// verifying both call it, so a new column cannot be hashed on one side
+  /// and forgotten on the other. Missing optional values hash as an empty
+  /// string. Changing the field list or order invalidates every existing
+  /// record, so it needs a new [`DOMAIN`] version.
+  fn hash(
     &self,
     seq: i64,
     prev_hash: &str,
   ) -> String {
     digest(&[
       &seq.to_string(),
-      &self.id,
-      &self.actor_type,
-      self.actor_id.as_deref().unwrap_or(GENESIS),
-      self.actor_label.as_deref().unwrap_or(GENESIS),
-      &self.action,
-      self.project_id.as_deref().unwrap_or(GENESIS),
-      self.environment_id.as_deref().unwrap_or(GENESIS),
-      self.resource_type.as_deref().unwrap_or(GENESIS),
-      self.resource_id.as_deref().unwrap_or(GENESIS),
-      self.ip_address.as_deref().unwrap_or(GENESIS),
-      &self.metadata,
-      &self.created_at,
+      self.id,
+      self.actor_type,
+      self.actor_id.unwrap_or_default(),
+      self.actor_label.unwrap_or_default(),
+      self.action,
+      self.project_id.unwrap_or_default(),
+      self.environment_id.unwrap_or_default(),
+      self.resource_type.unwrap_or_default(),
+      self.resource_id.unwrap_or_default(),
+      self.ip_address.unwrap_or_default(),
+      self.metadata,
+      self.created_at,
       prev_hash,
     ])
   }
@@ -124,30 +170,29 @@ fn digest(fields: &[&str]) -> String {
   hex::encode(hasher.finalize())
 }
 
-async fn head(executor: &mut SqliteConnection) -> Result<Option<(i64, String)>, sqlx::Error> {
-  let row = sqlx::query(
+/// The position and hash the next record chains from.
+async fn head(connection: &mut SqliteConnection) -> Result<Option<(i64, String)>, sqlx::Error> {
+  let newest = sqlx::query_as(
     "SELECT seq,record_hash FROM audit_events WHERE seq IS NOT NULL ORDER BY seq DESC LIMIT 1",
   )
-  .fetch_optional(&mut *executor)
+  .fetch_optional(&mut *connection)
   .await?;
-  if let Some(row) = row {
-    return Ok(Some((
-      row.get::<i64, _>("seq"),
-      row.get::<String, _>("record_hash"),
-    )));
+  match newest {
+    Some(head) => Ok(Some(head)),
+    // Retention can remove every record; the chain then continues from the
+    // pruning anchor instead of restarting at the genesis position.
+    None => pruning_anchor(connection).await,
   }
-  // Retention can remove every record; the chain then continues from the
-  // pruning anchor instead of restarting at the genesis position.
-  let anchor =
-    sqlx::query("SELECT pruned_seq,pruned_hash FROM audit_chain_anchor WHERE id='chain'")
-      .fetch_optional(&mut *executor)
-      .await?;
-  Ok(anchor.map(|row| {
-    (
-      row.get::<i64, _>("pruned_seq"),
-      row.get::<String, _>("pruned_hash"),
-    )
-  }))
+}
+
+/// The position and hash retention last pruned the chain through, if it
+/// ever removed chained records.
+async fn pruning_anchor(
+  connection: &mut SqliteConnection
+) -> Result<Option<(i64, String)>, sqlx::Error> {
+  sqlx::query_as("SELECT pruned_seq,pruned_hash FROM audit_chain_anchor WHERE id='chain'")
+    .fetch_optional(&mut *connection)
+    .await
 }
 
 /// Append one record to the chain.
@@ -156,46 +201,36 @@ async fn head(executor: &mut SqliteConnection) -> Result<Option<(i64, String)>, 
 /// immediate transaction, or a transaction whose first statement was a
 /// write. That makes reading the head and inserting atomic, so concurrent
 /// appends cannot claim the same sequence number.
-#[allow(clippy::too_many_arguments)]
 pub async fn append(
   connection: &mut SqliteConnection,
-  id: &str,
-  actor_type: &str,
-  actor_id: Option<&str>,
-  actor_label: Option<&str>,
-  action: &str,
-  project_id: Option<&str>,
-  environment_id: Option<&str>,
-  resource_type: Option<&str>,
-  resource_id: Option<&str>,
-  ip_address: Option<&str>,
-  metadata: &str,
-  created_at: &str,
+  entry: &AuditEntry<'_>,
 ) -> Result<(), sqlx::Error> {
   let (seq, prev_hash) = head(connection)
     .await?
     .map_or((1, GENESIS.to_owned()), |(seq, hash)| (seq + 1, hash));
-  let record_hash = digest(&[
-    &seq.to_string(),
-    id,
-    actor_type,
-    actor_id.unwrap_or(GENESIS),
-    actor_label.unwrap_or(GENESIS),
-    action,
-    project_id.unwrap_or(GENESIS),
-    environment_id.unwrap_or(GENESIS),
-    resource_type.unwrap_or(GENESIS),
-    resource_id.unwrap_or(GENESIS),
-    ip_address.unwrap_or(GENESIS),
-    metadata,
-    created_at,
-    &prev_hash,
-  ]);
-  sqlx::query("INSERT INTO audit_events(id,actor_type,actor_id,actor_label,action,project_id,environment_id,resource_type,resource_id,ip_address,metadata,created_at,seq,prev_hash,record_hash) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)")
-    .bind(id).bind(actor_type).bind(actor_id).bind(actor_label).bind(action)
-    .bind(project_id).bind(environment_id).bind(resource_type).bind(resource_id).bind(ip_address)
-    .bind(metadata).bind(created_at).bind(seq).bind((seq > 1).then_some(prev_hash.as_str())).bind(record_hash)
-    .execute(&mut *connection).await.map(|_| ())
+  let record_hash = entry.hash(seq, &prev_hash);
+  sqlx::query(&format!(
+    "INSERT INTO audit_events({COLUMNS}) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)"
+  ))
+  .bind(entry.id)
+  .bind(entry.actor_type)
+  .bind(entry.actor_id)
+  .bind(entry.actor_label)
+  .bind(entry.action)
+  .bind(entry.project_id)
+  .bind(entry.environment_id)
+  .bind(entry.resource_type)
+  .bind(entry.resource_id)
+  .bind(entry.ip_address)
+  .bind(entry.metadata)
+  .bind(entry.created_at)
+  .bind(seq)
+  // The record that starts the chain stores no predecessor.
+  .bind((seq > 1).then_some(prev_hash.as_str()))
+  .bind(record_hash)
+  .execute(&mut *connection)
+  .await?;
+  Ok(())
 }
 
 /// Matches records without a chain position that predate the chain's
@@ -243,16 +278,18 @@ pub struct Anchor {
   pub hash: String,
 }
 
-/// How the log compares with an [`Anchor`].
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+/// How the log compares with an [`Anchor`]. Serialized in lowercase, as the
+/// verify API returns it.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, utoipa::ToSchema)]
+#[serde(rename_all = "lowercase")]
 pub enum AnchorStatus {
   /// The record at that position still has that hash.
   Matched,
   /// The record at that position has a different hash: history up to it
   /// was rewritten.
   Mismatch,
-  /// No record holds that position and retention did not remove it: the
-  /// newest records were deleted.
+  /// No record holds that position and retention did not remove it: that
+  /// record and any after it were deleted.
   Missing,
   /// Retention removed that position; only the pruning archive can confirm
   /// it.
@@ -260,15 +297,6 @@ pub enum AnchorStatus {
 }
 
 impl AnchorStatus {
-  pub fn as_str(self) -> &'static str {
-    match self {
-      Self::Matched => "matched",
-      Self::Mismatch => "mismatch",
-      Self::Missing => "missing",
-      Self::Pruned => "pruned",
-    }
-  }
-
   fn is_failure(self) -> bool {
     matches!(self, Self::Mismatch | Self::Missing)
   }
@@ -325,11 +353,7 @@ async fn check_anchor(
       AnchorStatus::Mismatch
     });
   }
-  let pruned: Option<(i64, String)> =
-    sqlx::query_as("SELECT pruned_seq,pruned_hash FROM audit_chain_anchor WHERE id='chain'")
-      .fetch_optional(&mut *connection)
-      .await?;
-  Ok(match pruned {
+  Ok(match pruning_anchor(connection).await? {
     Some((seq, hash)) if seq == anchor.seq => {
       if hash == anchor.hash {
         AnchorStatus::Matched
@@ -368,8 +392,9 @@ async fn verify_snapshot(connection: &mut SqliteConnection) -> Result<ChainRepor
   ))
   .fetch_one(&mut *connection)
   .await?;
-  let legacy = counts.get::<i64, _>("legacy").max(0) as u64;
-  let unsequenced = (counts.get::<i64, _>("total").max(0) as u64).saturating_sub(legacy);
+  let count = |column: &str| u64::try_from(counts.get::<i64, _>(column)).unwrap_or_default();
+  let legacy = count("legacy");
+  let unsequenced = count("total").saturating_sub(legacy);
   let mut report = ChainReport {
     ok: true,
     records: 0,
@@ -383,16 +408,7 @@ async fn verify_snapshot(connection: &mut SqliteConnection) -> Result<ChainRepor
   };
   // Records retention removed leave an anchor behind: the chain starts
   // there instead of at genesis, so pruning does not look like tampering.
-  let anchor =
-    sqlx::query("SELECT pruned_seq,pruned_hash FROM audit_chain_anchor WHERE id='chain'")
-      .fetch_optional(&mut *connection)
-      .await?
-      .map(|row| {
-        (
-          row.get::<i64, _>("pruned_seq"),
-          row.get::<String, _>("pruned_hash"),
-        )
-      });
+  let anchor = pruning_anchor(connection).await?;
   report.pruned_seq = anchor.as_ref().map(|(seq, _)| *seq);
   let mut after: Option<i64> = None;
   let mut previous: Option<(i64, String)> = anchor.clone();
@@ -418,7 +434,9 @@ async fn verify_snapshot(connection: &mut SqliteConnection) -> Result<ChainRepor
         Some("sequence gap")
       } else if record.prev_hash.as_deref().unwrap_or(GENESIS) != expected_prev {
         Some("previous record hash does not match")
-      } else if record.record_hash.as_deref() != Some(record.digest(seq, &expected_prev).as_str()) {
+      } else if record.record_hash.as_deref()
+        != Some(record.entry().hash(seq, &expected_prev).as_str())
+      {
         Some("record hash does not match its contents")
       } else {
         None
@@ -507,9 +525,9 @@ impl Retention {
   /// Archive and delete every record older than the retention window.
   ///
   /// The caller's connection must hold SQLite's write lock. The work runs in
-  /// a savepoint, so a failure part-way leaves neither a deletion without
-  /// its anchor nor a failed caller: only the retention step is undone.
-  /// Returns how many records were removed.
+  /// a savepoint, so a failure part-way never leaves a deletion without its
+  /// anchor, and only the retention step is undone: the caller's own
+  /// transaction can still commit. Returns how many records were removed.
   pub async fn apply(
     &self,
     connection: &mut SqliteConnection,
@@ -549,18 +567,20 @@ impl Retention {
     });
     append(
       connection,
-      &crate::services::token::public_id("aud_"),
-      "system",
-      None,
-      Some("retention"),
-      "audit.pruned",
-      None,
-      None,
-      Some("audit"),
-      None,
-      None,
-      &metadata.to_string(),
-      &chrono::Utc::now().to_rfc3339(),
+      &AuditEntry {
+        id: &crate::services::token::public_id("aud_"),
+        actor_type: "system",
+        actor_id: None,
+        actor_label: Some("retention"),
+        action: "audit.pruned",
+        project_id: None,
+        environment_id: None,
+        resource_type: Some("audit"),
+        resource_id: None,
+        ip_address: None,
+        metadata: &metadata.to_string(),
+        created_at: &chrono::Utc::now().to_rfc3339(),
+      },
     )
     .await?;
     Ok(removed)
@@ -585,7 +605,7 @@ impl Retention {
     // Named after the first and last record, so a retry rewrites the same
     // file and a later run never overwrites an earlier archive.
     let archive = format!("audit-legacy-{}-{}.jsonl", first.id, last.id);
-    self.archive(&archive, &expired)?;
+    write_archive(&self.archive_dir, &archive, &expired).await?;
     sqlx::query(&format!(
       "DELETE FROM audit_events WHERE {LEGACY} AND created_at < ?"
     ))
@@ -593,14 +613,6 @@ impl Retention {
     .execute(&mut *connection)
     .await?;
     Ok(Some((expired.len() as u64, archive)))
-  }
-
-  fn archive(
-    &self,
-    name: &str,
-    records: &[Record],
-  ) -> anyhow::Result<()> {
-    write_archive(&self.archive_dir, name, records)
   }
 
   async fn prune_chained(
@@ -642,7 +654,7 @@ impl Retention {
     // after a failed transaction rewrites the same file instead of leaving
     // two copies of one range for an offline verifier to double-count.
     let archive = format!("audit-{:06}-{:06}.jsonl", position(first), position(latest));
-    self.archive(&archive, &prefix)?;
+    write_archive(&self.archive_dir, &archive, &prefix).await?;
     sqlx::query("DELETE FROM audit_events WHERE seq IS NOT NULL AND seq <= ?")
       .bind(position(latest))
       .execute(&mut *connection)
@@ -667,18 +679,25 @@ impl Retention {
 }
 
 /// Write records as JSON lines, owner-only, into the archive directory.
-fn write_archive(
+async fn write_archive(
   archive_dir: &Path,
   name: &str,
   records: &[Record],
 ) -> anyhow::Result<()> {
-  fs::create_dir_all(archive_dir)?;
   let mut contents = Vec::new();
   for record in records {
     serde_json::to_writer(&mut contents, &record.archived())?;
     contents.push(b'\n');
   }
-  crate::utils::private_file::write(&archive_dir.join(name), &contents, true)
+  let archive_dir = archive_dir.to_owned();
+  let path = archive_dir.join(name);
+  // Callers hold SQLite's write lock, so blocking file I/O stays off the
+  // async workers that every other request needs.
+  tokio::task::spawn_blocking(move || {
+    fs::create_dir_all(&archive_dir)?;
+    crate::utils::private_file::write(&path, &contents, true)
+  })
+  .await?
 }
 
 /// What [`archive_all`] saved before the audit log was replaced.
@@ -716,7 +735,7 @@ pub async fn archive_all(
     "pre-restore-{}.jsonl",
     chrono::Utc::now().format("%Y%m%dT%H%M%S%.3fZ")
   );
-  write_archive(archive_dir, &archive, &records)?;
+  write_archive(archive_dir, &archive, &records).await?;
   Ok(ArchivedLog {
     records: records.len() as u64,
     archive: Some(archive),
@@ -738,23 +757,8 @@ fn cutoff_for(keep_days: u64) -> String {
   (chrono::Utc::now() - chrono::Duration::days(days)).to_rfc3339()
 }
 
-tokio::task_local! {
-  /// The retention policy of the instance handling the current request.
-  static RETENTION: Option<Retention>;
-}
-
-/// Run a request with its instance's retention policy, so the audit writes
-/// it makes apply that policy. A process can serve more than one instance,
-/// as tests do, so the policy is never process-wide.
-pub async fn with_retention<F: std::future::Future>(
-  retention: Option<Retention>,
-  request: F,
-) -> F::Output {
-  RETENTION.scope(retention, request).await
-}
-
 /// Apply a retention policy in a transaction this function owns, as startup
-/// does. Returns how many records were removed.
+/// and [`spawn_retention`] do. Returns how many records were removed.
 pub async fn apply_retention(
   pool: &SqlitePool,
   retention: &Retention,
@@ -765,11 +769,29 @@ pub async fn apply_retention(
   Ok(pruned)
 }
 
-/// Apply the current request's retention policy on a connection that
-/// already holds the write lock. Returns `None` when there is no policy.
-pub async fn prune_configured(connection: &mut SqliteConnection) -> anyhow::Result<Option<u64>> {
-  let Some(retention) = RETENTION.try_with(Clone::clone).ok().flatten() else {
-    return Ok(None);
-  };
-  retention.apply(connection).await.map(Some)
+/// Apply a retention policy every `period`, starting one period from now,
+/// until the returned task is aborted. Startup applies the policy itself,
+/// so the first pass here is not due yet.
+///
+/// Running on a timer keeps one pass, one archive file, and one
+/// `audit.pruned` record per period. Pruning on every audit write would
+/// produce one of each per request once records start expiring. A failed
+/// pass is logged and retried on the next tick; it never stops the server.
+pub fn spawn_retention(
+  pool: SqlitePool,
+  retention: Retention,
+  period: Duration,
+) -> tokio::task::JoinHandle<()> {
+  tokio::spawn(async move {
+    let mut ticker = tokio::time::interval_at(tokio::time::Instant::now() + period, period);
+    ticker.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
+    loop {
+      ticker.tick().await;
+      match apply_retention(&pool, &retention).await {
+        Ok(0) => {}
+        Ok(removed) => tracing::info!(removed, "audit retention removed expired records"),
+        Err(error) => tracing::warn!(%error, "audit retention could not be applied"),
+      }
+    }
+  })
 }

@@ -541,8 +541,8 @@ values.
 
 The command requires an administrator account. It exits with code `0` when the
 chain is intact and `2` when it is broken, so monitoring can alert on the
-result, and `--json` prints the full report including the head sequence and
-hash for external anchoring. Records written before the chain existed are
+result. When the chain is intact it prints the head sequence and hash, which
+you can save for external anchoring, and `--json` prints the full report. Records written before the chain existed are
 listed as legacy records; they carry no hashes but do not fail verification.
 
 The chain alone cannot tell a fully rewritten log, or one whose newest records

@@ -16,8 +16,8 @@ configurable retention archives expired records before deleting them.
   record that was modified, removed, or inserted after the fact stands out at
   that point in the chain. `dopbase audit verify` recomputes every hash in
   sequence order, stops at the first break, and exits with code `0` when the
-  chain is intact and `2` when it is broken; `--json` prints the full report,
-  including the head sequence and hash for external anchoring.
+  chain is intact and `2` when it is broken. It prints the head sequence and
+  hash for external anchoring, and `--json` prints the full report.
   `GET /api/v1/audit-events/verify` serves the same check to scripts and is
   restricted to administrators, like the audit log itself.
 
@@ -52,6 +52,8 @@ configurable retention archives expired records before deleting them.
   setting. Older records are archived as JSON lines to `audit-archive/` in
   the data directory before they are deleted, and an `audit.pruned` record
   marks where the chain continues, so `dopbase audit verify` still passes.
+  Retention runs at startup and then once a day, never inside the request
+  that writes a record.
   Back up `audit-archive/` separately: snapshots store the database only.
 
 ### Changed

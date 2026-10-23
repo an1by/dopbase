@@ -16,6 +16,11 @@ pub const DAEMON_LOG_FILENAME: &str = "serve.log";
 /// records before deleting them.
 pub const AUDIT_ARCHIVE_DIRECTORY_NAME: &str = "audit-archive";
 
+/// How often a running server applies audit retention. Records can outlive
+/// `audit_retention_days` by up to this long.
+pub const AUDIT_RETENTION_INTERVAL: std::time::Duration =
+  std::time::Duration::from_secs(24 * 60 * 60);
+
 pub const ENV_AUDIT_RETENTION_DAYS: &str = "DOPBASE_AUDIT_RETENTION_DAYS";
 pub const ENV_TRUSTED_PROXIES: &str = "DOPBASE_TRUSTED_PROXIES";
 pub const ENV_DATA_DIR: &str = "DOPBASE_DATA_DIR";

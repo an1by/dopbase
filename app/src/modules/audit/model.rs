@@ -1,6 +1,8 @@
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use utoipa::{IntoParams, ToSchema};
+
+pub use crate::services::audit_chain::AnchorStatus;
 #[derive(Clone, Debug, Serialize, sqlx::FromRow, ToSchema)]
 #[serde(rename_all = "camelCase")]
 pub struct AuditEvent {
@@ -83,9 +85,7 @@ pub struct ChainVerifyReport {
 #[serde(rename_all = "camelCase")]
 pub struct ChainVerifyAnchor {
   pub seq: i64,
-  /// `matched`, `mismatch` (history was rewritten), `missing` (the newest
-  /// records were deleted), or `pruned` (retention removed that position).
-  pub status: String,
+  pub status: AnchorStatus,
 }
 
 /// An anchor saved outside the database: a chain position and the hash the
@@ -115,7 +115,7 @@ impl From<crate::services::audit_chain::ChainReport> for ChainVerifyReport {
       }),
       anchor: report.anchor.map(|check| ChainVerifyAnchor {
         seq: check.seq,
-        status: check.status.as_str().into(),
+        status: check.status,
       }),
     }
   }

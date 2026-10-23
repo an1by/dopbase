@@ -23,6 +23,11 @@ async fn audit_verify_reports_an_intact_chain_and_flags_tampering() {
   assert_eq!(report["broken"], Value::Null);
   assert!(report["records"].as_u64().unwrap() >= 3);
   assert_eq!(report["headSeq"].as_u64(), report["records"].as_u64());
+  // The human report prints the full head hash, which --anchor takes.
+  assert!(
+    stdout.contains(report["headHash"].as_str().unwrap()),
+    "{stdout}"
+  );
 
   // Editing a record in place makes verification fail with exit code 2, so
   // monitoring can alert on it. The guard trigger only stops application
@@ -186,18 +191,20 @@ async fn audit_export_streams_json_lines_with_chain_fields_and_filters() {
   for index in 0..205 {
     app::services::audit_chain::append(
       &mut transaction,
-      &format!("aud_page_{index:04}"),
-      "admin",
-      Some("adm_1"),
-      Some(EMAIL),
-      "page.seeded",
-      None,
-      None,
-      None,
-      None,
-      None,
-      "{}",
-      &chrono::Utc::now().to_rfc3339(),
+      &app::services::audit_chain::AuditEntry {
+        id: &format!("aud_page_{index:04}"),
+        actor_type: "admin",
+        actor_id: Some("adm_1"),
+        actor_label: Some(EMAIL),
+        action: "page.seeded",
+        project_id: None,
+        environment_id: None,
+        resource_type: None,
+        resource_id: None,
+        ip_address: None,
+        metadata: "{}",
+        created_at: &chrono::Utc::now().to_rfc3339(),
+      },
     )
     .await
     .unwrap();
@@ -297,8 +304,20 @@ async fn audit_retention_archives_expired_records_and_verification_continues() {
     .await
     .unwrap();
 
-  // The next audit write applies the instance's retention.
+  // Audit writes never prune: retention runs at startup and on a timer.
   fixture.run(&["project", "create", "second"]).await;
+  let after_write: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM audit_events")
+    .fetch_one(fixture.state.db.pool())
+    .await
+    .unwrap();
+  assert_eq!(after_write, before + 1);
+
+  // A pass with the instance's own policy, as the timer runs it.
+  let retention = fixture.state.config.audit_retention().unwrap();
+  let removed = app::services::audit_chain::apply_retention(fixture.state.db.pool(), &retention)
+    .await
+    .unwrap();
+  assert_eq!(removed as i64, before);
 
   // The expired records are gone from the log and archived as JSON lines
   // that keep every stored column, chain fields included.
@@ -308,7 +327,7 @@ async fn audit_retention_archives_expired_records_and_verification_continues() {
     .unwrap();
   assert_eq!(
     remaining, 2,
-    "only the record that resumed the log and the audit.pruned record survive"
+    "only the record written after the backdating and the audit.pruned record survive"
   );
   let archive_dir = fixture.data_dir.join("audit-archive");
   let mut archives = std::fs::read_dir(&archive_dir)

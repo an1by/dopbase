@@ -5,6 +5,7 @@ use std::{
   sync::OnceLock,
 };
 
+use anyhow::Context;
 use chrono::Utc;
 use regex::Regex;
 use sqlx::Connection;
@@ -542,22 +543,33 @@ pub async fn restore(
     state,
     decrypted,
     source_key_to_rekey,
-    Some((
+    Some(PreservedAdmin {
       admin_id,
       email,
-      session_id_from_identity(identity),
-      identity.audit_actor_type(),
-    )),
+      session_id: session_id_from_identity(identity),
+      actor_type: identity.audit_actor_type(),
+    }),
     Some(&safe_key),
   )
   .await
+}
+
+/// The signed-in administrator a restore keeps: their account and session
+/// survive the restore, and the `backup.restored` record names them.
+#[derive(Clone, Copy, Debug)]
+pub struct PreservedAdmin<'a> {
+  pub admin_id: &'a str,
+  pub email: &'a str,
+  pub session_id: &'a str,
+  /// The actor type the `backup.restored` record stores.
+  pub actor_type: &'a str,
 }
 
 pub async fn restore_database_from_archive(
   state: &AppState,
   decrypted: Vec<u8>,
   source_master_key_to_rekey: Option<&[u8]>,
-  preserve_admin: Option<(&str, &str, &str, &str)>,
+  preserve_admin: Option<PreservedAdmin<'_>>,
   audit_key: Option<&str>,
 ) -> Result<(), HttpError> {
   let temp_dir = tempfile::tempdir().map_err(|_| HttpError::internal())?;
@@ -691,7 +703,12 @@ pub async fn restore_database_from_archive(
     let mut current_admin: Option<AdminRowTuple> = None;
     let mut current_session: Option<SessionRowTuple> = None;
 
-    if let Some((admin_id, _, session_id, _)) = preserve_admin {
+    if let Some(PreservedAdmin {
+      admin_id,
+      session_id,
+      ..
+    }) = preserve_admin
+    {
       current_admin = sqlx::query_as(
         "SELECT id, email, password_hash, role, created_at, updated_at FROM admins WHERE id = ?",
       )
@@ -716,10 +733,7 @@ pub async fn restore_database_from_archive(
       &state.config.data_dir.join(AUDIT_ARCHIVE_DIRECTORY_NAME),
     )
     .await
-    .map_err(|error| {
-      tracing::error!(%error, "failed to archive the audit log before restoring");
-      sqlx::Error::Io(std::io::Error::other(error.to_string()))
-    })?;
+    .context("failed to archive the audit log before restoring")?;
 
     // Wipe existing data
     sqlx::query("DELETE FROM audit_events").execute(&mut *tx).await?;
@@ -755,7 +769,7 @@ pub async fn restore_database_from_archive(
     sqlx::query("INSERT INTO audit_chain_anchor SELECT * FROM backup_db.audit_chain_anchor").execute(&mut *tx).await?;
     sqlx::query("INSERT INTO audit_chain_genesis SELECT * FROM backup_db.audit_chain_genesis").execute(&mut *tx).await?;
 
-    let mut effective_admin_id = preserve_admin.map(|(id, _, _, _)| id.to_string());
+    let mut effective_admin_id = preserve_admin.map(|admin| admin.admin_id.to_string());
 
     // Re-preserve current admin and session if requested
     if let (Some(admin), Some(mut sess)) = (current_admin, current_session) {
@@ -785,7 +799,10 @@ pub async fn restore_database_from_archive(
         .execute(&mut *tx).await?;
     }
 
-    if let Some((_, email, _, actor_type)) = preserve_admin {
+    if let Some(PreservedAdmin {
+      email, actor_type, ..
+    }) = preserve_admin
+    {
       let key_str = audit_key.unwrap_or("unknown");
       common::audit(
         &mut tx,
@@ -808,7 +825,7 @@ pub async fn restore_database_from_archive(
     }
 
     tx.commit().await?;
-    Ok::<(), sqlx::Error>(())
+    Ok::<(), anyhow::Error>(())
   }
   .await;
 
@@ -819,7 +836,10 @@ pub async fn restore_database_from_archive(
   drop(conn);
   restore_db.close().await;
   restore_result.map_err(|error| {
-    tracing::error!(%error, "failed to apply backup restore");
+    tracing::error!(
+      error = format!("{error:#}"),
+      "failed to apply backup restore"
+    );
     HttpError::internal()
   })?;
 

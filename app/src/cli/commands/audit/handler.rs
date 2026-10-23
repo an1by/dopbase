@@ -190,10 +190,7 @@ async fn resolve_project(
 fn print_report(report: &Value) {
   let records = output::number(report, "records");
   let unsequenced = output::number(report, "unsequenced");
-  let broken = report
-    .get("broken")
-    .filter(|value| !value.is_null())
-    .filter(|value| value.is_object());
+  let broken = report.get("broken").filter(|value| value.is_object());
   let mut fields = match broken {
     Some(chain_break) => vec![
       (
@@ -220,6 +217,15 @@ fn print_report(report: &Value) {
           .and_then(Value::as_i64)
           .map_or_else(|| "none".to_owned(), |seq| seq.to_string()),
       ),
+      // Printed in full: SEQ:HASH is what `--anchor` takes later.
+      (
+        "Head hash:",
+        report
+          .get("headHash")
+          .and_then(Value::as_str)
+          .unwrap_or("none")
+          .to_owned(),
+      ),
     ],
   };
   if unsequenced > 0 {
@@ -233,7 +239,7 @@ fn print_report(report: &Value) {
     let status = match anchor.get("status").and_then(Value::as_str) {
       Some("matched") => "matched".to_owned(),
       Some("mismatch") => "MISMATCH: the log was rewritten up to this record".to_owned(),
-      Some("missing") => "MISSING: records up to this one were deleted".to_owned(),
+      Some("missing") => "MISSING: this record and any after it were deleted".to_owned(),
       Some("pruned") => "removed by retention; check it against the archive".to_owned(),
       other => other.unwrap_or("unknown").to_owned(),
     };

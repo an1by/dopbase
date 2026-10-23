@@ -1,4 +1,4 @@
-use app::services::audit_chain::{self, Anchor, AnchorStatus, Retention};
+use app::services::audit_chain::{self, Anchor, AnchorStatus, AuditEntry, Retention};
 use app::services::db::DbClient;
 use serde_json::json;
 
@@ -10,6 +10,27 @@ async fn database() -> (tempfile::TempDir, DbClient) {
     .unwrap();
   db.migrate().await.unwrap();
   (directory, db)
+}
+
+/// A minimal entry; callers override the fields they care about.
+fn entry<'a>(
+  id: &'a str,
+  created_at: &'a str,
+) -> AuditEntry<'a> {
+  AuditEntry {
+    id,
+    actor_type: "admin",
+    actor_id: None,
+    actor_label: None,
+    action: "secret.updated",
+    project_id: None,
+    environment_id: None,
+    resource_type: None,
+    resource_id: None,
+    ip_address: None,
+    metadata: "{}",
+    created_at,
+  }
 }
 
 async fn record(
@@ -26,21 +47,21 @@ async fn record_at(
   action: &str,
   created_at: &str,
 ) {
+  let metadata = json!({ "action": action }).to_string();
   let mut transaction = db.pool().begin_with("BEGIN IMMEDIATE").await.unwrap();
   audit_chain::append(
     &mut transaction,
-    id,
-    "admin",
-    Some("adm_1"),
-    Some("admin@example.com"),
-    action,
-    Some("prj_1"),
-    Some("env_1"),
-    Some("secret"),
-    Some("API_KEY"),
-    None,
-    &json!({ "action": action }).to_string(),
-    created_at,
+    &AuditEntry {
+      actor_id: Some("adm_1"),
+      actor_label: Some("admin@example.com"),
+      action,
+      project_id: Some("prj_1"),
+      environment_id: Some("env_1"),
+      resource_type: Some("secret"),
+      resource_id: Some("API_KEY"),
+      metadata: &metadata,
+      ..entry(id, created_at)
+    },
   )
   .await
   .unwrap();
@@ -110,23 +131,11 @@ async fn concurrent_appends_claim_distinct_sequence_numbers() {
     let pool = db.pool().clone();
     appends.push(tokio::spawn(async move {
       let mut transaction = pool.begin_with("BEGIN IMMEDIATE").await.unwrap();
-      audit_chain::append(
-        &mut transaction,
-        &format!("aud_{index}"),
-        "admin",
-        None,
-        None,
-        "secret.updated",
-        None,
-        None,
-        None,
-        None,
-        None,
-        "{}",
-        &chrono::Utc::now().to_rfc3339(),
-      )
-      .await
-      .unwrap();
+      let id = format!("aud_{index}");
+      let now = chrono::Utc::now().to_rfc3339();
+      audit_chain::append(&mut transaction, &entry(&id, &now))
+        .await
+        .unwrap();
       transaction.commit().await.unwrap();
     }));
   }
@@ -497,23 +506,10 @@ async fn a_failed_retention_pass_leaves_the_callers_write_intact() {
   let retention = Retention::new(directory.path().join("archive"), 30);
 
   let mut transaction = db.pool().begin_with("BEGIN IMMEDIATE").await.unwrap();
-  audit_chain::append(
-    &mut transaction,
-    "aud_caller",
-    "admin",
-    None,
-    None,
-    "secret.updated",
-    None,
-    None,
-    None,
-    None,
-    None,
-    "{}",
-    &chrono::Utc::now().to_rfc3339(),
-  )
-  .await
-  .unwrap();
+  let now = chrono::Utc::now().to_rfc3339();
+  audit_chain::append(&mut transaction, &entry("aud_caller", &now))
+    .await
+    .unwrap();
   assert!(retention.apply(&mut transaction).await.is_err());
   transaction.commit().await.unwrap();
   sqlx::query("ALTER TABLE audit_chain_anchor_hidden RENAME TO audit_chain_anchor")
@@ -646,4 +642,50 @@ async fn an_outside_anchor_removed_by_retention_is_reported_as_pruned() {
   let report = verify_against(&db, &last).await;
   assert!(report.ok);
   assert_eq!(report.anchor.unwrap().status, AnchorStatus::Matched);
+}
+
+#[tokio::test]
+async fn spawned_retention_prunes_on_its_timer_and_not_before() {
+  let (directory, db) = database().await;
+  record_at(
+    &db,
+    "aud_old",
+    "secret.updated",
+    "2000-01-01T00:00:00+00:00",
+  )
+  .await;
+  let retention = Retention::new(directory.path().join("archive"), 30);
+  let count = || async {
+    sqlx::query_scalar::<_, i64>("SELECT COUNT(*) FROM audit_events WHERE id='aud_old'")
+      .fetch_one(db.pool())
+      .await
+      .unwrap()
+  };
+
+  // The first pass is one period away: startup applies the policy itself.
+  let idle = audit_chain::spawn_retention(
+    db.pool().clone(),
+    retention.clone(),
+    std::time::Duration::from_secs(3600),
+  );
+  tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+  idle.abort();
+  assert_eq!(count().await, 1);
+
+  let task = audit_chain::spawn_retention(
+    db.pool().clone(),
+    retention,
+    std::time::Duration::from_millis(20),
+  );
+  tokio::time::timeout(std::time::Duration::from_secs(5), async {
+    while count().await > 0 {
+      tokio::time::sleep(std::time::Duration::from_millis(10)).await;
+    }
+  })
+  .await
+  .expect("retention never ran");
+  task.abort();
+  let report = verify(&db).await;
+  assert!(report.ok, "chain broke: {:?}", report.broken);
+  assert_eq!(report.pruned_seq, Some(1));
 }

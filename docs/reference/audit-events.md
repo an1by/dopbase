@@ -66,8 +66,8 @@ dopbase audit verify --anchor 42:<HASH> # later: fails if record 42 changed or v
 ```
 
 The anchor's status is `matched`, `mismatch` (the log was rewritten up to that
-record), `missing` (records up to it were deleted), or `pruned` (retention
-removed it; compare it with the archive). The server also logs the head as an
+record), `missing` (that record and any after it were deleted), or `pruned`
+(retention removed it; compare it with the archive). The server also logs the head as an
 `audit checkpoint` at startup, at shutdown, and after every verification, so a
 log collector that ships the server's output elsewhere keeps anchors without
 any extra setup. `dopbase audit export` streams the records themselves, chain
@@ -106,8 +106,7 @@ When records expire, Dopbase applies one clear rule:
    like an export.
 2. Only then are they deleted, in the same transaction, together with an
    anchor recording the newest removed record's position and hash. If any
-   step fails, the whole pass is undone and the operation being audited
-   still succeeds.
+   step fails, the whole pass is undone and runs again next time.
 3. An `audit.pruned` record joins the chain, naming the range removed, the
    hash it was pruned through, and the archive file. Verification requires
    it to match the anchor, so moving the anchor by hand to hide records
@@ -120,8 +119,9 @@ Expired legacy records are archived the same way, to
 `audit-legacy-<FIRST_ID>-<LAST_ID>.jsonl`, and need no anchor because they
 sit outside the chain.
 
-Retention applies once at startup and then on each audit write, so a running
-server prunes without a scheduler. Only the oldest contiguous run of records
+Retention runs once at startup and then once a day while the server is up,
+so a record can stay up to a day past its window. Each run writes at most one
+archive file and one `audit.pruned` record. Only the oldest contiguous run of records
 is removed; a record timestamped before its predecessor, which a backwards
 clock step can produce, is kept until everything before it has expired too,
 because deleting it would leave a hole no anchor can describe.
