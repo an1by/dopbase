@@ -59,3 +59,23 @@ it("returns retry failures to the operation without calling them password errors
   await rejected;
   expect(reauth.error.value).toBeNull();
 });
+
+it("does not queue a challenge that arrives after cancellation", async () => {
+  const reauth = useReauthentication();
+  const scope = new AbortController();
+  let reject!: (cause: unknown) => void;
+  const action = vi.fn(
+    () =>
+      new Promise<void>((_resolve, fail) => {
+        reject = fail;
+      }),
+  );
+  const result = reauth.runWithReauth(action, scope.signal);
+  const rejected = expect(result).rejects.toMatchObject({ name: "AbortError" });
+  scope.abort();
+  reject(challenge());
+  await rejected;
+  vi.mocked(authApi.reauthenticate).mockResolvedValueOnce();
+  await reauth.submit("fixture-password");
+  expect(action).toHaveBeenCalledTimes(1);
+});

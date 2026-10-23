@@ -102,6 +102,7 @@ export function useReauthentication() {
       await action();
     } catch (cause) {
       if (!isChallenge(cause)) throw cause;
+      if (signal?.aborted) throw cancellation();
       onPark?.();
       await new Promise<void>((resolve, reject) => {
         const operation: PendingOperation = { action, resolve, reject, signal };

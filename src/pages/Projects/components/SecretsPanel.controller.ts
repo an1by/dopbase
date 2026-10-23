@@ -43,6 +43,7 @@ export function useSecretsPanelController(environmentId: Ref<string>) {
   let loadRequest: AbortController | null = null;
   let operationScope = new AbortController();
   let editorScope = new AbortController();
+  let editorImportScope = new AbortController();
 
   const revealedKey = ref<string | null>(null);
   const revealedValue = ref<string | null>(null);
@@ -100,6 +101,7 @@ export function useSecretsPanelController(environmentId: Ref<string>) {
     (target) => {
       operationScope.abort();
       operationScope = new AbortController();
+      editorImportScope.abort();
       editorScope.abort();
       editorScope = new AbortController();
       hideRevealed();
@@ -112,6 +114,7 @@ export function useSecretsPanelController(environmentId: Ref<string>) {
     loadRequest?.abort();
     operationScope.abort();
     editorScope.abort();
+    editorImportScope.abort();
     hideRevealed();
     wipeEditor();
   });
@@ -294,73 +297,91 @@ export function useSecretsPanelController(environmentId: Ref<string>) {
   }
 
   function closeEditor(): void {
+    cancelEditorImport();
     editorScope.abort();
     editorScope = new AbortController();
     wipeEditor();
   }
 
-  /** Runs the server dry-run and parks the result for confirmation. */
-  async function saveDraft(): Promise<boolean> {
-    if (!editorCanSave.value || editorContent.value === null) return false;
+  function cancelEditorImport(): void {
+    editorImportScope.abort();
+    editorImportScope = new AbortController();
+    editorSaving.value = false;
+    editorDiff.value = null;
+  }
+
+  watch(editorContent, cancelEditorImport, { flush: "sync" });
+
+  /** Previews or applies the captured editor draft after password confirmation. */
+  async function importDraft(dryRun: boolean): Promise<boolean> {
+    if (editorContent.value === null || editorSaving.value) return false;
+    if (dryRun ? !editorCanSave.value : editorDiff.value === null) return false;
     const target = environmentId.value;
+    const content = editorContent.value;
+    const signal = editorImportScope.signal;
+    const request = {
+      mode: "replace" as const,
+      dryRun,
+      entries: editorEntries.value.map(({ key, value }) => ({ key, value })),
+      ...(dryRun
+        ? {}
+        : {
+            envLayout: stripLayoutValues(content),
+            expectedRevision: editorDiff.value!.revision,
+          }),
+    };
     editorSaving.value = true;
     editorError.value = null;
     try {
-      const result = await secretsApi.importSecrets(target, {
-        mode: "replace",
-        dryRun: true,
-        entries: editorEntries.value,
-      });
-      if (environmentId.value !== target) return false;
-      editorDiff.value = result;
-      return true;
+      await runWithReauth(async () => {
+        const result = await secretsApi.importSecrets(target, request, signal);
+        if (signal.aborted || environmentId.value !== target) return;
+        if (dryRun) {
+          editorDiff.value = result;
+        } else {
+          editorBaseline.value = content;
+          editorDiff.value = null;
+          hideRevealed();
+          await load(target);
+        }
+      }, signal);
+      return !signal.aborted && environmentId.value === target;
     } catch (cause) {
-      if (environmentId.value !== target) return false;
-      editorError.value = describeError(
-        cause,
-        "The changes are not valid. Check the editor and try again.",
-      );
+      if (
+        signal.aborted ||
+        environmentId.value !== target ||
+        (cause instanceof DOMException && cause.name === "AbortError")
+      )
+        return false;
+      if (cause instanceof ApiError && cause.hasCode("IMPORT_PREVIEW_STALE")) {
+        editorDiff.value = null;
+        editorError.value = "The secrets changed. Preview your changes again.";
+      } else {
+        editorError.value = describeError(
+          cause,
+          dryRun
+            ? "The changes are not valid. Check the editor and try again."
+            : "The changes could not be saved. Nothing may have changed — review and try again.",
+        );
+      }
       return false;
     } finally {
-      if (environmentId.value === target) editorSaving.value = false;
+      if (!signal.aborted && environmentId.value === target)
+        editorSaving.value = false;
     }
   }
 
-  /** Applies the confirmed diff and persists the value-free layout. */
-  async function applyDraft(): Promise<boolean> {
-    if (editorContent.value === null || editorDiff.value === null) return false;
-    const target = environmentId.value;
-    const revision = editorDiff.value.revision;
-    editorSaving.value = true;
-    editorError.value = null;
-    try {
-      await secretsApi.importSecrets(target, {
-        mode: "replace",
-        dryRun: false,
-        entries: editorEntries.value,
-        envLayout: stripLayoutValues(editorContent.value),
-        expectedRevision: revision,
-      });
-      if (environmentId.value !== target) return false;
-      editorBaseline.value = editorContent.value;
-      editorDiff.value = null;
-      hideRevealed();
-      await load(target);
-      return true;
-    } catch (cause) {
-      if (environmentId.value !== target) return false;
-      editorError.value = describeError(
-        cause,
-        "The changes could not be saved. Nothing may have changed — review and try again.",
-      );
-      return false;
-    } finally {
-      if (environmentId.value === target) editorSaving.value = false;
-    }
+  function saveDraft(): Promise<boolean> {
+    return importDraft(true);
+  }
+
+  function applyDraft(): Promise<boolean> {
+    return importDraft(false);
   }
 
   /** Reverts the buffer to the last loaded or saved content. */
   function discardDraft(): void {
+    cancelEditorImport();
     if (editorBaseline.value !== null)
       editorContent.value = editorBaseline.value;
     editorDiff.value = null;
@@ -369,7 +390,7 @@ export function useSecretsPanelController(environmentId: Ref<string>) {
 
   /** Returns from the confirmation summary to the buffer. */
   function backToEditing(): void {
-    editorDiff.value = null;
+    cancelEditorImport();
   }
 
   return {

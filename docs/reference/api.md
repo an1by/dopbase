@@ -71,6 +71,23 @@ correlation is returned in the `X-Request-Id` header. Errors never include
 request bodies, plaintext secrets, tokens, key material, SQL, or filesystem
 details.
 
+## Import authentication
+
+`POST /api/v1/environments/{id}/secrets/import` requires a human project
+account. Browser sessions must include `X-Dopbase-CSRF` and have confirmed
+their password within the last ten minutes. This applies to merge and replace,
+for both previews (`dryRun: true`) and actual imports.
+
+An expired password confirmation returns `403` with
+`RECENT_AUTHENTICATION_REQUIRED` before any stored values are compared. Confirm
+the password through `/api/v1/auth/reauthenticate`, then retry the same request.
+Existing CLI authentication behavior is unchanged.
+
+Successful previews record `secret.import_previewed` with the actor,
+project/environment, mode, and submitted entry count. They do not change
+secrets, versions, or layout. If the audit event cannot be saved, the server
+returns an error without the comparison results.
+
 ## Secret editor snapshots
 
 `POST /api/v1/environments/{id}/secrets/export` returns `entries`, `revision`,

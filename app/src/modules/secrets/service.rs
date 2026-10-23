@@ -264,12 +264,13 @@ pub async fn import(
   id: &str,
   request: ImportSecretsRequest,
 ) -> Result<ImportSecretsResponse, HttpError> {
+  require_recent_browser_auth(identity)?;
   validate_import(&request)?;
   let (admin_id, email) = require_project_manager(identity)?;
   let env = environment(state, id).await?;
   // Applying takes the SQLite write reservation before reading. This makes
   // the diff, version selection, replacement deletes, layout, and audit one
-  // serializable state transition. Dry runs intentionally remain read-only.
+  // serializable state transition. Previews only write their audit event.
   let mut tx = if request.dry_run {
     state.db.pool().begin().await?
   } else {
@@ -325,6 +326,21 @@ pub async fn import(
   }
   if request.dry_run {
     tx.rollback().await?;
+    common::audit(
+      state.db.pool(),
+      "admin",
+      Some(admin_id),
+      Some(email),
+      "secret.import_previewed",
+      Some(&env.project_id),
+      Some(id),
+      Some("environment"),
+      Some(id),
+      serde_json::json!({
+        "mode": match request.mode { ImportMode::Merge => "merge", ImportMode::Replace => "replace" },
+        "entryCount": request.entries.len(),
+      }),
+    ).await?;
     return Ok(ImportSecretsResponse {
       added_keys: added,
       updated_keys: updated,
