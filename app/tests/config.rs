@@ -418,7 +418,11 @@ fn creates_owner_only_data_directory() {
 fn uncomment_server_examples(reference: &str) -> String {
   reference
     .lines()
-    .filter_map(|line| line.strip_prefix("# "))
+    .filter_map(|line| {
+      line
+        .strip_prefix("# ")
+        .or((!line.starts_with('#')).then_some(line))
+    })
     .filter(|line| {
       line.starts_with("[master_key]")
         || [
@@ -467,12 +471,17 @@ fn generated_references_load_defaults_and_uncommented_server_examples() {
     app::constants::config::CLIENT_CONFIG_FILENAME,
   ] {
     let contents = fs::read_to_string(data_dir.join(filename)).unwrap();
-    assert!(
-      contents
-        .lines()
-        .all(|line| line.is_empty() || line.starts_with('#'))
-    );
-    assert!(toml::from_str::<toml::Table>(&contents).unwrap().is_empty());
+    // Everything is a commented example except the audit retention that new
+    // instances start with.
+    let active = toml::from_str::<toml::Table>(&contents).unwrap();
+    if filename == SERVER_CONFIG_FILENAME {
+      assert_eq!(
+        active,
+        toml::from_str::<toml::Table>("audit_retention_days = 365").unwrap()
+      );
+    } else {
+      assert!(active.is_empty());
+    }
   }
   let client = app::cli::local_config::read(&data_dir.join("config.toml")).unwrap();
   assert_eq!(client.version, 1);

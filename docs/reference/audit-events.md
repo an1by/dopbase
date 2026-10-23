@@ -93,9 +93,9 @@ fields included, for write-once storage.
 ## Retention
 
 `audit_retention_days` in `server.toml`, or `DOPBASE_AUDIT_RETENTION_DAYS`,
-sets how long audit records are kept. Unset, which is the default, keeps the
-whole log. A window of `0` days is rejected: a policy that removes everything
-is a misconfiguration, not a retention rule.
+sets how many days audit records are kept. New instances start with
+`audit_retention_days = 365` in `server.toml`. Remove the line to keep the
+whole log. `0` is rejected.
 
 When records expire, Dopbase applies one clear rule:
 

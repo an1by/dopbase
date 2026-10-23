@@ -32,14 +32,11 @@
 # Environment: DOPBASE_SHUTDOWN_GRACE_SECONDS
 # shutdown_grace_seconds = 10
 
-# Days to keep audit records. Expired records are archived as JSON
-# lines to the audit-archive directory inside the data directory and
-# then deleted; audit verification continues from where they stopped,
-# so pruning does not read as tampering. Back up that directory with
-# the rest of your data: backups store the database only.
-# Accepts: 1 or more. Default: unset, the whole log is kept.
+# Days to keep audit records. Older records are moved to the
+# audit-archive directory in the data directory.
+# Accepts: 1 or more. Remove this line to keep records forever.
 # Environment: DOPBASE_AUDIT_RETENTION_DAYS
-# audit_retention_days = 365
+audit_retention_days = 365
 
 # Reverse proxies allowed to report the client address. Audit records
 # store the connection's address unless it comes from one of these, in
@@ -52,12 +49,12 @@
 # Enable the web UI. The CLI and REST API remain available when disabled.
 # Accepts: true or false. Default: true.
 # Environment: DOPBASE_WEB_UI
-# web_ui = true
+web_ui = true
 
 # Enable Swagger UI at /api/docs.
 # Accepts: true or false. Default: false.
 # Environment: DOPBASE_DOCS
-# docs = false
+docs = false
 
 # Master encryption key settings.
 # Uncomment the table header before enabling settings below.

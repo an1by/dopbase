@@ -46,20 +46,13 @@ configurable retention archives expired records before deleting them.
   administrator account and reads no secret values.
 
 - `audit_retention_days` in `server.toml`, or `DOPBASE_AUDIT_RETENTION_DAYS`,
-  sets how long audit records are kept; unset keeps the whole log. Expired
-  records are archived as JSON lines to `audit-archive/` in the data
-  directory and only then deleted, in the same transaction, together with an
-  anchor that records where the chain continues. `dopbase audit verify`
-  picks the chain back up at that anchor and reports
-  `Pruned through: sequence N`, so retention never reads as tampering. Only
-  the oldest contiguous run of records is removed. Retention applies at
-  startup and on each audit write, so no scheduler is involved. Back up
-  `audit-archive/` separately: snapshots store the database only.
-
-  Each pass that removes records appends an `audit.pruned` record naming the
-  range and archive, and verification requires it to match the anchor, so a
-  hand-moved anchor fails. A failed pass is undone without failing the
-  audited operation. Expired legacy records are archived and removed too.
+  sets how many days audit records are kept; unset keeps them forever. New
+  instances start with `audit_retention_days = 365` in the generated
+  `server.toml`. Existing instances keep their whole log until you add the
+  setting. Older records are archived as JSON lines to `audit-archive/` in
+  the data directory before they are deleted, and an `audit.pruned` record
+  marks where the chain continues, so `dopbase audit verify` still passes.
+  Back up `audit-archive/` separately: snapshots store the database only.
 
 ### Changed
 

@@ -41,8 +41,9 @@ pub struct ServerConfig {
   pub public_url: String,
   pub database_url: String,
   pub shutdown_grace_seconds: u64,
-  /// Days audit records are kept. When set, expired records are archived to
-  /// the data directory and deleted; unset keeps the whole log.
+  /// Days audit records are kept before they are archived and deleted.
+  /// Unset keeps them forever. New instances get a year through the
+  /// generated `server.toml`.
   #[serde(skip)]
   pub audit_retention_days: Option<u64>,
   /// Reverse proxies allowed to report the client address through
