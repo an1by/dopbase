@@ -182,6 +182,10 @@ pub fn router(state: AppState) -> Router {
       maintenance_gate,
     ))
     .layer(axum::middleware::from_fn(middlewares::security::headers))
+    .layer(middleware::from_fn_with_state(
+      state.clone(),
+      middlewares::client_ip::capture,
+    ))
     .with_state(state)
 }
 
@@ -471,9 +475,13 @@ async fn serve_instance(
   // The audit head goes to the log at startup and shutdown, so the log
   // collector keeps a copy of it outside the database.
   crate::services::audit_chain::log_checkpoint(state.db.pool()).await;
-  let serve_result = axum::serve(listener, router(state.clone()))
-    .with_graceful_shutdown(shutdown_signal())
-    .await;
+  // Connection info carries the peer address the audit log records.
+  let serve_result = axum::serve(
+    listener,
+    router(state.clone()).into_make_service_with_connect_info::<std::net::SocketAddr>(),
+  )
+  .with_graceful_shutdown(shutdown_signal())
+  .await;
   if daemonized {
     let _ = crate::daemon::remove_pid_file(&crate::daemon::pid_file_path(&state.config.data_dir));
   }

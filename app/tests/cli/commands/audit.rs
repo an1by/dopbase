@@ -195,6 +195,7 @@ async fn audit_export_streams_json_lines_with_chain_fields_and_filters() {
       None,
       None,
       None,
+      None,
       "{}",
       &chrono::Utc::now().to_rfc3339(),
     )

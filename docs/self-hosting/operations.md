@@ -13,6 +13,14 @@ Localhost is the expected development default. Any server reachable over a netwo
 
 Terminate TLS with a reviewed reverse proxy and restrict the Dopbase listener to the network interfaces that need it.
 
+Behind a proxy, every connection Dopbase sees comes from the proxy, so the audit log would record the proxy's address for every action. List the proxy in `trusted_proxies` in `server.toml`, or in `DOPBASE_TRUSTED_PROXIES`, and Dopbase reads the client address from `X-Forwarded-For` for connections from that proxy only:
+
+```toml
+trusted_proxies = ["127.0.0.1", "172.16.0.0/12"]
+```
+
+Dopbase reads the header from the right and stops at the first address that is not a trusted proxy, so a client cannot choose the address it is recorded under. Configure the proxy to set or append `X-Forwarded-For`, and list only proxies you run: any address on the list can claim to be any client.
+
 ## Monitoring
 
 Monitor service availability, database health, disk space, backup completion, authentication failures, and abnormal audit activity. Monitoring output must not contain request bodies or secret values.

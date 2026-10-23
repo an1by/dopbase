@@ -125,7 +125,7 @@ or `pruned`; `mismatch` and `missing` set `ok` to `false`. Passing only one of
 the two returns `400`.
 
 The chain columns are additive: the audit list keeps its shape and filters,
-and every item now carries `seq`, `prevHash`, and `recordHash`, so an exported
+and every item now carries `ipAddress`, `seq`, `prevHash`, and `recordHash`, so an exported
 record can serve as an anchor. Recomputing hashes from an export is not
 supported yet: the list returns metadata re-serialized and omits the network
 fields the hash covers. Verification reads no secret values. `dopbase audit

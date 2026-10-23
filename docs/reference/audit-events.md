@@ -158,6 +158,12 @@ IP address
 user agent
 ```
 
+The IP address is the client that made the request. Behind a reverse proxy,
+list the proxy in `trusted_proxies` so the address comes from
+`X-Forwarded-For` instead of being the proxy's own; see
+[operations](/self-hosting/operations). Records written outside a request,
+such as `audit.pruned` during retention, have no IP address.
+
 The actor type is `root` for the root user and `admin` for every other
 administrator, so actions taken with the root account stand out. Runner tokens
 record `runner`, failed sign-ins `anonymous`, a restore during setup

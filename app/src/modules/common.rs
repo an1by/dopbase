@@ -151,6 +151,7 @@ pub async fn audit(
 ) -> Result<(), sqlx::Error> {
   let metadata = metadata.to_string();
   let created_at = chrono::Utc::now().to_rfc3339();
+  let ip_address = crate::services::client_ip::current().map(|address| address.to_string());
   crate::services::audit_chain::append(
     connection,
     &token::public_id("aud_"),
@@ -162,6 +163,7 @@ pub async fn audit(
     environment_id,
     resource_type,
     resource_id,
+    ip_address.as_deref(),
     &metadata,
     &created_at,
   )

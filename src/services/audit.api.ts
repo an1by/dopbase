@@ -15,6 +15,8 @@ export interface AuditEvent {
   environmentId: string | null;
   resourceType: string | null;
   resourceId: string | null;
+  /** Client address, or null for records written outside a request. */
+  ipAddress: string | null;
   metadata: Record<string, unknown>;
   createdAt: string;
 }

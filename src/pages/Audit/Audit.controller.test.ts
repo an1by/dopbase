@@ -23,6 +23,7 @@ const event = {
   environmentId: "env_1",
   resourceType: "secret",
   resourceId: "DATABASE_URL",
+  ipAddress: null,
   metadata: {},
   createdAt: "2026-08-28T00:00:00Z",
 };

@@ -1380,3 +1380,93 @@ async fn disabled_web_ui_blocks_pages_and_assets_but_keeps_cli_api_and_optional_
 
 #[path = "modules/secrets/import.rs"]
 mod secrets_import;
+
+#[tokio::test]
+async fn audit_records_store_the_client_ip_through_trusted_proxies_only() {
+  use axum::extract::ConnectInfo;
+  use std::net::SocketAddr;
+
+  let directory = TempDir::new().unwrap();
+  let config = ServerConfig {
+    data_dir: directory.path().to_path_buf(),
+    database_url: format!("sqlite://{}", directory.path().join("dopbase.db").display()),
+    master_key: app::config::MasterKeyConfig {
+      provider: "file".into(),
+      path: directory.path().join("master.key"),
+    },
+    trusted_proxies: vec!["10.0.0.0/8".parse().unwrap()],
+    ..ServerConfig::default()
+  };
+  let state = server::build_setup_state(config).await.unwrap();
+  let router = server::router(state.clone());
+  let token = bootstrap_admin(&state, &router).await;
+
+  // Each request carries the connection's peer address, as the real server
+  // supplies it, plus a forwarding header naming another address.
+  let create = |peer: &str, name: &str| {
+    let mut request = Request::builder()
+      .method("POST")
+      .uri("/api/v1/projects")
+      .header(header::AUTHORIZATION, format!("Bearer {token}"))
+      .header(header::CONTENT_TYPE, "application/json")
+      .header("x-forwarded-for", "198.51.100.9, 203.0.113.7")
+      .body(Body::from(json!({ "name": name }).to_string()))
+      .unwrap();
+    request
+      .extensions_mut()
+      .insert(ConnectInfo(peer.parse::<SocketAddr>().unwrap()));
+    router.clone().oneshot(request)
+  };
+  assert_eq!(
+    create("10.0.0.2:40000", "via-proxy")
+      .await
+      .unwrap()
+      .status(),
+    201
+  );
+  assert_eq!(
+    create("192.0.2.50:40000", "direct").await.unwrap().status(),
+    201
+  );
+
+  let ip_for = |name: &'static str| {
+    let pool = state.db.pool().clone();
+    async move {
+      sqlx::query_scalar::<_, Option<String>>(
+        "SELECT ip_address FROM audit_events WHERE action='project.created' AND json_extract(metadata,'$.name')=?",
+      )
+      .bind(name)
+      .fetch_one(&pool)
+      .await
+      .unwrap()
+    }
+  };
+  // Behind a trusted proxy the nearest untrusted hop is the client; a
+  // direct client cannot choose its address by sending the header.
+  assert_eq!(ip_for("via-proxy").await.as_deref(), Some("203.0.113.7"));
+  assert_eq!(ip_for("direct").await.as_deref(), Some("192.0.2.50"));
+
+  // The list API returns it, and it is covered by the chain's hashes.
+  let (status, page, _) = call(
+    &router,
+    "GET",
+    "/api/v1/audit-events?limit=5",
+    Some(&token),
+    None,
+  )
+  .await;
+  assert_eq!(status, 200);
+  assert!(
+    page["data"]["items"]
+      .as_array()
+      .unwrap()
+      .iter()
+      .any(|item| item["ipAddress"] == "203.0.113.7"),
+    "{page}"
+  );
+  let report = app::services::audit_chain::verify(state.db.pool())
+    .await
+    .unwrap();
+  assert!(report.ok, "chain broke: {:?}", report.broken);
+  state.db.close().await;
+}

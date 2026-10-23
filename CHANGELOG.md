@@ -63,6 +63,14 @@ configurable retention archives expired records before deleting them.
 
 ### Changed
 
+- Audit records store the client's IP address, which was always empty
+  before. Behind a reverse proxy, list it in `trusted_proxies` in
+  `server.toml` or `DOPBASE_TRUSTED_PROXIES`, and the address comes from
+  `X-Forwarded-For` for that proxy's connections only, so a client cannot
+  choose the address it is recorded under. The audit list API returns
+  `ipAddress`, and the Audit page shows it with the actor type when an
+  event is expanded.
+
 - Audit records name the root user's actions with the actor type `root`
   instead of `admin`, so they stand apart from other administrators. Other
   administrators keep `admin`.

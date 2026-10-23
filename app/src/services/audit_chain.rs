@@ -173,6 +173,7 @@ pub async fn append(
   environment_id: Option<&str>,
   resource_type: Option<&str>,
   resource_id: Option<&str>,
+  ip_address: Option<&str>,
   metadata: &str,
   created_at: &str,
 ) -> Result<(), sqlx::Error> {
@@ -190,15 +191,15 @@ pub async fn append(
     environment_id.unwrap_or(GENESIS),
     resource_type.unwrap_or(GENESIS),
     resource_id.unwrap_or(GENESIS),
-    GENESIS, // ip_address, stored as NULL
+    ip_address.unwrap_or(GENESIS),
     GENESIS, // user_agent, stored as NULL
     metadata,
     created_at,
     &prev_hash,
   ]);
-  sqlx::query("INSERT INTO audit_events(id,actor_type,actor_id,actor_label,action,project_id,environment_id,resource_type,resource_id,metadata,created_at,seq,prev_hash,record_hash) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?)")
+  sqlx::query("INSERT INTO audit_events(id,actor_type,actor_id,actor_label,action,project_id,environment_id,resource_type,resource_id,ip_address,metadata,created_at,seq,prev_hash,record_hash) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)")
     .bind(id).bind(actor_type).bind(actor_id).bind(actor_label).bind(action)
-    .bind(project_id).bind(environment_id).bind(resource_type).bind(resource_id)
+    .bind(project_id).bind(environment_id).bind(resource_type).bind(resource_id).bind(ip_address)
     .bind(metadata).bind(created_at).bind(seq).bind((seq > 1).then_some(prev_hash.as_str())).bind(record_hash)
     .execute(&mut *connection).await.map(|_| ())
 }
@@ -562,6 +563,7 @@ impl Retention {
       None,
       None,
       Some("audit"),
+      None,
       None,
       &metadata.to_string(),
       &chrono::Utc::now().to_rfc3339(),

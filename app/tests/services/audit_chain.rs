@@ -38,6 +38,7 @@ async fn record_at(
     Some("env_1"),
     Some("secret"),
     Some("API_KEY"),
+    None,
     &json!({ "action": action }).to_string(),
     created_at,
   )
@@ -116,6 +117,7 @@ async fn concurrent_appends_claim_distinct_sequence_numbers() {
         None,
         None,
         "secret.updated",
+        None,
         None,
         None,
         None,
@@ -502,6 +504,7 @@ async fn a_failed_retention_pass_leaves_the_callers_write_intact() {
     None,
     None,
     "secret.updated",
+    None,
     None,
     None,
     None,

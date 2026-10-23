@@ -12,7 +12,7 @@ use url::{Host, Url};
 use crate::constants::config::{
   CLIENT_CONFIG_FILENAME, DATA_DIRECTORY_NAME, DATABASE_FILENAME, DEFAULT_PORT,
   ENV_AUDIT_RETENTION_DAYS, ENV_DATA_DIR, ENV_DOCS, ENV_HOST, ENV_MASTER_KEY_PATH, ENV_PORT,
-  ENV_PUBLIC_URL, ENV_SHUTDOWN_GRACE_SECONDS, ENV_WEB_UI, MASTER_KEY_FILENAME,
+  ENV_PUBLIC_URL, ENV_SHUTDOWN_GRACE_SECONDS, ENV_TRUSTED_PROXIES, ENV_WEB_UI, MASTER_KEY_FILENAME,
   SERVER_CONFIG_FILENAME, SERVER_HOST_PLACEHOLDER,
 };
 pub use crate::constants::config::{DEFAULT_BIND_ADDRESS, DEFAULT_PUBLIC_URL};
@@ -45,6 +45,11 @@ pub struct ServerConfig {
   /// the data directory and deleted; unset keeps the whole log.
   #[serde(skip)]
   pub audit_retention_days: Option<u64>,
+  /// Reverse proxies allowed to report the client address through
+  /// `X-Forwarded-For`. Empty trusts no one, so audit records store the
+  /// connection's peer address.
+  #[serde(skip)]
+  pub trusted_proxies: Vec<crate::services::client_ip::ProxyNetwork>,
   #[serde(skip)]
   pub docs_enabled: bool,
   #[serde(skip)]
@@ -91,6 +96,7 @@ struct ServerConfigFile {
   host: Option<String>,
   shutdown_grace_seconds: Option<u64>,
   audit_retention_days: Option<u64>,
+  trusted_proxies: Option<Vec<String>>,
   docs: Option<bool>,
   web_ui: Option<bool>,
   master_key: Option<MasterKeyConfigFile>,
@@ -112,6 +118,7 @@ pub struct EnvironmentOverrides {
   pub host: Option<String>,
   pub shutdown_grace_seconds: Option<String>,
   pub audit_retention_days: Option<String>,
+  pub trusted_proxies: Option<String>,
   pub docs: Option<String>,
   pub web_ui: Option<String>,
   pub master_key_path: Option<PathBuf>,
@@ -126,6 +133,7 @@ impl EnvironmentOverrides {
       host: env::var(ENV_HOST).ok(),
       shutdown_grace_seconds: env::var(ENV_SHUTDOWN_GRACE_SECONDS).ok(),
       audit_retention_days: env::var(ENV_AUDIT_RETENTION_DAYS).ok(),
+      trusted_proxies: env::var(ENV_TRUSTED_PROXIES).ok(),
       docs: env::var(ENV_DOCS).ok(),
       web_ui: env::var(ENV_WEB_UI).ok(),
       master_key_path: env::var_os(ENV_MASTER_KEY_PATH).map(PathBuf::from),
@@ -163,6 +171,7 @@ impl ServerConfig {
       public_url: DEFAULT_PUBLIC_URL.into(),
       shutdown_grace_seconds: 10,
       audit_retention_days: None,
+      trusted_proxies: Vec::new(),
       docs_enabled: false,
       web_ui_enabled: true,
       daemonized: false,
@@ -256,6 +265,13 @@ impl ServerConfig {
     if let Some(value) = file.audit_retention_days {
       self.audit_retention_days = Some(value);
     }
+    if let Some(values) = file.trusted_proxies {
+      self.trusted_proxies = values
+        .iter()
+        .map(|value| value.parse())
+        .collect::<Result<_>>()
+        .context("invalid trusted_proxies")?;
+    }
     if let Some(value) = file.web_ui {
       self.web_ui_enabled = value;
     }
@@ -292,6 +308,10 @@ impl ServerConfig {
           .parse()
           .context("invalid DOPBASE_AUDIT_RETENTION_DAYS")?,
       );
+    }
+    if let Some(value) = environment.trusted_proxies {
+      self.trusted_proxies = crate::services::client_ip::parse_list(&value)
+        .context("invalid DOPBASE_TRUSTED_PROXIES")?;
     }
     if let Some(value) = environment.web_ui {
       self.web_ui_enabled = value.parse().context("invalid DOPBASE_WEB_UI")?;

@@ -41,6 +41,14 @@
 # Environment: DOPBASE_AUDIT_RETENTION_DAYS
 # audit_retention_days = 365
 
+# Reverse proxies allowed to report the client address. Audit records
+# store the connection's address unless it comes from one of these, in
+# which case the X-Forwarded-For header is read instead. List only
+# proxies you run: any address listed here can claim to be any client.
+# Accepts: IP addresses or CIDR networks. Default: none.
+# Environment: DOPBASE_TRUSTED_PROXIES (comma-separated)
+# trusted_proxies = ["127.0.0.1", "10.0.0.0/8"]
+
 # Enable the web UI. The CLI and REST API remain available when disabled.
 # Accepts: true or false. Default: true.
 # Environment: DOPBASE_WEB_UI

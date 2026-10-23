@@ -13,6 +13,10 @@ pub struct AuditEvent {
   pub environment_id: Option<String>,
   pub resource_type: Option<String>,
   pub resource_id: Option<String>,
+  /// The client address, resolved through any trusted proxies. Absent for
+  /// records written outside a request and for records from before it was
+  /// captured.
+  pub ip_address: Option<String>,
   #[sqlx(json)]
   pub metadata: Value,
   pub created_at: String,

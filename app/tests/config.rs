@@ -428,6 +428,7 @@ fn uncomment_server_examples(reference: &str) -> String {
           "public_url",
           "shutdown_grace_seconds",
           "audit_retention_days",
+          "trusted_proxies",
           "docs",
           "web_ui",
           "provider",
@@ -496,6 +497,14 @@ fn generated_references_load_defaults_and_uncommented_server_examples() {
   );
   assert_eq!(reloaded.shutdown_grace_seconds, 10);
   assert_eq!(reloaded.audit_retention_days, Some(365));
+  assert_eq!(
+    reloaded
+      .trusted_proxies
+      .iter()
+      .map(ToString::to_string)
+      .collect::<Vec<_>>(),
+    ["127.0.0.1/32", "10.0.0.0/8"]
+  );
   assert!(!reloaded.docs_enabled);
   assert!(reloaded.web_ui_enabled);
   assert_eq!(reloaded.master_key.provider, "file");
@@ -684,6 +693,69 @@ fn audit_retention_days_reads_from_file_and_environment() {
   .unwrap_err();
   assert!(
     format!("{error:#}").contains("invalid DOPBASE_AUDIT_RETENTION_DAYS"),
+    "{error}"
+  );
+}
+
+#[test]
+fn trusted_proxies_read_from_file_and_environment() {
+  let directory = tempfile::TempDir::new().unwrap();
+  let data_dir = directory.path().join("data");
+  fs::create_dir_all(&data_dir).unwrap();
+  let config_path = data_dir.join(SERVER_CONFIG_FILENAME);
+  let overrides = ServerOverrides {
+    data_dir: Some(data_dir.clone()),
+    ..Default::default()
+  };
+  let networks = |config: &ServerConfig| {
+    config
+      .trusted_proxies
+      .iter()
+      .map(ToString::to_string)
+      .collect::<Vec<_>>()
+  };
+
+  // Unset trusts no proxy.
+  assert!(ServerConfig::default().trusted_proxies.is_empty());
+
+  fs::write(
+    &config_path,
+    "trusted_proxies = [\"10.0.0.0/8\", \"::1\"]\n",
+  )
+  .unwrap();
+  let from_file =
+    ServerConfig::load_with_environment(&overrides, EnvironmentOverrides::default()).unwrap();
+  assert_eq!(networks(&from_file), ["10.0.0.0/8", "::1/128"]);
+
+  // The environment variable wins over the file.
+  let from_environment = ServerConfig::load_with_environment(
+    &overrides,
+    EnvironmentOverrides {
+      trusted_proxies: Some("172.16.0.0/12, 127.0.0.1".into()),
+      ..Default::default()
+    },
+  )
+  .unwrap();
+  assert_eq!(
+    networks(&from_environment),
+    ["172.16.0.0/12", "127.0.0.1/32"]
+  );
+
+  fs::write(&config_path, "trusted_proxies = [\"10.0.0.0/33\"]\n").unwrap();
+  let error =
+    ServerConfig::load_with_environment(&overrides, EnvironmentOverrides::default()).unwrap_err();
+  assert!(format!("{error:#}").contains("trusted_proxies"), "{error}");
+  fs::remove_file(&config_path).unwrap();
+  let error = ServerConfig::load_with_environment(
+    &overrides,
+    EnvironmentOverrides {
+      trusted_proxies: Some("proxy.internal".into()),
+      ..Default::default()
+    },
+  )
+  .unwrap_err();
+  assert!(
+    format!("{error:#}").contains("invalid DOPBASE_TRUSTED_PROXIES"),
     "{error}"
   );
 }
