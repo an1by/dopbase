@@ -311,8 +311,8 @@ async fn audit_retention_archives_expired_records_and_verification_continues() {
     .await
     .unwrap();
   assert_eq!(
-    remaining, 1,
-    "only the record that resumed the log survives"
+    remaining, 2,
+    "only the record that resumed the log and the audit.pruned record survive"
   );
   let archive_dir = fixture.directory.path().join("audit-archive");
   let mut archives = std::fs::read_dir(&archive_dir)
@@ -343,6 +343,6 @@ async fn audit_retention_archives_expired_records_and_verification_continues() {
   assert!(stdout.contains("Pruned through"), "{stdout}");
   let report = fixture.json(&["audit", "verify"]).await;
   assert_eq!(report["ok"], json!(true));
-  assert_eq!(report["records"], json!(1));
+  assert_eq!(report["records"], json!(2));
   assert_eq!(report["prunedSeq"], json!(before));
 }

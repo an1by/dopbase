@@ -23,7 +23,7 @@ use std::{fs, path::PathBuf, sync::OnceLock};
 
 use serde_json::{Value, json};
 use sha2::{Digest, Sha256};
-use sqlx::{Row, SqlitePool, sqlite::SqliteConnection};
+use sqlx::{Connection, Row, SqlitePool, sqlite::SqliteConnection};
 
 /// Domain separator, mixed into every digest so audit hashes cannot collide
 /// with other SHA-256 uses of the same field values.
@@ -234,11 +234,21 @@ pub struct ChainReport {
 }
 
 /// Walk the chain in sequence order and recompute every hash.
+///
+/// The walk runs in one read transaction, so it checks a single snapshot:
+/// appends or retention committing meanwhile cannot make it see a gap.
 pub async fn verify(pool: &SqlitePool) -> Result<ChainReport, sqlx::Error> {
+  let mut snapshot = pool.begin().await?;
+  let report = verify_snapshot(&mut snapshot).await?;
+  snapshot.rollback().await?;
+  Ok(report)
+}
+
+async fn verify_snapshot(connection: &mut SqliteConnection) -> Result<ChainReport, sqlx::Error> {
   let counts = sqlx::query(&format!(
     "SELECT COUNT(*) AS total, COALESCE(SUM({LEGACY}),0) AS legacy FROM audit_events WHERE seq IS NULL"
   ))
-  .fetch_one(pool)
+  .fetch_one(&mut *connection)
   .await?;
   let legacy = counts.get::<i64, _>("legacy").max(0) as u64;
   let unsequenced = (counts.get::<i64, _>("total").max(0) as u64).saturating_sub(legacy);
@@ -256,22 +266,23 @@ pub async fn verify(pool: &SqlitePool) -> Result<ChainReport, sqlx::Error> {
   // there instead of at genesis, so pruning does not look like tampering.
   let anchor =
     sqlx::query("SELECT pruned_seq,pruned_hash FROM audit_chain_anchor WHERE id='chain'")
-      .fetch_optional(pool)
-      .await?;
-  report.pruned_seq = anchor.as_ref().map(|row| row.get::<i64, _>("pruned_seq"));
+      .fetch_optional(&mut *connection)
+      .await?
+      .map(|row| {
+        (
+          row.get::<i64, _>("pruned_seq"),
+          row.get::<String, _>("pruned_hash"),
+        )
+      });
+  report.pruned_seq = anchor.as_ref().map(|(seq, _)| *seq);
   let mut after: Option<i64> = None;
-  let mut previous: Option<(i64, String)> = anchor.map(|row| {
-    (
-      row.get::<i64, _>("pruned_seq"),
-      row.get::<String, _>("pruned_hash"),
-    )
-  });
+  let mut previous: Option<(i64, String)> = anchor.clone();
   'walk: loop {
     let page = sqlx::query_as::<_, Record>(&format!(
       "SELECT {COLUMNS} FROM audit_events WHERE seq IS NOT NULL AND (?1 IS NULL OR seq > ?1) ORDER BY seq ASC LIMIT {VERIFY_PAGE}"
     ))
     .bind(after)
-    .fetch_all(pool)
+    .fetch_all(&mut *connection)
     .await?;
     if page.is_empty() {
       break;
@@ -309,8 +320,44 @@ pub async fn verify(pool: &SqlitePool) -> Result<ChainReport, sqlx::Error> {
       after = Some(seq);
     }
   }
+  if let (None, Some((pruned_seq, pruned_hash))) = (&report.broken, &anchor)
+    && !pruning_is_evidenced(connection, *pruned_seq, pruned_hash).await?
+  {
+    report.broken = Some(ChainBreak {
+      seq: *pruned_seq,
+      id: "audit_chain_anchor".into(),
+      reason: "pruning anchor has no matching audit.pruned record".into(),
+    });
+    report.ok = false;
+  }
   report.ok = report.ok && report.unsequenced == 0;
   Ok(report)
+}
+
+/// Whether a chained `audit.pruned` record vouches for the pruning anchor.
+///
+/// The anchor row lives outside the chain, so on its own anyone could move
+/// it forward to hide the oldest records. Every retention pass that prunes
+/// chained records appends an `audit.pruned` record naming the position and
+/// hash it pruned through, after the anchor, so the newest such record must
+/// match the anchor exactly.
+async fn pruning_is_evidenced(
+  connection: &mut SqliteConnection,
+  pruned_seq: i64,
+  pruned_hash: &str,
+) -> Result<bool, sqlx::Error> {
+  let evidence = sqlx::query(
+    "SELECT json_extract(metadata,'$.throughSeq') AS through_seq, json_extract(metadata,'$.throughHash') AS through_hash \
+     FROM audit_events WHERE action='audit.pruned' AND seq > ? AND json_extract(metadata,'$.throughSeq') IS NOT NULL \
+     ORDER BY seq DESC LIMIT 1",
+  )
+  .bind(pruned_seq)
+  .fetch_optional(&mut *connection)
+  .await?;
+  Ok(evidence.is_some_and(|row| {
+    row.get::<Option<i64>, _>("through_seq") == Some(pruned_seq)
+      && row.get::<Option<String>, _>("through_hash").as_deref() == Some(pruned_hash)
+  }))
 }
 
 /// How long the audit log is kept.
@@ -340,25 +387,63 @@ impl Retention {
 
   /// Archive and delete every record older than the retention window.
   ///
-  /// The caller's connection must hold SQLite's write lock, so the deletion
-  /// and the anchor update are atomic with the transaction that triggered
-  /// them. Returns how many records were removed.
+  /// The caller's connection must hold SQLite's write lock. The work runs in
+  /// a savepoint, so a failure part-way leaves neither a deletion without
+  /// its anchor nor a failed caller: only the retention step is undone.
+  /// Returns how many records were removed.
   pub async fn apply(
     &self,
     connection: &mut SqliteConnection,
   ) -> anyhow::Result<u64> {
-    self
-      .apply_before(connection, &cutoff_for(self.keep_days))
-      .await
+    let mut savepoint = connection.begin().await?;
+    let pruned = self
+      .apply_before(&mut savepoint, &cutoff_for(self.keep_days))
+      .await?;
+    savepoint.commit().await?;
+    Ok(pruned)
   }
 
+  /// Every run that removes something appends an `audit.pruned` record
+  /// naming what it removed, so the pruning anchor is itself evidenced by
+  /// the chain: an anchor that no such record vouches for fails
+  /// verification.
   async fn apply_before(
     &self,
     connection: &mut SqliteConnection,
     cutoff: &str,
   ) -> anyhow::Result<u64> {
     let legacy = self.prune_legacy(connection, cutoff).await?;
-    Ok(legacy + self.prune_chained(connection, cutoff).await?)
+    let chained = self.prune_chained(connection, cutoff).await?;
+    if legacy.is_none() && chained.is_none() {
+      return Ok(0);
+    }
+    let legacy_records = legacy.as_ref().map_or(0, |(records, _)| *records);
+    let removed = legacy_records + chained.as_ref().map_or(0, |pruned| pruned.records);
+    let metadata = json!({
+      "legacyRecords": legacy_records,
+      "legacyArchive": legacy.as_ref().map(|(_, archive)| archive.as_str()),
+      "records": chained.as_ref().map_or(0, |pruned| pruned.records),
+      "archive": chained.as_ref().map(|pruned| pruned.archive.as_str()),
+      "fromSeq": chained.as_ref().map(|pruned| pruned.from_seq),
+      "throughSeq": chained.as_ref().map(|pruned| pruned.through_seq),
+      "throughHash": chained.as_ref().map(|pruned| pruned.through_hash.as_str()),
+    });
+    append(
+      connection,
+      &crate::services::token::public_id("aud_"),
+      "system",
+      None,
+      Some("retention"),
+      "audit.pruned",
+      None,
+      None,
+      Some("audit"),
+      None,
+      &metadata.to_string(),
+      &chrono::Utc::now().to_rfc3339(),
+    )
+    .await?;
+    Ok(removed)
   }
 
   /// Legacy records sit outside the chain, so removing them needs no
@@ -367,7 +452,7 @@ impl Retention {
     &self,
     connection: &mut SqliteConnection,
     cutoff: &str,
-  ) -> anyhow::Result<u64> {
+  ) -> anyhow::Result<Option<(u64, String)>> {
     let expired = sqlx::query_as::<_, Record>(&format!(
       "SELECT {COLUMNS} FROM audit_events WHERE {LEGACY} AND created_at < ? ORDER BY created_at,id"
     ))
@@ -375,21 +460,19 @@ impl Retention {
     .fetch_all(&mut *connection)
     .await?;
     let (Some(first), Some(last)) = (expired.first(), expired.last()) else {
-      return Ok(0);
+      return Ok(None);
     };
     // Named after the first and last record, so a retry rewrites the same
     // file and a later run never overwrites an earlier archive.
-    self.archive(
-      &format!("audit-legacy-{}-{}.jsonl", first.id, last.id),
-      &expired,
-    )?;
+    let archive = format!("audit-legacy-{}-{}.jsonl", first.id, last.id);
+    self.archive(&archive, &expired)?;
     sqlx::query(&format!(
       "DELETE FROM audit_events WHERE {LEGACY} AND created_at < ?"
     ))
     .bind(cutoff)
     .execute(&mut *connection)
     .await?;
-    Ok(expired.len() as u64)
+    Ok(Some((expired.len() as u64, archive)))
   }
 
   fn archive(
@@ -410,7 +493,7 @@ impl Retention {
     &self,
     connection: &mut SqliteConnection,
     cutoff: &str,
-  ) -> anyhow::Result<u64> {
+  ) -> anyhow::Result<Option<Pruned>> {
     let expired = sqlx::query_as::<_, Record>(&format!(
       "SELECT {COLUMNS} FROM audit_events WHERE seq IS NOT NULL AND created_at < ? ORDER BY seq"
     ))
@@ -436,17 +519,16 @@ impl Retention {
       prefix.push(record);
     }
     let Some(first) = prefix.first() else {
-      return Ok(0);
+      return Ok(None);
     };
     let latest = prefix.last().unwrap_or(first);
     let position = |record: &Record| record.seq.unwrap_or_default();
+    let through_hash = latest.record_hash.clone().unwrap_or_default();
     // The archive is named after the sequence range it holds, so a retry
     // after a failed transaction rewrites the same file instead of leaving
     // two copies of one range for an offline verifier to double-count.
-    self.archive(
-      &format!("audit-{:06}-{:06}.jsonl", position(first), position(latest)),
-      &prefix,
-    )?;
+    let archive = format!("audit-{:06}-{:06}.jsonl", position(first), position(latest));
+    self.archive(&archive, &prefix)?;
     sqlx::query("DELETE FROM audit_events WHERE seq IS NOT NULL AND seq <= ?")
       .bind(position(latest))
       .execute(&mut *connection)
@@ -456,12 +538,27 @@ impl Retention {
        ON CONFLICT(id) DO UPDATE SET pruned_seq=excluded.pruned_seq,pruned_hash=excluded.pruned_hash,pruned_at=excluded.pruned_at",
     )
     .bind(position(latest))
-    .bind(latest.record_hash.clone().unwrap_or_default())
+    .bind(&through_hash)
     .bind(chrono::Utc::now().to_rfc3339())
     .execute(&mut *connection)
     .await?;
-    Ok(prefix.len() as u64)
+    Ok(Some(Pruned {
+      records: prefix.len() as u64,
+      archive,
+      from_seq: position(first),
+      through_seq: position(latest),
+      through_hash,
+    }))
   }
+}
+
+/// The run of chained records one retention pass removed.
+struct Pruned {
+  records: u64,
+  archive: String,
+  from_seq: i64,
+  through_seq: i64,
+  through_hash: String,
 }
 
 fn cutoff_for(keep_days: u64) -> String {

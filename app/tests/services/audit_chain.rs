@@ -287,7 +287,8 @@ async fn retention_archives_expired_legacy_records() {
   let report = verify(&db).await;
   assert!(report.ok, "chain broke: {:?}", report.broken);
   assert_eq!(report.legacy, 0);
-  assert_eq!(report.records, 1);
+  // The new record and the audit.pruned record naming the archive.
+  assert_eq!(report.records, 2);
   assert_eq!(report.pruned_seq, None);
 }
 
@@ -319,7 +320,8 @@ async fn retention_archives_expired_records_and_the_chain_still_verifies() {
     .fetch_one(db.pool())
     .await
     .unwrap();
-  assert_eq!(remaining, 2);
+  // The two new records, plus the audit.pruned record retention appended.
+  assert_eq!(remaining, 3);
   let archived = std::fs::read_to_string(archive.join("audit-000001-000005.jsonl")).unwrap();
   let lines = archived
     .lines()
@@ -335,16 +337,26 @@ async fn retention_archives_expired_records_and_the_chain_still_verifies() {
   // The surviving records verify from the anchor the pruning left behind.
   let report = verify(&db).await;
   assert!(report.ok, "chain broke: {:?}", report.broken);
-  assert_eq!(report.records, 2);
+  assert_eq!(report.records, 3);
   assert_eq!(report.pruned_seq, Some(5));
-  assert_eq!(report.head_seq, Some(7));
+  assert_eq!(report.head_seq, Some(8));
+  let pruned: String =
+    sqlx::query_scalar("SELECT metadata FROM audit_events WHERE action='audit.pruned'")
+      .fetch_one(db.pool())
+      .await
+      .unwrap();
+  let pruned: serde_json::Value = serde_json::from_str(&pruned).unwrap();
+  assert_eq!(pruned["fromSeq"], 1);
+  assert_eq!(pruned["throughSeq"], 5);
+  assert_eq!(pruned["records"], 5);
+  assert_eq!(pruned["archive"], "audit-000001-000005.jsonl");
 
   // A later append continues the chain after the anchor.
   record(&db, "aud_after", "secret.updated").await;
   let report = verify(&db).await;
   assert!(report.ok, "chain broke: {:?}", report.broken);
-  assert_eq!(report.records, 3);
-  assert_eq!(report.head_seq, Some(8));
+  assert_eq!(report.records, 4);
+  assert_eq!(report.head_seq, Some(9));
 
   // Applying again finds nothing left to prune.
   let mut transaction = db.pool().begin_with("BEGIN IMMEDIATE").await.unwrap();
@@ -370,20 +382,16 @@ async fn retention_keeps_the_chain_continuous_when_it_removes_every_record() {
   assert_eq!(retention.apply(&mut transaction).await.unwrap(), 3);
   transaction.commit().await.unwrap();
 
-  let report = verify(&db).await;
-  assert!(report.ok, "chain broke: {:?}", report.broken);
-  assert_eq!(report.records, 0);
-  assert_eq!(report.pruned_seq, Some(3));
-
-  // The next append continues after the anchor instead of restarting the
-  // sequence at genesis, which would look like tampering.
-  record(&db, "aud_new", "secret.updated").await;
+  // Only the audit.pruned record survives; it continues after the anchor
+  // instead of restarting the sequence at genesis, which would look like
+  // tampering.
   let report = verify(&db).await;
   assert!(report.ok, "chain broke: {:?}", report.broken);
   assert_eq!(report.records, 1);
+  assert_eq!(report.pruned_seq, Some(3));
   assert_eq!(report.head_seq, Some(4));
   let predecessor: Option<String> =
-    sqlx::query_scalar("SELECT prev_hash FROM audit_events WHERE id='aud_new'")
+    sqlx::query_scalar("SELECT prev_hash FROM audit_events WHERE action='audit.pruned'")
       .fetch_one(db.pool())
       .await
       .unwrap();
@@ -424,9 +432,98 @@ async fn retention_keeps_an_expired_record_behind_a_retained_one() {
     .fetch_all(db.pool())
     .await
     .unwrap();
-  assert_eq!(ids, ["aud_fresh", "aud_stale"]);
+  assert_eq!(ids[..2], ["aud_fresh", "aud_stale"]);
+  assert_eq!(ids.len(), 3, "the audit.pruned record follows");
   let report = verify(&db).await;
   assert!(report.ok, "chain broke: {:?}", report.broken);
-  assert_eq!(report.records, 2);
+  assert_eq!(report.records, 3);
   assert_eq!(report.pruned_seq, Some(1));
+}
+
+#[tokio::test]
+async fn a_forged_pruning_anchor_fails_verification() {
+  let (_directory, db) = database().await;
+  for index in 0..4 {
+    record(&db, &format!("aud_{index}"), "secret.updated").await;
+  }
+  // Someone deletes the oldest records and moves the anchor forward to
+  // hide it, with no retention pass to vouch for the removal.
+  let hash: String = sqlx::query_scalar("SELECT record_hash FROM audit_events WHERE seq=2")
+    .fetch_one(db.pool())
+    .await
+    .unwrap();
+  sqlx::query("DELETE FROM audit_events WHERE seq <= 2")
+    .execute(db.pool())
+    .await
+    .unwrap();
+  sqlx::query(
+    "INSERT INTO audit_chain_anchor(id,pruned_seq,pruned_hash,pruned_at) VALUES('chain',2,?,?)",
+  )
+  .bind(hash)
+  .bind(chrono::Utc::now().to_rfc3339())
+  .execute(db.pool())
+  .await
+  .unwrap();
+
+  let report = verify(&db).await;
+  assert!(!report.ok);
+  let chain_break = report.broken.expect("the forged anchor must be reported");
+  assert_eq!(chain_break.seq, 2);
+  assert!(
+    chain_break.reason.contains("audit.pruned"),
+    "{}",
+    chain_break.reason
+  );
+}
+
+#[tokio::test]
+async fn a_failed_retention_pass_leaves_the_callers_write_intact() {
+  let (directory, db) = database().await;
+  record_at(
+    &db,
+    "aud_old",
+    "secret.updated",
+    "2000-01-01T00:00:00+00:00",
+  )
+  .await;
+  // Hiding the anchor table makes the pass fail after it has already
+  // deleted the expired record, the worst point to fail at.
+  sqlx::query("ALTER TABLE audit_chain_anchor RENAME TO audit_chain_anchor_hidden")
+    .execute(db.pool())
+    .await
+    .unwrap();
+  let retention = Retention::new(directory.path().join("archive"), 30);
+
+  let mut transaction = db.pool().begin_with("BEGIN IMMEDIATE").await.unwrap();
+  audit_chain::append(
+    &mut transaction,
+    "aud_caller",
+    "admin",
+    None,
+    None,
+    "secret.updated",
+    None,
+    None,
+    None,
+    None,
+    "{}",
+    &chrono::Utc::now().to_rfc3339(),
+  )
+  .await
+  .unwrap();
+  assert!(retention.apply(&mut transaction).await.is_err());
+  transaction.commit().await.unwrap();
+  sqlx::query("ALTER TABLE audit_chain_anchor_hidden RENAME TO audit_chain_anchor")
+    .execute(db.pool())
+    .await
+    .unwrap();
+
+  let ids = sqlx::query_scalar::<_, String>("SELECT id FROM audit_events ORDER BY seq")
+    .fetch_all(db.pool())
+    .await
+    .unwrap();
+  assert_eq!(ids, ["aud_old", "aud_caller"]);
+  let report = verify(&db).await;
+  assert!(report.ok, "chain broke: {:?}", report.broken);
+  assert_eq!(report.pruned_seq, None);
 }
