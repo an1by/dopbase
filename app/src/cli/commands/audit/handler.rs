@@ -1,6 +1,6 @@
 use std::{io::Write, path::Path};
 
-use super::AuditCommand;
+use super::{AuditCommand, AuditFilters};
 use crate::cli::commands::environment;
 use crate::cli::{
   client::{self, ApiClient},
@@ -22,6 +22,28 @@ pub(crate) async fn execute(
 ) -> Result<i32> {
   let api = client::human_client(server).await?;
   match command {
+    AuditCommand::List {
+      filters,
+      limit,
+      cursor,
+    } => {
+      let resolved = resolve(&api, &filters).await?;
+      let path = page_path(&resolved, &limit.to_string(), cursor.as_deref());
+      let page = api.request(Method::GET, &path, None).await?;
+      let items = page_items(&page)?;
+      if json_output {
+        output::print_json(&page)?;
+      } else {
+        print_events(items);
+        if let Some(next) = next_cursor(&page) {
+          output::print_info(&format!(
+            "More events match. Next page: {}",
+            next_page_command(&filters, limit, next)
+          ));
+        }
+      }
+      Ok(0)
+    }
     AuditCommand::Verify { anchor } => {
       let path = api_paths::audit::verify(anchor.as_ref().map(|(seq, hash)| (*seq, hash.as_str())));
       let report = api.request(Method::GET, &path, None).await?;
@@ -36,25 +58,10 @@ pub(crate) async fn execute(
     AuditCommand::Export {
       output,
       force,
-      action,
-      project,
-      environment,
-      actor,
+      filters,
       limit,
     } => {
-      let exported = export(
-        &api,
-        ExportFilters {
-          action,
-          project,
-          environment,
-          actor,
-        },
-        output.as_deref(),
-        force,
-        limit,
-      )
-      .await?;
+      let exported = export(&api, &filters, output.as_deref(), force, limit).await?;
       if let Some(path) = output {
         report_export(exported, &path, json_output)?;
       }
@@ -63,18 +70,80 @@ pub(crate) async fn execute(
   }
 }
 
-struct ExportFilters {
-  action: Option<String>,
-  project: Option<String>,
-  environment: Option<String>,
-  actor: Option<String>,
+/// Audit filters with project and environment references resolved to the
+/// IDs the audit list API matches on.
+struct ResolvedFilters<'a> {
+  action: Option<&'a str>,
+  project_id: Option<String>,
+  environment_id: Option<String>,
+  actor: Option<&'a str>,
+}
+
+async fn resolve<'a>(
+  api: &ApiClient,
+  filters: &'a AuditFilters,
+) -> Result<ResolvedFilters<'a>> {
+  let project_id = match &filters.project {
+    Some(reference) => Some(resolve_project(api, reference).await?),
+    None => None,
+  };
+  let environment_id = match &filters.environment {
+    Some(reference) => {
+      let resolved = environment::resolve_environment(api, reference).await?;
+      Some(environment::env_id(&resolved)?.to_owned())
+    }
+    None => None,
+  };
+  Ok(ResolvedFilters {
+    action: filters.action.as_deref(),
+    project_id,
+    environment_id,
+    actor: filters.actor.as_deref(),
+  })
+}
+
+/// Builds the audit list path for one page. Values are URL-encoded by
+/// `api_paths::audit::collection`, and the cursor is passed unchanged.
+fn page_path(
+  filters: &ResolvedFilters,
+  limit: &str,
+  cursor: Option<&str>,
+) -> String {
+  let mut params: Vec<(&str, &str)> = vec![("limit", limit)];
+  for (name, value) in [
+    ("action", filters.action),
+    ("projectId", filters.project_id.as_deref()),
+    ("environmentId", filters.environment_id.as_deref()),
+    ("actor", filters.actor),
+    ("cursor", cursor),
+  ] {
+    if let Some(value) = value {
+      params.push((name, value));
+    }
+  }
+  api_paths::audit::collection(&params)
+}
+
+fn page_items(page: &Value) -> Result<&[Value]> {
+  page
+    .get("items")
+    .and_then(Value::as_array)
+    .map(Vec::as_slice)
+    .context("the server returned an unexpected audit list response")
+}
+
+fn next_cursor(page: &Value) -> Option<&str> {
+  page
+    .get("nextCursor")
+    .and_then(Value::as_str)
+    .filter(|cursor| !cursor.is_empty())
 }
 
 /// Streams matching audit records as JSON lines, one object per line, in
 /// the order returned by the audit list API (newest first).
 async fn export(
   api: &ApiClient,
-  filters: ExportFilters,
+  filters: &AuditFilters,
   output: Option<&Path>,
   force: bool,
   limit: Option<u64>,
@@ -82,44 +151,15 @@ async fn export(
   if let Some(0) = limit {
     bail!("audit export requires --limit greater than zero");
   }
-  let project = match &filters.project {
-    Some(reference) => Some(resolve_project(api, reference).await?),
-    None => None,
-  };
-  let environment = match &filters.environment {
-    Some(reference) => {
-      let resolved = environment::resolve_environment(api, reference).await?;
-      Some(environment::env_id(&resolved)?.to_owned())
-    }
-    None => None,
-  };
+  let filters = resolve(api, filters).await?;
   let page_size = PAGE_SIZE.to_string();
   let mut file = Vec::new();
   let mut cursor: Option<String> = None;
   let mut exported = 0u64;
   'stream: loop {
-    let mut params: Vec<(&str, &str)> = vec![("limit", page_size.as_str())];
-    if let Some(value) = filters.action.as_deref() {
-      params.push(("action", value));
-    }
-    if let Some(value) = project.as_deref() {
-      params.push(("projectId", value));
-    }
-    if let Some(value) = environment.as_deref() {
-      params.push(("environmentId", value));
-    }
-    if let Some(value) = filters.actor.as_deref() {
-      params.push(("actor", value));
-    }
-    if let Some(value) = cursor.as_deref() {
-      params.push(("cursor", value));
-    }
-    let path = api_paths::audit::collection(&params);
+    let path = page_path(&filters, &page_size, cursor.as_deref());
     let page = api.request(Method::GET, &path, None).await?;
-    let Some(items) = page.get("items").and_then(Value::as_array) else {
-      break;
-    };
-    for item in items {
+    for item in page_items(&page)? {
       let mut line = serde_json::to_vec(item)?;
       line.push(b'\n');
       match output {
@@ -133,15 +173,110 @@ async fn export(
         break 'stream;
       }
     }
-    match page.get("nextCursor").and_then(Value::as_str) {
-      Some(next) if !next.is_empty() => cursor = Some(next.to_owned()),
-      _ => break,
+    match next_cursor(&page) {
+      Some(next) => cursor = Some(next.to_owned()),
+      None => break,
     }
   }
   if let Some(path) = output {
     output::write_private(path, &file, force)?;
   }
   Ok(exported)
+}
+
+/// Default page size of `audit list`, matching the audit list API.
+const LIST_LIMIT: u32 = 50;
+
+fn print_events(items: &[Value]) {
+  let rows = items
+    .iter()
+    .map(|item| {
+      let actor = ["actorLabel", "actorId", "actorType"]
+        .into_iter()
+        .find_map(|field| item.get(field).and_then(Value::as_str))
+        .unwrap_or("-");
+      let resource = match (
+        item.get("resourceType").and_then(Value::as_str),
+        item.get("resourceId").and_then(Value::as_str),
+      ) {
+        (Some(kind), Some(id)) => format!("{kind}:{id}"),
+        (Some(kind), None) => kind.to_owned(),
+        (None, Some(id)) => id.to_owned(),
+        (None, None) => "-".to_owned(),
+      };
+      [
+        output::timestamp(item, "createdAt"),
+        item
+          .get("seq")
+          .and_then(Value::as_i64)
+          .map_or_else(|| "-".to_owned(), |seq| seq.to_string()),
+        actor.to_owned(),
+        output::string(item, "action"),
+        resource,
+        output::string(item, "projectId"),
+        output::string(item, "environmentId"),
+      ]
+      .iter()
+      .map(|cell| output::printable(cell))
+      .collect()
+    })
+    .collect::<Vec<_>>();
+  output::print_table(
+    &[
+      "TIME",
+      "SEQ",
+      "ACTOR",
+      "ACTION",
+      "RESOURCE",
+      "PROJECT",
+      "ENVIRONMENT",
+    ],
+    &rows,
+    "No audit events found.",
+    &format!("{} event(s)", rows.len()),
+  );
+}
+
+/// The command that fetches the next page. It repeats the filters as they
+/// were typed, because the server does not tie a cursor to a filter set and
+/// a cursor reused with other filters skips or repeats events.
+fn next_page_command(
+  filters: &AuditFilters,
+  limit: u32,
+  cursor: &str,
+) -> String {
+  let mut command = String::from("dopbase audit list");
+  let limit = limit.to_string();
+  for (flag, value) in [
+    ("--action", filters.action.as_deref()),
+    ("--project", filters.project.as_deref()),
+    ("--environment", filters.environment.as_deref()),
+    ("--actor", filters.actor.as_deref()),
+    (
+      "--limit",
+      (limit != LIST_LIMIT.to_string()).then_some(limit.as_str()),
+    ),
+    ("--cursor", Some(cursor)),
+  ] {
+    if let Some(value) = value {
+      command.push_str(&format!(" {flag} {}", shell_quote(value)));
+    }
+  }
+  output::printable(&command)
+}
+
+/// Quotes a value for POSIX shells when it holds anything beyond characters
+/// that never need quoting.
+fn shell_quote(value: &str) -> String {
+  let plain = !value.is_empty()
+    && value
+      .bytes()
+      .all(|byte| byte.is_ascii_alphanumeric() || b"@%+=:,./_-".contains(&byte));
+  if plain {
+    value.to_owned()
+  } else {
+    format!("'{}'", value.replace('\'', "'\\''"))
+  }
 }
 
 fn report_export(

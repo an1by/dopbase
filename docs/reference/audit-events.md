@@ -26,6 +26,16 @@ identifies the actor and environment and includes only the import mode and
 submitted entry count in its metadata. It contains no submitted values or
 comparison results. Applying an import records `secret.imported`.
 
+## Browsing events
+
+Administrators browse events on the Audit page in the Admin UI or with
+`dopbase audit list`, newest first. Both filter by action, project,
+environment, and actor, and both page with the opaque `nextCursor` that
+`GET /api/v1/audit-events` returns. Each event's `seq` is its position in the
+hash chain below, so an event found while browsing can be matched against
+`dopbase audit verify` output. See the
+[CLI reference](/cli/commands#audit-commands) for the command's options.
+
 ## Integrity and verification
 
 Every audit record is part of a hash chain. It stores its position in the log,

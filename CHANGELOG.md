@@ -35,6 +35,16 @@ configurable retention archives expired records before deleting them.
   newest records. The server also logs the head as an `audit checkpoint` at
   startup, at shutdown, and after every verification.
 
+- `dopbase audit list` shows one page of audit events, newest first, as a
+  table of time, chain sequence, actor, action, resource, project, and
+  environment. It takes the same `--action`, `--project`, `--environment`,
+  and `--actor` filters as `dopbase audit export`, plus `--limit` (1 to 200,
+  default 50) and `--cursor`. When more events match, the command for the
+  next page is printed to standard error with the same filters, and `--json`
+  prints the API page unchanged. Stored control characters show as `?` in
+  the table, so a planted record cannot rewrite the terminal around it.
+  Administrators only; no secret values are read.
+
 - `dopbase audit export` streams audit records as JSON lines to standard
   output or, with `--output <FILE>`, to a file written with owner-only
   permissions that is never replaced without `--force`. `--action`,

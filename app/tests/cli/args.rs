@@ -1,6 +1,6 @@
 use app::cli::args::{
-  AdminCommand, AuditCommand, Cli, Command, ExportArgs, ImportArgs, InitArgs, RunArgs,
-  ServerCommand,
+  AdminCommand, AuditCommand, AuditFilters, Cli, Command, ExportArgs, ImportArgs, InitArgs,
+  RunArgs, ServerCommand,
 };
 use app::cli::secret_format::{ExportFormat, SecretFormat};
 use app::constants::config::executable_environment_names;
@@ -646,6 +646,71 @@ fn audit_verify_parses_with_the_global_json_flag() {
 }
 
 #[test]
+fn audit_list_parses_filters_limit_and_cursor() {
+  let cli = Cli::try_parse_from(["dopbase", "audit", "list"]).unwrap();
+  let Command::Audit {
+    command: AuditCommand::List {
+      filters,
+      limit,
+      cursor,
+    },
+  } = cli.command
+  else {
+    panic!("expected audit list");
+  };
+  assert_eq!(limit, 50);
+  assert!(cursor.is_none());
+  assert!(filters.action.is_none() && filters.project.is_none());
+
+  let cli = Cli::try_parse_from([
+    "dopbase",
+    "--json",
+    "audit",
+    "list",
+    "--action",
+    "secret.updated",
+    "--project",
+    "storefront",
+    "--environment",
+    "storefront/production",
+    "--actor",
+    "admin@example.com",
+    "--limit",
+    "200",
+    "--cursor",
+    "MjAyNi0xMC0yM3xhdWRfMQ",
+  ])
+  .unwrap();
+  assert!(cli.json);
+  let Command::Audit {
+    command: AuditCommand::List {
+      filters,
+      limit,
+      cursor,
+    },
+  } = cli.command
+  else {
+    panic!("expected audit list");
+  };
+  assert_eq!(filters.action.as_deref(), Some("secret.updated"));
+  assert_eq!(filters.project.as_deref(), Some("storefront"));
+  assert_eq!(
+    filters.environment.as_deref(),
+    Some("storefront/production")
+  );
+  assert_eq!(filters.actor.as_deref(), Some("admin@example.com"));
+  assert_eq!(limit, 200);
+  assert_eq!(cursor.as_deref(), Some("MjAyNi0xMC0yM3xhdWRfMQ"));
+
+  for limit in ["0", "201", "-1"] {
+    assert!(
+      Cli::try_parse_from(["dopbase", "audit", "list", "--limit", limit]).is_err(),
+      "--limit {limit} should be rejected"
+    );
+  }
+}
+
+#[test]
 fn audit_export_parses_its_filters_and_output() {
   let cli = Cli::try_parse_from(["dopbase", "audit", "export"]).unwrap();
   assert!(matches!(
@@ -686,10 +751,13 @@ fn audit_export_parses_its_filters_and_output() {
         AuditCommand::Export {
           output,
           force,
-          action,
-          project,
-          environment,
-          actor,
+          filters:
+            AuditFilters {
+              action,
+              project,
+              environment,
+              actor,
+            },
           limit,
         },
     } => {
@@ -1010,6 +1078,7 @@ fn parses_each_public_command_and_detects_missing_cases() {
     ],
     &["dopbase", "token", "list", "billing/local"],
     &["dopbase", "token", "revoke", "tok_01"],
+    &["dopbase", "audit", "list"],
     &["dopbase", "audit", "verify"],
     &["dopbase", "audit", "export"],
     &["dopbase", "run", "--", "true"],

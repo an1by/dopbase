@@ -517,11 +517,12 @@ values.
 ## Audit commands
 
 The audit log answers who performed a sensitive action, where it happened, and
-when. Administrators review it on the Audit page in the Admin UI, verify its
-integrity from the terminal, and export it as JSON lines for external,
-write-once storage:
+when. Administrators review it on the Audit page in the Admin UI or with
+`dopbase audit list`, verify its integrity from the terminal, and export it as
+JSON lines for external, write-once storage:
 
 ```bash
+dopbase audit list --action secret.updated
 dopbase audit verify
 dopbase audit verify --anchor 42:<HEAD_HASH>
 dopbase audit export --output audit-2026-10-17.jsonl
@@ -530,8 +531,40 @@ dopbase --json audit verify
 
 | Command                | Purpose                               |
 | ---------------------- | ------------------------------------- |
+| `dopbase audit list`   | Show one page of events, newest first |
 | `dopbase audit verify` | Recompute the audit log's hash chain  |
 | `dopbase audit export` | Stream matching records as JSON lines |
+
+`dopbase audit list` prints a table of the newest events: time, chain
+sequence, actor, action, resource, project ID, and environment ID. It takes
+the same `--action`, `--project`, `--environment`, and `--actor` filters as
+export, and project and environment names are resolved to IDs before the
+request. `--limit` sets the page size from 1 to 200 (default 50):
+
+```bash
+dopbase audit list
+dopbase audit list --project storefront --environment storefront/production
+dopbase audit list --action secret.updated --actor admin@example.com --limit 100
+dopbase --json audit list --cursor <CURSOR>
+```
+
+When more events match, the command for the next page is printed to standard
+error with the same filters and a `--cursor` value. Copy it as is: the cursor
+is opaque, and the server does not check that it was issued for the same
+filters. Standard output holds only the table, so it can be piped to `grep` or
+`less`.
+
+`--json` prints the API page unchanged, `{"items": [...], "nextCursor": ...}`,
+with nothing on standard error. `nextCursor` is `null` on the last page. To
+read every matching record in a script, use `dopbase audit export` instead of
+paging by hand.
+
+The table leaves out each event's metadata; `--json` includes it. The command
+requires an administrator sign-in. A member gets the server's authorization
+error, and runner or agent tokens are refused before any audit request. Audit
+events never contain secret values, and the CLI does not fetch any. Control
+characters and bidirectional text markers stored in an event are shown as `?`,
+so a planted record cannot rewrite the lines around it in your terminal.
 
 Every audit record stores the hash of the record before it, so a record that
 was modified, removed, or inserted after the fact stands out at that point in
