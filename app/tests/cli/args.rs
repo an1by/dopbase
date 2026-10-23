@@ -1013,6 +1013,7 @@ fn parses_each_public_command_and_detects_missing_cases() {
     ],
     &["dopbase", "token", "list", "billing/local"],
     &["dopbase", "token", "revoke", "tok_01"],
+    &["dopbase", "audit", "list"],
     &["dopbase", "audit", "verify"],
     &["dopbase", "audit", "export"],
     &["dopbase", "run", "--", "true"],

@@ -4,6 +4,26 @@ use clap::{Args, Subcommand};
 
 #[derive(Subcommand, Debug)]
 pub enum AuditCommand {
+  /// Show one page of audit events, newest first.
+  #[command(after_help = LIST_HELP)]
+  List {
+    #[command(flatten)]
+    filters: AuditFilters,
+
+    /// Events per page, from 1 to 200.
+    #[arg(
+      long,
+      value_name = "N",
+      default_value_t = 50,
+      value_parser = clap::value_parser!(u32).range(1..=200)
+    )]
+    limit: u32,
+
+    /// Continue from the cursor a previous page printed.
+    #[arg(long, value_name = "CURSOR")]
+    cursor: Option<String>,
+  },
+
   /// Recompute the audit log's hash chain and report the first inconsistency.
   ///
   /// Exits with code 0 when the chain is intact and 2 when it is broken.
@@ -34,7 +54,7 @@ pub enum AuditCommand {
   },
 }
 
-/// Filters for the audit list API. Names are resolved
+/// Filters shared by `audit list` and `audit export`. Names are resolved
 /// to IDs before the audit request is sent.
 #[derive(Args, Debug, Default)]
 pub struct AuditFilters {
@@ -74,6 +94,7 @@ fn parse_anchor(value: &str) -> Result<(i64, String), String> {
 
 pub(crate) const HELP: &str = "\
 Examples:
+  dopbase audit list
   dopbase audit verify
   dopbase audit export --output audit-2026-10-17.jsonl
   dopbase --json audit verify
@@ -81,6 +102,21 @@ Examples:
 The audit log is a hash chain: every record stores the hash of the record
 before it, so a record that was modified, removed, or inserted after the
 fact stands out. Administrators can also review events in the UI.
+";
+const LIST_HELP: &str = "\
+Examples:
+  dopbase audit list
+  dopbase audit list --project storefront --environment storefront/production
+  dopbase audit list --action secret.updated --actor admin@example.com --limit 100
+  dopbase --json audit list --cursor <CURSOR>
+
+Requires an administrator account. Events are shown newest first. When more
+events match, the command for the next page is printed to standard error
+with the same filters, so the table on standard output stays clean for
+pipes. --json prints the API page unchanged, including nextCursor.
+
+Metadata is left out of the table; use --json to see it. No secret values
+are read or printed. To save every matching event, use dopbase audit export.
 ";
 const VERIFY_HELP: &str = "\
 Examples:

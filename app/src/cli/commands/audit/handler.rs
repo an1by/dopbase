@@ -22,6 +22,28 @@ pub(crate) async fn execute(
 ) -> Result<i32> {
   let api = client::human_client(server).await?;
   match command {
+    AuditCommand::List {
+      filters,
+      limit,
+      cursor,
+    } => {
+      let resolved = resolve(&api, &filters).await?;
+      let path = page_path(&resolved, &limit.to_string(), cursor.as_deref());
+      let page = api.request(Method::GET, &path, None).await?;
+      let items = page_items(&page)?;
+      if json_output {
+        output::print_json(&page)?;
+      } else {
+        print_events(items);
+        if let Some(next) = next_cursor(&page) {
+          output::print_info(&format!(
+            "More events match. Next page: {}",
+            next_page_command(&filters, limit, next)
+          ));
+        }
+      }
+      Ok(0)
+    }
     AuditCommand::Verify { anchor } => {
       let path = api_paths::audit::verify(anchor.as_ref().map(|(seq, hash)| (*seq, hash.as_str())));
       let report = api.request(Method::GET, &path, None).await?;
@@ -160,6 +182,101 @@ async fn export(
     output::write_private(path, &file, force)?;
   }
   Ok(exported)
+}
+
+/// Default page size of `audit list`, matching the audit list API.
+const LIST_LIMIT: u32 = 50;
+
+fn print_events(items: &[Value]) {
+  let rows = items
+    .iter()
+    .map(|item| {
+      let actor = ["actorLabel", "actorId", "actorType"]
+        .into_iter()
+        .find_map(|field| item.get(field).and_then(Value::as_str))
+        .unwrap_or("-");
+      let resource = match (
+        item.get("resourceType").and_then(Value::as_str),
+        item.get("resourceId").and_then(Value::as_str),
+      ) {
+        (Some(kind), Some(id)) => format!("{kind}:{id}"),
+        (Some(kind), None) => kind.to_owned(),
+        (None, Some(id)) => id.to_owned(),
+        (None, None) => "-".to_owned(),
+      };
+      [
+        output::timestamp(item, "createdAt"),
+        item
+          .get("seq")
+          .and_then(Value::as_i64)
+          .map_or_else(|| "-".to_owned(), |seq| seq.to_string()),
+        actor.to_owned(),
+        output::string(item, "action"),
+        resource,
+        output::string(item, "projectId"),
+        output::string(item, "environmentId"),
+      ]
+      .iter()
+      .map(|cell| output::printable(cell))
+      .collect()
+    })
+    .collect::<Vec<_>>();
+  output::print_table(
+    &[
+      "TIME",
+      "SEQ",
+      "ACTOR",
+      "ACTION",
+      "RESOURCE",
+      "PROJECT",
+      "ENVIRONMENT",
+    ],
+    &rows,
+    "No audit events found.",
+    &format!("{} event(s)", rows.len()),
+  );
+}
+
+/// The command that fetches the next page. It repeats the filters as they
+/// were typed, because the server does not tie a cursor to a filter set and
+/// a cursor reused with other filters skips or repeats events.
+fn next_page_command(
+  filters: &AuditFilters,
+  limit: u32,
+  cursor: &str,
+) -> String {
+  let mut command = String::from("dopbase audit list");
+  let limit = limit.to_string();
+  for (flag, value) in [
+    ("--action", filters.action.as_deref()),
+    ("--project", filters.project.as_deref()),
+    ("--environment", filters.environment.as_deref()),
+    ("--actor", filters.actor.as_deref()),
+    (
+      "--limit",
+      (limit != LIST_LIMIT.to_string()).then_some(limit.as_str()),
+    ),
+    ("--cursor", Some(cursor)),
+  ] {
+    if let Some(value) = value {
+      command.push_str(&format!(" {flag} {}", shell_quote(value)));
+    }
+  }
+  output::printable(&command)
+}
+
+/// Quotes a value for POSIX shells when it holds anything beyond characters
+/// that never need quoting.
+fn shell_quote(value: &str) -> String {
+  let plain = !value.is_empty()
+    && value
+      .bytes()
+      .all(|byte| byte.is_ascii_alphanumeric() || b"@%+=:,./_-".contains(&byte));
+  if plain {
+    value.to_owned()
+  } else {
+    format!("'{}'", value.replace('\'', "'\\''"))
+  }
 }
 
 fn report_export(
