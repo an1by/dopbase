@@ -62,7 +62,7 @@ function onInput(event: Event): void {
         :disabled="disabled"
         :required="required"
         :aria-invalid="error ? true : undefined"
-        class="w-full resize-y bg-transparent pb-2.5 pl-3.5 pr-3.5 pt-1 font-mono text-xs leading-relaxed text-ink-strong outline-none placeholder:text-ink-faint disabled:cursor-default"
+        class="w-full resize-y bg-transparent pb-2.5 pl-3.5 pr-3.5 pt-1 font-mono text-base leading-relaxed text-ink-strong sm:text-xs outline-none placeholder:text-ink-faint disabled:cursor-default"
         :class="!label ? 'pb-2.5 pt-2.5' : ''"
         @input="onInput" />
     </div>

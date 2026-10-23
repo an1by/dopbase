@@ -24,6 +24,12 @@ something usable instead of an empty screen.
 - **Delete** a project and Dopbase shows what goes with it (every environment
   and every secret inside) before you confirm. Deletion cannot be undone.
 
+On screens narrower than 1024 pixels the rail is hidden. The current project
+and environment appear at the top of the page as `project / environment`; tap
+them to open the rail, and it closes once you pick an environment. On touch
+screens the rename and delete buttons are always shown, because there is no
+hover to reveal them.
+
 ## Environments
 
 Selecting a project lists its environments. Each one holds its own set of

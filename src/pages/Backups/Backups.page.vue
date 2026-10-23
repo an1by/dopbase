@@ -103,9 +103,9 @@ function chooseKeyFile(): void {
 
 <template>
   <DashboardLayout>
-    <div class="mx-auto max-w-5xl p-8">
+    <div class="mx-auto max-w-5xl px-4 py-6 sm:px-6 lg:p-8">
       <!-- Header -->
-      <header class="mb-6 flex flex-wrap items-center justify-between gap-4">
+      <header class="mb-6 flex flex-wrap items-start justify-between gap-4">
         <div>
           <div class="flex items-center gap-2.5">
             <h1 class="text-lg font-semibold text-ink-strong">Backups</h1>
@@ -118,7 +118,7 @@ function chooseKeyFile(): void {
             Full system encrypted snapshots for disaster recovery.
           </p>
         </div>
-        <div class="flex items-center gap-2">
+        <div class="flex flex-wrap items-center gap-2">
           <DbButton
             size="sm"
             variant="secondary"
@@ -155,8 +155,9 @@ function chooseKeyFile(): void {
             </p>
           </div>
         </div>
-        <div class="shrink-0 self-end">
+        <div class="shrink-0 sm:self-end">
           <DbButton
+            class="w-full sm:w-auto"
             size="sm"
             variant="secondary"
             :loading="downloadingMasterKey"
@@ -183,34 +184,36 @@ function chooseKeyFile(): void {
       <!-- Loading skeleton placeholder state -->
       <div
         v-if="loading && !hasLoaded"
-        class="overflow-hidden rounded-card border border-line bg-panel shadow-sm"
+        class="overflow-hidden rounded-card border border-line bg-panel"
         data-testid="backups-skeleton">
         <div class="overflow-x-auto">
           <table class="w-full table-fixed text-left text-sm">
             <thead>
               <tr
                 class="border-b border-line bg-panel/50 text-xs font-medium text-ink-muted">
-                <th class="px-5 py-3.5">Backup</th>
-                <th class="w-28 px-5 py-3.5">Size</th>
-                <th class="w-40 px-5 py-3.5">Created</th>
-                <th class="w-56 px-5 py-3.5 text-right">Actions</th>
+                <th class="px-4 py-3.5 sm:px-5">Backup</th>
+                <th class="hidden w-28 px-5 py-3.5 sm:table-cell">Size</th>
+                <th class="hidden w-40 px-5 py-3.5 sm:table-cell">Created</th>
+                <th class="w-36 px-2 py-3.5 text-right sm:w-56 sm:px-5">
+                  Actions
+                </th>
               </tr>
             </thead>
             <tbody class="divide-y divide-line-soft">
               <tr v-for="i in 4" :key="i">
-                <td class="px-5 py-3.5">
+                <td class="px-4 py-3.5 sm:px-5">
                   <div class="flex items-center gap-2.5">
                     <DbSkeleton class="h-4 w-4 shrink-0 rounded" />
                     <DbSkeleton class="h-4 w-48" />
                   </div>
                 </td>
-                <td class="w-28 px-5 py-3.5">
+                <td class="hidden px-5 py-3.5 sm:table-cell">
                   <DbSkeleton class="h-4 w-16" />
                 </td>
-                <td class="w-40 px-5 py-3.5">
+                <td class="hidden px-5 py-3.5 sm:table-cell">
                   <DbSkeleton class="h-4 w-24" />
                 </td>
-                <td class="w-56 px-5 py-3.5 text-right">
+                <td class="px-4 py-3.5 text-right sm:px-5">
                   <div class="flex items-center justify-end gap-1">
                     <DbSkeleton class="h-8 w-24 rounded-control" />
                     <DbSkeleton class="h-8 w-20 rounded-control" />
@@ -246,17 +249,19 @@ function chooseKeyFile(): void {
       <!-- Backups Table -->
       <div
         v-else
-        class="overflow-hidden rounded-card border border-line bg-panel shadow-sm"
+        class="overflow-hidden rounded-card border border-line bg-panel"
         data-testid="backups-table">
         <div class="overflow-x-auto">
           <table class="w-full table-fixed text-left text-sm">
             <thead>
               <tr
                 class="border-b border-line bg-panel/50 text-xs font-medium text-ink-muted">
-                <th class="px-5 py-3.5">Backup</th>
-                <th class="w-28 px-5 py-3.5">Size</th>
-                <th class="w-40 px-5 py-3.5">Created</th>
-                <th class="w-56 px-5 py-3.5 text-right">Actions</th>
+                <th class="px-4 py-3.5 sm:px-5">Backup</th>
+                <th class="hidden w-28 px-5 py-3.5 sm:table-cell">Size</th>
+                <th class="hidden w-40 px-5 py-3.5 sm:table-cell">Created</th>
+                <th class="w-36 px-2 py-3.5 text-right sm:w-56 sm:px-5">
+                  Actions
+                </th>
               </tr>
             </thead>
             <tbody class="divide-y divide-line-soft">
@@ -264,25 +269,33 @@ function chooseKeyFile(): void {
                 v-for="backup in backups"
                 :key="backup.key"
                 class="transition-colors hover:bg-raised/40">
-                <td class="px-5 py-3.5">
+                <td class="px-4 py-3.5 sm:px-5">
                   <div class="flex items-center gap-2.5">
                     <ArchiveIcon class="h-4 w-4 shrink-0 text-ink-muted" />
-                    <span
-                      class="truncate font-mono text-xs font-semibold text-ink-strong"
-                      :title="backup.key">
-                      {{ backup.key }}
-                    </span>
+                    <div class="min-w-0">
+                      <p
+                        class="truncate font-mono text-xs font-semibold text-ink-strong"
+                        :title="backup.key">
+                        {{ backup.key }}
+                      </p>
+                      <p class="text-xs text-ink-muted sm:hidden">
+                        {{ formatBytes(backup.size) }} ·
+                        {{ formatRelativeTime(backup.createdAt) }}
+                      </p>
+                    </div>
                   </div>
                 </td>
-                <td class="w-28 px-5 py-3.5 font-mono text-xs text-ink-muted">
+                <td
+                  class="hidden px-5 py-3.5 font-mono text-xs text-ink-muted sm:table-cell">
                   {{ formatBytes(backup.size) }}
                 </td>
-                <td class="w-40 px-5 py-3.5 text-xs text-ink-muted">
+                <td
+                  class="hidden px-5 py-3.5 text-xs text-ink-muted sm:table-cell">
                   <span :title="formatDateTime(backup.createdAt)">
                     {{ formatRelativeTime(backup.createdAt) }}
                   </span>
                 </td>
-                <td class="w-56 px-5 py-3.5 text-right">
+                <td class="px-2 py-3.5 text-right sm:px-5">
                   <div class="flex items-center justify-end gap-1">
                     <DbButton
                       size="sm"
@@ -380,7 +393,7 @@ function chooseKeyFile(): void {
           class="flex cursor-pointer flex-col items-center justify-center rounded-lg border border-dashed border-line p-6 text-center transition-colors hover:border-accent hover:bg-raised/20"
           @click="chooseFile">
           <UploadIcon class="h-8 w-8 text-ink-muted" />
-          <p class="mt-2 text-sm font-medium text-ink-strong">
+          <p class="mt-2 break-all text-sm font-medium text-ink-strong">
             {{
               selectedFile
                 ? selectedFile.name
@@ -411,7 +424,7 @@ function chooseKeyFile(): void {
             type="file"
             class="hidden"
             @change="handleKeyFileInputChange" />
-          <div class="mt-2 flex items-center gap-2">
+          <div class="mt-2 flex flex-wrap items-center gap-2">
             <DbButton
               variant="secondary"
               size="sm"

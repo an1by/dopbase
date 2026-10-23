@@ -24,8 +24,8 @@ const { state, actions } = useUsersController();
 
 <template>
   <DashboardLayout>
-    <div class="mx-auto max-w-5xl p-8">
-      <header class="mb-6 flex items-center justify-between">
+    <div class="mx-auto max-w-5xl px-4 py-6 sm:px-6 lg:p-8">
+      <header class="mb-6 flex flex-wrap items-start justify-between gap-4">
         <div>
           <h1 class="text-lg font-semibold text-ink-strong">Users</h1>
           <p class="mt-1 text-sm text-ink-muted">
@@ -66,8 +66,8 @@ const { state, actions } = useUsersController();
         <div
           v-for="user in state.users"
           :key="user.id"
-          class="flex items-center gap-3 border-b border-line-soft px-4 py-3 last:border-0">
-          <div class="min-w-0 flex-1">
+          class="flex flex-wrap items-center gap-x-3 gap-y-2 border-b border-line-soft px-4 py-3 last:border-0">
+          <div class="min-w-0 flex-1 basis-full sm:basis-0">
             <p class="truncate font-mono text-sm text-ink-strong">
               {{ user.email }}
             </p>
@@ -83,6 +83,7 @@ const { state, actions } = useUsersController();
           </div>
           <DbButton
             v-if="user.role !== 'root'"
+            class="ml-auto sm:ml-0"
             size="sm"
             variant="secondary"
             @click="actions.openEdit(user)">
@@ -100,7 +101,7 @@ const { state, actions } = useUsersController();
 
       <!-- AI Agents section -->
       <section class="mt-8">
-        <header class="mb-3 flex items-center justify-between">
+        <header class="mb-3 flex flex-wrap items-start justify-between gap-3">
           <div>
             <h2 class="text-sm font-semibold text-ink-strong">AI agents</h2>
             <p class="text-xs text-ink-muted">
@@ -140,9 +141,9 @@ const { state, actions } = useUsersController();
           <div
             v-for="account in state.serviceAccounts"
             :key="account.id"
-            class="flex items-center gap-3 border-b border-line-soft px-4 py-3 last:border-0">
-            <div class="min-w-0 flex-1">
-              <p class="font-mono text-sm text-ink-strong">
+            class="flex flex-wrap items-center gap-x-3 gap-y-2 border-b border-line-soft px-4 py-3 last:border-0">
+            <div class="min-w-0 flex-1 basis-full sm:basis-0">
+              <p class="truncate font-mono text-sm text-ink-strong">
                 {{ account.name }}
               </p>
               <DbBadge tone="neutral">AI agent</DbBadge>
@@ -165,7 +166,7 @@ const { state, actions } = useUsersController();
                 </p>
               </div>
             </div>
-            <div class="flex items-center gap-2">
+            <div class="ml-auto flex items-center gap-2">
               <DbButton
                 size="sm"
                 variant="secondary"

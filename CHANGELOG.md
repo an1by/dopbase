@@ -79,6 +79,17 @@ configurable retention archives expired records before deleting them.
   cannot be written. `backup.restored` names the archive, its record count,
   and the replaced chain's head.
 
+- The admin UI now works on phones and tablets. Below 1024px the sidebar
+  folds into a top bar with a menu button that opens the navigation in a
+  side sheet, and the project rail moves behind a `project / environment`
+  switcher at the top of the Projects page.
+  Tables for secrets, tokens, backups, and audit events keep their
+  key columns on small screens and show the rest as a second line under each row.
+  Dialogs dock to the bottom of a phone screen and scroll inside,
+  so their buttons stay in reach. Project and environment rename and delete
+  buttons are always visible on touch screens, and form fields use
+  16px text on phones so iOS no longer zooms in when a field is focused.
+
 ### Security Update
 
 - Improved security to prevent secret value guessing.

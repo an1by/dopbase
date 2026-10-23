@@ -33,8 +33,8 @@ const {
 
 <template>
   <DashboardLayout>
-    <div class="mx-auto max-w-5xl p-8">
-      <header class="mb-6 flex items-center justify-between">
+    <div class="mx-auto max-w-5xl px-4 py-6 sm:px-6 lg:p-8">
+      <header class="mb-6 flex flex-wrap items-start justify-between gap-4">
         <div>
           <div class="flex items-center gap-2.5">
             <h1 class="text-lg font-semibold text-ink-strong">Instance</h1>
@@ -61,7 +61,7 @@ const {
         v-if="loading && !status"
         class="space-y-6"
         data-testid="instance-skeleton">
-        <div class="grid grid-cols-1 gap-3.5 sm:grid-cols-2 lg:grid-cols-4">
+        <div class="grid grid-cols-2 gap-3.5 lg:grid-cols-4">
           <div
             v-for="i in 4"
             :key="i"
@@ -92,15 +92,12 @@ const {
       <div v-else-if="status" class="space-y-6" data-testid="instance-content">
         <!-- System Health 4-card grid -->
         <div
-          class="grid grid-cols-1 gap-3.5 sm:grid-cols-2 lg:grid-cols-4"
+          class="grid grid-cols-2 gap-3.5 lg:grid-cols-4"
           data-testid="instance-cards">
           <!-- Version -->
           <div
             class="flex flex-col justify-between rounded-card border border-line bg-panel p-4">
-            <p
-              class="text-[11px] font-semibold tracking-wider text-ink-muted uppercase">
-              Core Version
-            </p>
+            <p class="text-xs text-ink-muted">Core version</p>
             <p class="my-1 font-mono text-lg font-semibold text-ink-strong">
               v{{ status.version }}
             </p>
@@ -116,10 +113,7 @@ const {
           <!-- Database -->
           <div
             class="flex flex-col justify-between rounded-card border border-line bg-panel p-4">
-            <p
-              class="text-[11px] font-semibold tracking-wider text-ink-muted uppercase">
-              Database
-            </p>
+            <p class="text-xs text-ink-muted">Database</p>
             <div class="my-1 flex items-center">
               <DbBadge :tone="healthTone(status.databaseHealth)">
                 {{ status.databaseHealth }}
@@ -131,10 +125,7 @@ const {
           <!-- Master key -->
           <div
             class="flex flex-col justify-between rounded-card border border-line bg-panel p-4">
-            <p
-              class="text-[11px] font-semibold tracking-wider text-ink-muted uppercase">
-              Master Key
-            </p>
+            <p class="text-xs text-ink-muted">Master key</p>
             <div class="my-1 flex items-center">
               <DbBadge :tone="healthTone(status.keyAvailability)">
                 {{ status.keyAvailability }}
@@ -146,10 +137,7 @@ const {
           <!-- Uptime -->
           <div
             class="flex flex-col justify-between rounded-card border border-line bg-panel p-4">
-            <p
-              class="text-[11px] font-semibold tracking-wider text-ink-muted uppercase">
-              Uptime
-            </p>
+            <p class="text-xs text-ink-muted">Uptime</p>
             <p class="my-1 font-mono text-lg font-semibold text-ink-strong">
               {{ formattedUptime }}
             </p>
@@ -160,8 +148,9 @@ const {
         <!-- Telemetry timestamp banner -->
         <div
           class="flex flex-wrap items-center justify-between gap-2 rounded-card border border-line-soft bg-raised/40 px-4 py-2.5 text-xs text-ink-muted">
-          <div class="flex items-center gap-2">
-            <span class="inline-block h-2 w-2 rounded-full bg-ok" />
+          <div class="flex items-start gap-2">
+            <span
+              class="mt-1.5 inline-block h-2 w-2 shrink-0 rounded-full bg-ok" />
             <span
               >Observed {{ formattedObservedAt }} ({{
                 relativeObservedAt
@@ -250,7 +239,7 @@ const {
       <!-- Danger zone for root user -->
       <section
         v-if="isRoot"
-        class="mt-10 rounded-card border border-crit/40 bg-crit/5 p-5">
+        class="mt-10 rounded-card border border-crit/40 bg-crit/5 p-4 sm:p-5">
         <h2 class="text-sm font-semibold text-crit">Danger Zone</h2>
         <p class="mt-2 text-sm text-ink-muted">
           Factory reset permanently deletes all projects, secrets, users,
@@ -273,17 +262,20 @@ const {
             Environments {{ resetPreview.environments }} · Secrets
             {{ resetPreview.secrets }} · Backups {{ resetPreview.backups }}
           </p>
-          <label class="flex items-center gap-2 text-sm">
-            <input v-model="resetAcknowledged" type="checkbox" />
+          <label class="flex items-start gap-2 text-sm">
+            <input
+              v-model="resetAcknowledged"
+              class="mt-1 shrink-0"
+              type="checkbox" />
             I understand this permanently deletes the instance data.
           </label>
           <input
             v-model="resetConfirmation"
-            class="w-full rounded-control border border-line bg-panel px-3 py-2 font-mono text-sm"
+            class="w-full rounded-control border border-line bg-panel px-3 py-2 font-mono text-base sm:text-sm"
             placeholder="Type FACTORY RESET" />
           <input
             v-model="resetPassword"
-            class="w-full rounded-control border border-line bg-panel px-3 py-2 text-sm"
+            class="w-full rounded-control border border-line bg-panel px-3 py-2 text-base sm:text-sm"
             type="password"
             placeholder="Root password" />
           <p v-if="resetError" class="text-sm text-crit">{{ resetError }}</p>

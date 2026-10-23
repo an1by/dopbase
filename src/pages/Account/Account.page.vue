@@ -34,9 +34,9 @@ const {
 
 <template>
   <DashboardLayout>
-    <div class="mx-auto max-w-5xl p-8">
+    <div class="mx-auto max-w-5xl px-4 py-6 sm:px-6 lg:p-8">
       <!-- Header -->
-      <header class="mb-6 flex items-center justify-between">
+      <header class="mb-6 flex flex-wrap items-start justify-between gap-4">
         <div>
           <div class="flex items-center gap-2.5">
             <h1 class="text-lg font-semibold text-ink-strong">Account</h1>

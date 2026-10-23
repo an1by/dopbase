@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { ref } from "vue";
+import { computed, ref } from "vue";
 import { useAuditController } from "./Audit.controller";
 import { DashboardLayout } from "~/layouts";
 import {
@@ -11,7 +11,11 @@ import {
   DbSelect,
   DbSkeleton,
 } from "~/components/ui";
-import { HistoryIcon, RefreshIcon } from "~/assets/icons";
+import {
+  HistoryIcon,
+  RefreshIcon,
+  SlidersHorizontalIcon,
+} from "~/assets/icons";
 import type { AuditEvent } from "~/services";
 
 /**
@@ -41,6 +45,12 @@ const {
 } = controller;
 
 const expandedId = ref<string | null>(null);
+// Phones show the filters behind a toggle so the first events stay on the
+// first screen. From `sm` up the filter grid is always visible.
+const showFilters = ref(false);
+const activeFilterCount = computed(
+  () => Object.values(filters).filter((value) => value !== "").length,
+);
 
 function toggle(event: AuditEvent): void {
   expandedId.value = expandedId.value === event.id ? null : event.id;
@@ -49,7 +59,7 @@ function toggle(event: AuditEvent): void {
 
 <template>
   <DashboardLayout>
-    <div class="mx-auto max-w-5xl p-8">
+    <div class="mx-auto max-w-5xl px-4 py-6 sm:px-6 lg:p-8">
       <header class="mb-6">
         <h1 class="text-lg font-semibold">Audit</h1>
         <p class="mt-0.5 text-sm text-ink-muted">
@@ -58,7 +68,10 @@ function toggle(event: AuditEvent): void {
       </header>
 
       <!-- Filters -->
-      <div class="mb-4 grid grid-cols-1 gap-3 sm:grid-cols-2 lg:grid-cols-4">
+      <div
+        id="audit-filters"
+        class="mb-4 grid-cols-1 gap-3 sm:grid sm:grid-cols-2 lg:grid-cols-4"
+        :class="showFilters ? 'grid' : 'hidden'">
         <DbInput
           v-model="filters.action"
           label="Action"
@@ -83,7 +96,20 @@ function toggle(event: AuditEvent): void {
           mono />
       </div>
 
-      <div class="mb-4 flex items-center gap-2">
+      <div class="mb-4 flex flex-wrap items-center gap-2">
+        <DbButton
+          class="sm:hidden"
+          size="sm"
+          variant="secondary"
+          aria-controls="audit-filters"
+          :aria-expanded="showFilters"
+          @click="showFilters = !showFilters">
+          <SlidersHorizontalIcon class="h-3.5 w-3.5" />
+          Filters
+          <span v-if="activeFilterCount > 0" class="text-ink-muted">
+            {{ activeFilterCount }}
+          </span>
+        </DbButton>
         <DbButton
           size="sm"
           variant="secondary"
@@ -106,20 +132,18 @@ function toggle(event: AuditEvent): void {
         <table class="min-w-full text-left text-sm">
           <thead>
             <tr class="border-b border-line">
-              <th
-                class="px-4 py-2.5 text-xs font-medium uppercase tracking-wide text-ink-muted">
+              <th class="px-4 py-2.5 text-xs font-medium text-ink-muted">
                 Time
               </th>
-              <th
-                class="px-4 py-2.5 text-xs font-medium uppercase tracking-wide text-ink-muted">
+              <th class="px-4 py-2.5 text-xs font-medium text-ink-muted">
                 Action
               </th>
               <th
-                class="px-4 py-2.5 text-xs font-medium uppercase tracking-wide text-ink-muted">
+                class="hidden px-4 py-2.5 text-xs font-medium text-ink-muted sm:table-cell">
                 Actor
               </th>
               <th
-                class="px-4 py-2.5 text-xs font-medium uppercase tracking-wide text-ink-muted">
+                class="hidden px-4 py-2.5 text-xs font-medium text-ink-muted sm:table-cell">
                 Context
               </th>
             </tr>
@@ -135,10 +159,10 @@ function toggle(event: AuditEvent): void {
               <td class="px-4 py-3">
                 <DbSkeleton class="h-5 w-32 rounded-control" />
               </td>
-              <td class="px-4 py-3">
+              <td class="hidden px-4 py-3 sm:table-cell">
                 <DbSkeleton class="h-4 w-24" />
               </td>
-              <td class="px-4 py-3">
+              <td class="hidden px-4 py-3 sm:table-cell">
                 <DbSkeleton class="h-4 w-44" />
               </td>
             </tr>
@@ -161,20 +185,18 @@ function toggle(event: AuditEvent): void {
         <table class="min-w-full text-left text-sm" data-testid="audit-table">
           <thead>
             <tr class="border-b border-line">
-              <th
-                class="px-4 py-2.5 text-xs font-medium uppercase tracking-wide text-ink-muted">
+              <th class="px-4 py-2.5 text-xs font-medium text-ink-muted">
                 Time
               </th>
-              <th
-                class="px-4 py-2.5 text-xs font-medium uppercase tracking-wide text-ink-muted">
+              <th class="px-4 py-2.5 text-xs font-medium text-ink-muted">
                 Action
               </th>
               <th
-                class="px-4 py-2.5 text-xs font-medium uppercase tracking-wide text-ink-muted">
+                class="hidden px-4 py-2.5 text-xs font-medium text-ink-muted sm:table-cell">
                 Actor
               </th>
               <th
-                class="px-4 py-2.5 text-xs font-medium uppercase tracking-wide text-ink-muted">
+                class="hidden px-4 py-2.5 text-xs font-medium text-ink-muted sm:table-cell">
                 Context
               </th>
             </tr>
@@ -189,15 +211,28 @@ function toggle(event: AuditEvent): void {
                   :title="formatDateTime(event.createdAt)">
                   {{ formatRelativeTime(event.createdAt) }}
                 </td>
-                <td class="px-4 py-2.5">
-                  <DbBadge tone="accent">{{ event.action }}</DbBadge>
+                <td class="w-full max-w-0 px-4 py-2.5 sm:w-auto sm:max-w-none">
+                  <DbBadge tone="accent">
+                    {{ event.action }}
+                  </DbBadge>
+                  <p
+                    class="mt-0.5 truncate font-mono text-xs text-ink-muted sm:hidden">
+                    {{ event.actorLabel ?? event.actorType }}
+                    <template v-if="event.projectId">
+                      · {{ projectName(event.projectId) }}
+                    </template>
+                    <template v-if="event.environmentId">
+                      / {{ environmentName(event.environmentId) }}
+                    </template>
+                  </p>
                 </td>
-                <td class="px-4 py-2.5 text-sm">
+                <td class="hidden px-4 py-2.5 text-sm sm:table-cell">
                   <span class="font-mono text-ink">
                     {{ event.actorLabel ?? event.actorType }}
                   </span>
                 </td>
-                <td class="px-4 py-2.5 font-mono text-sm text-ink-muted">
+                <td
+                  class="hidden px-4 py-2.5 font-mono text-sm text-ink-muted sm:table-cell">
                   {{ projectName(event.projectId) }}
                   <template v-if="event.environmentId">
                     / {{ environmentName(event.environmentId) }}
@@ -208,7 +243,8 @@ function toggle(event: AuditEvent): void {
                 v-if="expandedId === event.id"
                 class="border-b border-line-soft bg-canvas/60 last:border-b-0">
                 <td colspan="4" class="px-4 py-3">
-                  <div class="flex flex-col gap-2 font-mono text-xs text-ink">
+                  <div
+                    class="flex flex-col gap-2 break-all font-mono text-xs text-ink">
                     <p>
                       <span class="text-ink-muted">timestamp:</span>
                       {{ event.createdAt }}

@@ -41,7 +41,7 @@ function onChange(event: Event): void {
           :id="id"
           :value="modelValue"
           :disabled="disabled"
-          class="h-full w-full cursor-pointer appearance-none bg-transparent pl-3.5 pr-9 text-sm text-ink-strong outline-none disabled:cursor-default"
+          class="h-full w-full cursor-pointer appearance-none bg-transparent pl-3.5 pr-9 text-base text-ink-strong outline-none sm:text-sm disabled:cursor-default"
           @change="onChange">
           <option
             v-for="option in options"
