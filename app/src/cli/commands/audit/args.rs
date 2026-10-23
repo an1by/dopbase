@@ -1,6 +1,6 @@
 use std::path::PathBuf;
 
-use clap::Subcommand;
+use clap::{Args, Subcommand};
 
 #[derive(Subcommand, Debug)]
 pub enum AuditCommand {
@@ -25,26 +25,34 @@ pub enum AuditCommand {
     #[arg(long)]
     force: bool,
 
-    /// Only records with this action, for example secret.updated.
-    #[arg(long, value_name = "ACTION")]
-    action: Option<String>,
-
-    /// Only records for this project (name or ID).
-    #[arg(long, value_name = "PROJECT_REF")]
-    project: Option<String>,
-
-    /// Only records for this environment (PROJECT/NAME or environment ID).
-    #[arg(long, value_name = "ENVIRONMENT_REF")]
-    environment: Option<String>,
-
-    /// Only records for this actor (email or actor ID).
-    #[arg(long, value_name = "ACTOR")]
-    actor: Option<String>,
+    #[command(flatten)]
+    filters: AuditFilters,
 
     /// Stop after this many records.
     #[arg(long, value_name = "N")]
     limit: Option<u64>,
   },
+}
+
+/// Filters for the audit list API. Names are resolved
+/// to IDs before the audit request is sent.
+#[derive(Args, Debug, Default)]
+pub struct AuditFilters {
+  /// Only records with this action, for example secret.updated.
+  #[arg(long, value_name = "ACTION")]
+  pub action: Option<String>,
+
+  /// Only records for this project (name or ID).
+  #[arg(long, value_name = "PROJECT_REF")]
+  pub project: Option<String>,
+
+  /// Only records for this environment (PROJECT/NAME or environment ID).
+  #[arg(long, value_name = "ENVIRONMENT_REF")]
+  pub environment: Option<String>,
+
+  /// Only records for this actor (email or actor ID).
+  #[arg(long, value_name = "ACTOR")]
+  pub actor: Option<String>,
 }
 
 /// Parses an anchor such as `42:9f86d0…`: a positive sequence number and

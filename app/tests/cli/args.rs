@@ -1,6 +1,6 @@
 use app::cli::args::{
-  AdminCommand, AuditCommand, Cli, Command, ExportArgs, ImportArgs, InitArgs, RunArgs,
-  ServerCommand,
+  AdminCommand, AuditCommand, AuditFilters, Cli, Command, ExportArgs, ImportArgs, InitArgs,
+  RunArgs, ServerCommand,
 };
 use app::cli::secret_format::{ExportFormat, SecretFormat};
 use app::constants::config::executable_environment_names;
@@ -686,10 +686,13 @@ fn audit_export_parses_its_filters_and_output() {
         AuditCommand::Export {
           output,
           force,
-          action,
-          project,
-          environment,
-          actor,
+          filters:
+            AuditFilters {
+              action,
+              project,
+              environment,
+              actor,
+            },
           limit,
         },
     } => {

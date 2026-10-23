@@ -14,7 +14,7 @@ use crate::{
 };
 
 pub use admin::AdminCommand;
-pub use audit::AuditCommand;
+pub use audit::{AuditCommand, AuditFilters};
 pub use auth::LoginArgs;
 pub use backup::BackupArgs;
 pub use cache::CacheCommand;
