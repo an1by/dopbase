@@ -9,22 +9,28 @@ Audit records answer who performed a sensitive action, where it happened, and wh
 
 ## Audit events in {{version}}
 
-| Area                  | Events                                                                                                                                                              |
-| --------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| Secrets               | `secret.created`, `secret.updated`, `secret.deleted`, `secret.revealed`, `secret.imported`, `secret.import_previewed`, `secret.exported`, `secret.runtime_accessed` |
-| Projects              | `project.created`, `project.renamed`, `project.deleted`, `project.initialized`                                                                                      |
-| Environments          | `environment.created`, `environment.renamed`, `environment.deleted`                                                                                                 |
-| Runner tokens         | `token.created`, `token.revoked`                                                                                                                                    |
-| Authentication        | `login.succeeded`, `login.failed`, `logout.succeeded`                                                                                                               |
-| Administrator & users | `admin.bootstrapped`, `admin.created`, `admin.updated`, `admin.deleted`, `admin.reauthenticated`, `admin.password_changed`                                          |
-| AI service accounts   | `service_account.created`, `service_account.deleted`, `service_account.token_created`, `service_account.token_revoked`                                              |
-| Backups               | `backup.created`, `backup.downloaded`, `backup.uploaded`, `backup.restored`, `backup.deleted`, `master_key.downloaded`, `backup.restored_bootstrap`                 |
-| Audit log             | `audit.pruned`                                                                                                                                                      |
+| Area                  | Events                                                                                                                                                                                                               |
+| --------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Secrets               | `secret.created`, `secret.updated`, `secret.deleted`, `secret.revealed`, `secret.version_revealed`, `secret.rolled_back`, `secret.imported`, `secret.import_previewed`, `secret.exported`, `secret.runtime_accessed` |
+| Projects              | `project.created`, `project.renamed`, `project.deleted`, `project.initialized`                                                                                                                                       |
+| Environments          | `environment.created`, `environment.renamed`, `environment.deleted`                                                                                                                                                  |
+| Runner tokens         | `token.created`, `token.revoked`                                                                                                                                                                                     |
+| Authentication        | `login.succeeded`, `login.failed`, `logout.succeeded`                                                                                                                                                                |
+| Administrator & users | `admin.bootstrapped`, `admin.created`, `admin.updated`, `admin.deleted`, `admin.reauthenticated`, `admin.password_changed`                                                                                           |
+| AI service accounts   | `service_account.created`, `service_account.deleted`, `service_account.token_created`, `service_account.token_revoked`                                                                                               |
+| Backups               | `backup.created`, `backup.downloaded`, `backup.uploaded`, `backup.restored`, `backup.deleted`, `master_key.downloaded`, `backup.restored_bootstrap`                                                                  |
+| Audit log             | `audit.pruned`                                                                                                                                                                                                       |
 
 Successful import previews record `secret.import_previewed`. The record
 identifies the actor and environment and includes only the import mode and
 submitted entry count in its metadata. It contains no submitted values or
 comparison results. Applying an import records `secret.imported`.
+
+Revealing an earlier version records `secret.version_revealed` with the key
+and version. A rollback records `secret.rolled_back` with the key, the
+restored `sourceVersion`, the `previousVersion` that was current, and the new
+`version`. Neither stores a value. Listing a secret's history is not audited,
+the same as listing secrets.
 
 ## Browsing events
 

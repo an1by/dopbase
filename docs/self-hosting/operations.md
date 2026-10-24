@@ -21,6 +21,22 @@ trusted_proxies = ["127.0.0.1", "172.16.0.0/12"]
 
 Dopbase reads the header from the right and stops at the first address that is not a trusted proxy, so a client cannot choose the address it is recorded under. Configure the proxy to set or append `X-Forwarded-For`, and list only proxies you run: any address on the list can claim to be any client.
 
+## Secret history
+
+Dopbase keeps the value of the newest 20 versions of every secret so they can
+be [rolled back](/guide/projects-environments-secrets#versions-and-rollback).
+Set `secret_history_versions` in `server.toml`, or
+`DOPBASE_SECRET_HISTORY_VERSIONS`, to keep between 2 and 1000:
+
+```toml
+secret_history_versions = 50
+```
+
+The setting applies to a secret the next time it is saved. Retained versions
+are part of the database, so backups and restores carry them, and they grow
+the database by roughly the size of each stored value. Expired versions keep
+only metadata.
+
 ## Monitoring
 
 Monitor service availability, database health, disk space, backup completion, authentication failures, and abnormal audit activity. Monitoring output must not contain request bodies or secret values.

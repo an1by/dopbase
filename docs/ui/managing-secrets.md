@@ -17,6 +17,31 @@ and metadata. Values stay hidden until you explicitly reveal one.
 Every change is an individual record. Replacing `STRIPE_SECRET_KEY` does not
 touch `DATABASE_URL`, and each change lands in the [audit log](./audit-instance).
 
+Deleting a secret also deletes its version history.
+
+## History and rollback
+
+Each save creates a new version. Open **History** on a row, or **See history**
+in the update dialog, to list the versions of that secret, newest first. Each
+row shows the change (created, updated, imported, or rolled back from an
+earlier version), who made it, and when. The current version is marked
+`current`. Versions past the
+[retention limit](/guide/projects-environments-secrets#versions-and-rollback)
+are marked `expired`: their value is no longer stored, so they cannot be
+revealed or restored.
+
+To check an old value, use the eye button on its row. It asks for your
+password like any reveal, and hides the value again after thirty seconds.
+
+**Roll back** saves the value of that version as a new version. The dialog
+asks you to confirm first and shows the version number the result gets.
+History is never changed, so you can roll back a rollback. If someone changed
+the secret while the dialog was open, Dopbase refuses the rollback, reloads
+the history, and asks you to check it and try again.
+
+Apps get the restored value the next time they fetch secrets. Processes
+already started with `dopbase run` keep the old value until they restart.
+
 ## Revealing a value
 
 Reveal shows the plaintext next to the key, with a countdown starting at
@@ -28,7 +53,8 @@ plaintext only in memory and removes it when reloaded.
 
 ## Password re-confirmation
 
-Revealing, exporting, and importing require a recent password confirmation.
+Revealing, exporting, importing, and rolling back require a recent password
+confirmation.
 This includes import previews and saving changes from the `.env` editor. If
 you have not entered your password in the last ten minutes, the server asks
 for it first. After confirmation, the pending action continues. Cancelling
