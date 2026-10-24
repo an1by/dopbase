@@ -8,6 +8,9 @@ use crate::config::database_path;
 /// Embedded database migrations, exposed so tests can drive `run`/`undo`.
 pub static MIGRATOR: sqlx::migrate::Migrator = sqlx::migrate!("./migrations");
 
+/// TODO: when all user has migrate fully migrate will remove legacy capabilities
+/// to make sure our code is clean
+/// PR: https://github.com/dopbase/dopbase/pull/140
 /// Highest version recorded by the sequential naming scheme that shipped
 /// through 0.1.9.
 const LEGACY_MIGRATION_HEAD: i64 = 18;
