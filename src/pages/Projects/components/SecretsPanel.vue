@@ -5,6 +5,7 @@ import { useSecretsPanelController } from "./SecretsPanel.controller";
 import EnvFileEditor from "./EnvFileEditor.vue";
 import ImportSecretsDialog from "./ImportSecretsDialog.vue";
 import ExportSecretsDialog from "./ExportSecretsDialog.vue";
+import SecretHistoryDialog from "./SecretHistoryDialog.vue";
 import {
   DbAlert,
   DbBadge,
@@ -17,12 +18,13 @@ import {
   DbModal,
   DbSkeleton,
   DbTextarea,
-  DbCode,
 } from "~/components/ui";
 import {
   EyeIcon,
   EyeOffIcon,
+  HistoryIcon,
   KeyIcon,
+  LockIcon,
   PencilIcon,
   TrashIcon,
 } from "~/assets/icons";
@@ -106,6 +108,19 @@ type FormState =
   | null;
 
 type PanelView = "table" | "editor";
+
+/** The key whose version history is open, if any. */
+const historyKey = ref<string | null>(null);
+
+function openHistory(key: string): void {
+  form.value = null;
+  historyKey.value = key;
+}
+
+function onRolledBack(): void {
+  hideRevealed();
+  void controller.reload();
+}
 
 const view = ref<PanelView>("table");
 /** Pending view switch while an unsaved-editor discard is confirmed. */
@@ -460,6 +475,13 @@ async function confirmDelete(): Promise<void> {
                     <button
                       type="button"
                       class="cursor-pointer rounded p-1.5 text-ink-muted transition-colors hover:text-ink-strong pointer-coarse:p-2.5"
+                      :aria-label="`History ${secret.key}`"
+                      @click="openHistory(secret.key)">
+                      <HistoryIcon class="h-3.5 w-3.5" />
+                    </button>
+                    <button
+                      type="button"
+                      class="cursor-pointer rounded p-1.5 text-ink-muted transition-colors hover:text-ink-strong pointer-coarse:p-2.5"
                       :aria-label="`Edit ${secret.key}`"
                       @click="openEdit(secret)">
                       <PencilIcon class="h-3.5 w-3.5" />
@@ -630,12 +652,33 @@ async function confirmDelete(): Promise<void> {
           mono
           hint="Use letters, numbers, '_', and '-'. The first character cannot be a number." />
         <div v-else class="flex flex-col gap-1.5">
-          <span class="text-xs font-medium text-ink-muted">Key</span>
-          <DbCode>{{ form.secret.key }}</DbCode>
-          <span class="text-xs text-ink-muted">
-            Current version: v{{ form.secret.version }}. Saving creates a new
-            version.
-          </span>
+          <div class="rounded-control bg-raised" data-testid="secret-key-field">
+            <p class="px-3.5 pb-0.5 pt-2 text-xs font-semibold text-ink-muted">
+              Key
+            </p>
+            <div class="flex h-9 items-center gap-2 px-3.5">
+              <LockIcon
+                class="h-3.5 w-3.5 shrink-0 text-ink-faint"
+                aria-hidden="true" />
+              <span
+                class="min-w-0 flex-1 truncate font-mono text-xs text-ink-strong"
+                :title="form.secret.key">
+                {{ form.secret.key }}
+              </span>
+              <DbBadge>v{{ form.secret.version }}</DbBadge>
+            </div>
+          </div>
+          <p class="text-xs text-ink-muted">
+            Keys can't be renamed. Saving stores the new value as v{{
+              form.secret.version + 1
+            }}.
+            <button
+              type="button"
+              class="cursor-pointer text-accent-strong underline-offset-2 hover:underline"
+              @click="openHistory(form.secret.key)">
+              See history
+            </button>
+          </p>
         </div>
         <DbTextarea
           v-model="form.value"
@@ -675,7 +718,7 @@ async function confirmDelete(): Promise<void> {
     <DbConfirmDialog
       :open="deleteTarget !== null"
       title="Delete secret"
-      :description="`Deleting '${deleteTarget?.key}' permanently removes the current value. This is recorded in the audit log.`"
+      :description="`Deleting '${deleteTarget?.key}' permanently removes its value and its version history. This is recorded in the audit log.`"
       :confirm-word="deleteTarget?.key"
       confirm-label="Delete secret"
       :loading="deleteLoading"
@@ -692,6 +735,13 @@ async function confirmDelete(): Promise<void> {
       tone="danger"
       @confirm="confirmDiscardSwitch"
       @close="discardTarget = null" />
+
+    <!-- Version history and rollback -->
+    <SecretHistoryDialog
+      :environment-id="environmentId"
+      :secret-key="historyKey"
+      @close="historyKey = null"
+      @rolled-back="onRolledBack" />
 
     <!-- Import / export -->
     <ImportSecretsDialog

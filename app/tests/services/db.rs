@@ -58,7 +58,7 @@ async fn creates_owner_only_database_file() {
 
 #[tokio::test]
 async fn migrations_apply_rollback_and_reapply() {
-  const TABLES: [&str; 13] = [
+  const TABLES: [&str; 14] = [
     "instance_metadata",
     "admins",
     "sessions",
@@ -72,6 +72,7 @@ async fn migrations_apply_rollback_and_reapply() {
     "agent_tokens",
     "audit_chain_anchor",
     "audit_chain_genesis",
+    "secret_versions",
   ];
   const TRIGGERS: [&str; 1] = ["audit_events_sealed_immutable"];
   const INDEXES: [&str; 11] = [
@@ -154,6 +155,7 @@ async fn foreign_keys_cascade_dependent_records() {
   .unwrap();
   sqlx::query("INSERT INTO environments(id,project_id,name,created_at,updated_at) VALUES('env_test','prj_test','production','now','now')").execute(db.pool()).await.unwrap();
   sqlx::query("INSERT INTO secrets(environment_id,key,ciphertext,value_nonce,wrapped_key,key_nonce,created_at,updated_at) VALUES('env_test','API_KEY',X'01',X'02',X'03',X'04','now','now')").execute(db.pool()).await.unwrap();
+  sqlx::query("INSERT INTO secret_versions(environment_id,key,version,ciphertext,value_nonce,wrapped_key,key_nonce,change_type,actor_type,created_at) VALUES('env_test','API_KEY',1,X'01',X'02',X'03',X'04','created','admin','now')").execute(db.pool()).await.unwrap();
   sqlx::query("INSERT INTO runner_tokens(id,environment_id,name,token_hash,created_at) VALUES('tok_test','env_test','runner',X'05','now')").execute(db.pool()).await.unwrap();
   let expiry: Option<String> =
     sqlx::query_scalar("SELECT expires_at FROM runner_tokens WHERE id='tok_test'")
@@ -171,13 +173,65 @@ async fn foreign_keys_cascade_dependent_records() {
     .await
     .unwrap();
 
-  for table in ["sessions", "environments", "secrets", "runner_tokens"] {
+  for table in [
+    "sessions",
+    "environments",
+    "secrets",
+    "secret_versions",
+    "runner_tokens",
+  ] {
     let count: i64 = sqlx::query_scalar(&format!("SELECT COUNT(*) FROM {table}"))
       .fetch_one(db.pool())
       .await
       .unwrap();
     assert_eq!(count, 0, "cascade did not clear {table}");
   }
+  db.close().await;
+}
+
+#[tokio::test]
+async fn secret_versions_migration_keeps_existing_values_as_legacy_versions() {
+  let directory = tempfile::TempDir::new().unwrap();
+  let database = directory.path().join("secret-versions.db");
+  let db = DbClient::connect(&format!("sqlite://{}", database.display()))
+    .await
+    .unwrap();
+  MIGRATOR.run(db.pool()).await.unwrap();
+  MIGRATOR.undo(db.pool(), 17).await.unwrap();
+  sqlx::query(
+    "INSERT INTO projects(id,name,created_at,updated_at) VALUES('prj_test','project','now','now')",
+  )
+  .execute(db.pool())
+  .await
+  .unwrap();
+  sqlx::query("INSERT INTO environments(id,project_id,name,created_at,updated_at) VALUES('env_test','prj_test','production','now','now')").execute(db.pool()).await.unwrap();
+  sqlx::query("INSERT INTO secrets(environment_id,key,version,ciphertext,value_nonce,wrapped_key,key_nonce,created_at,updated_at) VALUES('env_test','API_KEY',3,X'01',X'02',X'03',X'04','created','updated')").execute(db.pool()).await.unwrap();
+
+  MIGRATOR.run(db.pool()).await.unwrap();
+
+  let row: (i64, Vec<u8>, Vec<u8>, String, String, String, Option<String>) = sqlx::query_as(
+    "SELECT version,ciphertext,wrapped_key,change_type,actor_type,created_at,expired_at FROM secret_versions WHERE environment_id='env_test' AND key='API_KEY'",
+  )
+  .fetch_one(db.pool())
+  .await
+  .unwrap();
+  assert_eq!(
+    row,
+    (
+      3,
+      vec![1],
+      vec![3],
+      "legacy".into(),
+      "system".into(),
+      "updated".into(),
+      None
+    )
+  );
+  // Half-expired rows are rejected, so a version is either restorable or not.
+  let invalid = sqlx::query("UPDATE secret_versions SET ciphertext=NULL WHERE key='API_KEY'")
+    .execute(db.pool())
+    .await;
+  assert!(invalid.is_err());
   db.close().await;
 }
 

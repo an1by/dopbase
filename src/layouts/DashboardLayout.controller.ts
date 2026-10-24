@@ -1,6 +1,7 @@
-import { computed, ref, watch } from "vue";
+import { computed, onUnmounted, ref, watch } from "vue";
 import { useRoute, useRouter } from "vue-router";
 import { useAuthStore } from "~/stores/auth.store";
+import { modalsSuspended } from "~/composable/modal-suspension";
 
 /**
  * DashboardLayout controller: the signed-in email shown in the account
@@ -21,6 +22,18 @@ export function useDashboardLayoutController() {
   const sessionExpired = computed(() => auth.sessionExpired);
   const loggingOut = ref(false);
   const navOpen = ref(false);
+
+  // Close every other dialog while "Session expired" is up.
+  watch(
+    sessionExpired,
+    (expired) => {
+      modalsSuspended.value = expired;
+    },
+    { immediate: true },
+  );
+  onUnmounted(() => {
+    modalsSuspended.value = false;
+  });
 
   watch(
     () => route.fullPath,

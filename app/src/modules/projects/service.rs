@@ -211,7 +211,26 @@ pub async fn init(
     .collect::<Result<Vec<_>, _>>()
     .map_err(|_| HttpError::internal())?;
   for (entry, value) in encrypted {
-    sqlx::query("INSERT INTO secrets(environment_id,key,version,ciphertext,value_nonce,wrapped_key,key_nonce,created_at,updated_at)VALUES(?,?,1,?,?,?,?,?,?)").bind(&environment_id).bind(&entry.key).bind(value.ciphertext).bind(value.value_nonce).bind(value.wrapped_key).bind(value.key_nonce).bind(&now).bind(&now).execute(&mut *tx).await?;
+    crate::modules::secrets::repository::write_version(
+      &mut tx,
+      crate::modules::secrets::repository::NewVersion {
+        environment_id: &environment_id,
+        key: &entry.key,
+        version: 1,
+        encrypted: value,
+        created_at: &now,
+        now: &now,
+        change: crate::modules::secrets::repository::ChangeType::Created,
+        source_version: None,
+        actor: crate::modules::secrets::repository::VersionActor {
+          actor_type: identity.audit_actor_type(),
+          actor_id: Some(admin_id),
+          actor_label: Some(email),
+        },
+        keep: state.config.secret_history_versions,
+      },
+    )
+    .await?;
   }
   common::audit(
     &mut tx,

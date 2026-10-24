@@ -8,6 +8,7 @@ import type {
 } from "~/services/secrets.api";
 import { ApiError } from "~/services/http.client";
 import { useReauthentication } from "~/composable";
+import { useAuthStore } from "~/stores/auth.store";
 import {
   mergeLayoutValues,
   parseEnvFileLines,
@@ -40,6 +41,7 @@ export function useSecretsPanelController(environmentId: Ref<string>) {
   const loadError = ref<string | null>(null);
   const actionError = ref<string | null>(null);
   const { runWithReauth } = useReauthentication();
+  const auth = useAuthStore();
   let loadRequest: AbortController | null = null;
   let operationScope = new AbortController();
   let editorScope = new AbortController();
@@ -123,6 +125,16 @@ export function useSecretsPanelController(environmentId: Ref<string>) {
     formatCountdown(revealSecondsLeft.value),
   );
 
+  /**
+   * Records a failed action, unless the session is gone: the "Session
+   * expired" dialog already says what happened, and a banner behind it
+   * would only suggest the save itself was the problem.
+   */
+  function reportActionError(cause: unknown, fallback: string): void {
+    if (!auth.sessionExpired)
+      actionError.value = describeError(cause, fallback);
+  }
+
   function describeError(cause: unknown, fallback: string): string {
     if (cause instanceof ApiError && cause.firstCode === "REQUEST_INVALID") {
       return "Keys may use letters, numbers, and '_', and cannot start with a number.";
@@ -152,7 +164,7 @@ export function useSecretsPanelController(environmentId: Ref<string>) {
       }, signal);
     } catch (cause) {
       if (signal.aborted) return;
-      actionError.value = describeError(cause, "Could not reveal the secret.");
+      reportActionError(cause, "Could not reveal the secret.");
     }
   }
 
@@ -163,7 +175,7 @@ export function useSecretsPanelController(environmentId: Ref<string>) {
       await secretsApi.setSecret(target, key, value);
       if (environmentId.value === target) await load(target);
     } catch (cause) {
-      actionError.value = describeError(cause, "Could not save the secret.");
+      reportActionError(cause, "Could not save the secret.");
       throw cause;
     }
   }
@@ -177,7 +189,7 @@ export function useSecretsPanelController(environmentId: Ref<string>) {
       if (revealedKey.value === key) hideRevealed();
       await load(target);
     } catch (cause) {
-      actionError.value = describeError(cause, "Could not delete the secret.");
+      reportActionError(cause, "Could not delete the secret.");
       throw cause;
     }
   }

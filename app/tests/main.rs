@@ -438,6 +438,12 @@ async fn concurrent_secret_sets_increment_every_version() {
   .await
   .unwrap();
   assert_eq!(audit_count, 20);
+  let stored: Vec<i64> =
+    sqlx::query_scalar("SELECT version FROM secret_versions WHERE key='SHARED' ORDER BY version")
+      .fetch_all(state.db.pool())
+      .await
+      .unwrap();
+  assert_eq!(stored, (1..=20).collect::<Vec<_>>());
   state.db.close().await;
 }
 
@@ -709,6 +715,9 @@ async fn health_and_openapi_are_available() {
     "/api/v1/environments/{environment_id}/secrets",
     "/api/v1/environments/{environment_id}/secrets/{key}",
     "/api/v1/environments/{environment_id}/secrets/{key}/reveal",
+    "/api/v1/environments/{environment_id}/secrets/{key}/versions",
+    "/api/v1/environments/{environment_id}/secrets/{key}/versions/{version}/reveal",
+    "/api/v1/environments/{environment_id}/secrets/{key}/rollback",
     "/api/v1/environments/{environment_id}/secrets/import",
     "/api/v1/environments/{environment_id}/secrets/layout",
     "/api/v1/environments/{environment_id}/secrets/export",
@@ -1380,6 +1389,8 @@ async fn disabled_web_ui_blocks_pages_and_assets_but_keeps_cli_api_and_optional_
 
 #[path = "modules/secrets/import.rs"]
 mod secrets_import;
+#[path = "modules/secrets/versions.rs"]
+mod secrets_versions;
 
 #[tokio::test]
 async fn audit_records_store_the_client_ip_through_trusted_proxies_only() {

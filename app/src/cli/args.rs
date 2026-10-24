@@ -162,7 +162,7 @@ pub enum Command {
     #[command(subcommand)]
     command: EnvCommand,
   },
-  /// Manage secrets in an environment (list, set, get, delete).
+  /// Manage secrets in an environment (list, set, get, delete, history, rollback).
   #[command(after_help = secret::HELP)]
   Secret {
     #[command(subcommand)]

@@ -337,13 +337,16 @@ deletion does not guarantee forensic erasure. Read the
 
 ## Secret commands
 
-| Command                                               | Purpose                     |
-| ----------------------------------------------------- | --------------------------- |
-| `dopbase secret list <ENVIRONMENT_REF>`               | List keys and safe metadata |
-| `dopbase secret set <ENVIRONMENT_REF> <KEY>`          | Create or update a value    |
-| `dopbase secret get <ENVIRONMENT_REF> <KEY>`          | Read safe metadata          |
-| `dopbase secret get <ENVIRONMENT_REF> <KEY> --reveal` | Explicitly reveal a value   |
-| `dopbase secret delete <ENVIRONMENT_REF> <KEY>`       | Delete one secret           |
+| Command                                                     | Purpose                                                   |
+| ----------------------------------------------------------- | --------------------------------------------------------- |
+| `dopbase secret list <ENVIRONMENT_REF>`                     | List keys and safe metadata                               |
+| `dopbase secret set <ENVIRONMENT_REF> <KEY>`                | Create or update a value                                  |
+| `dopbase secret get <ENVIRONMENT_REF> <KEY>`                | Read safe metadata                                        |
+| `dopbase secret get <ENVIRONMENT_REF> <KEY> --reveal`       | Explicitly reveal a value                                 |
+| `dopbase secret delete <ENVIRONMENT_REF> <KEY>`             | Delete one secret                                         |
+| `dopbase secret history <ENVIRONMENT_REF> <KEY>`            | List the stored versions of a secret                      |
+| `dopbase secret get <ENVIRONMENT_REF> <KEY> --version <N>`  | Read one version's metadata, or its value with `--reveal` |
+| `dopbase secret rollback <ENVIRONMENT_REF> <KEY> [VERSION]` | Restore an earlier value as a new version                 |
 
 `secret set` securely prompts for a value when attached to a terminal. Use
 `--stdin` for automation:
@@ -358,6 +361,53 @@ interactive password confirmation on every invocation and cannot be bypassed
 with `--json`, stdin, or a confirmation flag. Reveal and deletion operations
 are explicit, permission-controlled, and audited. Normal human and JSON output
 never contains a value.
+
+### History and rollback
+
+Every change to a secret is kept as a numbered version. `secret history` lists
+them newest first with the change, who made it, when, and a status:
+
+```text
+$ dopbase secret history payment-service/production DATABASE_URL
+VERSION   CHANGE                BY                SAVED                  STATUS
+v4        rolled back from v2   ana@example.com   2026-10-23 10:02 UTC   current
+v3        updated               bob@example.com   2026-10-22 18:40 UTC   available
+v2        imported              bob@example.com   2026-10-21 09:15 UTC   available
+v1        created               ana@example.com   2026-09-01 08:00 UTC   available
+
+4 version(s)
+```
+
+`available` versions can be restored. `expired` versions are past the
+[retention limit](/guide/projects-environments-secrets#versions-and-rollback):
+Dopbase still shows who changed them and when, but no longer stores the value.
+`--limit` sets the page size (1 to 200, default 50). When more versions exist,
+the command for the next page, with `--before`, is printed to standard error.
+`--json` prints the API page unchanged. History never contains values, and AI
+agent tokens can read it the same way they read `secret list`.
+
+`secret rollback` saves the value of an earlier version as a new version. It
+never edits history, so a rollback can be rolled back too. Leave out VERSION
+in a terminal to pick from the versions you can restore:
+
+```bash
+dopbase secret rollback payment-service/production DATABASE_URL     # pick a version
+dopbase secret rollback payment-service/production DATABASE_URL 2   # roll back to v2
+dopbase secret rollback payment-service/production DATABASE_URL 2 --yes
+```
+
+Before asking for confirmation, the command shows the current version, the
+version being restored, and the version number the result gets. It sends the
+current version with the request, so if someone changes the secret in the
+meantime the server refuses the rollback instead of overwriting their change.
+Without a terminal, pass both VERSION and `--yes`.
+
+Apps read the new value the next time they fetch secrets. Processes already
+started by `dopbase run` keep the old value until they restart.
+
+To check an old value before restoring it, use
+`dopbase secret get <ENVIRONMENT_REF> <KEY> --version <N> --reveal`. Like
+`--reveal` on the current value, it asks for your password and is audited.
 
 ## Import and export
 

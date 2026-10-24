@@ -28,6 +28,28 @@ fn with_query(
   format!("{path}?{name}={value}")
 }
 
+/// Append URL-encoded query parameters. Empty values are skipped, so callers
+/// can pass their options directly.
+fn with_params(
+  path: &str,
+  params: &[(&str, &str)],
+) -> String {
+  let query = params
+    .iter()
+    .filter(|(_, value)| !value.is_empty())
+    .map(|(name, value)| {
+      let encoded: String = url::form_urlencoded::byte_serialize(value.as_bytes()).collect();
+      format!("{name}={encoded}")
+    })
+    .collect::<Vec<_>>()
+    .join("&");
+  if query.is_empty() {
+    path.to_owned()
+  } else {
+    format!("{path}?{query}")
+  }
+}
+
 pub mod docs {
   pub const UI: &str = "/api/docs";
   pub const OPENAPI: &str = api_path!("/openapi.json");
@@ -95,6 +117,10 @@ pub mod secrets {
   pub const RUNTIME: &str = api_path!("/environments/{environment_id}/secrets/runtime");
   pub const ITEM: &str = api_path!("/environments/{environment_id}/secrets/{key}");
   pub const REVEAL: &str = api_path!("/environments/{environment_id}/secrets/{key}/reveal");
+  pub const VERSIONS: &str = api_path!("/environments/{environment_id}/secrets/{key}/versions");
+  pub const VERSION_REVEAL: &str =
+    api_path!("/environments/{environment_id}/secrets/{key}/versions/{version}/reveal");
+  pub const ROLLBACK: &str = api_path!("/environments/{environment_id}/secrets/{key}/rollback");
 
   pub fn collection(environment_id: &str) -> String {
     super::render(COLLECTION, &[("environment_id", environment_id)])
@@ -129,6 +155,45 @@ pub mod secrets {
   ) -> String {
     super::render(REVEAL, &[("environment_id", environment_id), ("key", key)])
   }
+
+  pub fn versions(
+    environment_id: &str,
+    key: &str,
+    params: &[(&str, &str)],
+  ) -> String {
+    super::with_params(
+      &super::render(
+        VERSIONS,
+        &[("environment_id", environment_id), ("key", key)],
+      ),
+      params,
+    )
+  }
+
+  pub fn version_reveal(
+    environment_id: &str,
+    key: &str,
+    version: i64,
+  ) -> String {
+    super::render(
+      VERSION_REVEAL,
+      &[
+        ("environment_id", environment_id),
+        ("key", key),
+        ("version", &version.to_string()),
+      ],
+    )
+  }
+
+  pub fn rollback(
+    environment_id: &str,
+    key: &str,
+  ) -> String {
+    super::render(
+      ROLLBACK,
+      &[("environment_id", environment_id), ("key", key)],
+    )
+  }
 }
 
 pub mod tokens {
@@ -145,6 +210,8 @@ pub mod tokens {
 }
 
 pub mod audit {
+  use super::with_params as with_query;
+
   pub const COLLECTION: &str = api_path!("/audit-events");
   pub const VERIFY: &str = api_path!("/audit-events/verify");
 
@@ -162,26 +229,6 @@ pub mod audit {
         &[("anchorSeq", &seq.to_string()), ("anchorHash", hash)],
       ),
       None => VERIFY.to_owned(),
-    }
-  }
-
-  fn with_query(
-    path: &str,
-    filters: &[(&str, &str)],
-  ) -> String {
-    let query = filters
-      .iter()
-      .filter(|(_, value)| !value.is_empty())
-      .map(|(name, value)| {
-        let encoded: String = url::form_urlencoded::byte_serialize(value.as_bytes()).collect();
-        format!("{name}={encoded}")
-      })
-      .collect::<Vec<_>>()
-      .join("&");
-    if query.is_empty() {
-      path.to_owned()
-    } else {
-      format!("{path}?{query}")
     }
   }
 }

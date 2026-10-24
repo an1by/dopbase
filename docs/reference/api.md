@@ -88,6 +88,35 @@ project/environment, mode, and submitted entry count. They do not change
 secrets, versions, or layout. If the audit event cannot be saved, the server
 returns an error without the comparison results.
 
+## Secret versions
+
+`GET /api/v1/environments/{id}/secrets/{key}/versions` lists a secret's
+versions newest first, with the same access as listing secrets. Each item has
+`version`, `changeType` (`created`, `updated`, `imported`, `rolled_back`, or
+`legacy`), `sourceVersion` for rollbacks, `actorType`, `actorLabel`,
+`createdAt`, `current`, and `restorable`, which is `false` once retention has
+removed the value. Pass `limit` (1 to 200, default 50) and `before` to page;
+the response carries `nextBefore` for the next page and `retainedVersions`,
+the server's retention count. Items never contain values.
+
+`POST /api/v1/environments/{id}/secrets/{key}/versions/{version}/reveal`
+returns one version's value, and `POST /api/v1/environments/{id}/secrets/{key}/rollback`
+with `{ "version": 3, "expectedVersion": 5 }` saves the value of v3 as a new
+version. Both need a project manager, the CSRF header and recent password
+confirmation for browser sessions, and are audited. Runner tokens and AI agent
+tokens are refused with `403`.
+
+A rollback answers with the new `version`, `sourceVersion`, and
+`previousVersion`. It is refused, without writing anything, with:
+
+| Status | Code                        | Meaning                                            |
+| ------ | --------------------------- | -------------------------------------------------- |
+| `404`  | `SECRET_NOT_FOUND`          | The secret does not exist                          |
+| `404`  | `SECRET_VERSION_NOT_FOUND`  | The version does not exist                         |
+| `409`  | `SECRET_VERSION_IS_CURRENT` | The version is already the current value           |
+| `409`  | `SECRET_VERSION_CONFLICT`   | The current version is no longer `expectedVersion` |
+| `410`  | `SECRET_VERSION_EXPIRED`    | Retention removed the value; reveal returns it too |
+
 ## Secret editor snapshots
 
 `POST /api/v1/environments/{id}/secrets/export` returns `entries`, `revision`,

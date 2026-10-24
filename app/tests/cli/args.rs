@@ -1,6 +1,6 @@
 use app::cli::args::{
   AdminCommand, AuditCommand, AuditFilters, Cli, Command, ExportArgs, ImportArgs, InitArgs,
-  RunArgs, ServerCommand,
+  RunArgs, SecretCommand, ServerCommand,
 };
 use app::cli::secret_format::{ExportFormat, SecretFormat};
 use app::constants::config::executable_environment_names;
@@ -711,6 +711,95 @@ fn audit_list_parses_filters_limit_and_cursor() {
 }
 
 #[test]
+fn secret_history_and_rollback_parse_versions_and_limits() {
+  let cli = Cli::try_parse_from(["dopbase", "secret", "history", "app/prod", "API_KEY"]).unwrap();
+  let Command::Secret {
+    command: SecretCommand::History {
+      environment,
+      key,
+      limit,
+      before,
+    },
+  } = cli.command
+  else {
+    panic!("expected secret history");
+  };
+  assert_eq!(
+    (environment.as_str(), key.as_str()),
+    ("app/prod", "API_KEY")
+  );
+  assert_eq!(limit, 50);
+  assert!(before.is_none());
+
+  let cli = Cli::try_parse_from([
+    "dopbase", "secret", "history", "app/prod", "API_KEY", "--limit", "200", "--before", "7",
+  ])
+  .unwrap();
+  let Command::Secret {
+    command: SecretCommand::History { limit, before, .. },
+  } = cli.command
+  else {
+    panic!("expected secret history");
+  };
+  assert_eq!((limit, before), (200, Some(7)));
+
+  let cli = Cli::try_parse_from(["dopbase", "secret", "rollback", "app/prod", "API_KEY"]).unwrap();
+  let Command::Secret {
+    command: SecretCommand::Rollback { version, yes, .. },
+  } = cli.command
+  else {
+    panic!("expected secret rollback");
+  };
+  assert_eq!((version, yes), (None, false));
+  let cli = Cli::try_parse_from([
+    "dopbase", "secret", "rollback", "app/prod", "API_KEY", "3", "--yes",
+  ])
+  .unwrap();
+  let Command::Secret {
+    command: SecretCommand::Rollback { version, yes, .. },
+  } = cli.command
+  else {
+    panic!("expected secret rollback");
+  };
+  assert_eq!((version, yes), (Some(3), true));
+
+  let cli = Cli::try_parse_from([
+    "dopbase",
+    "secret",
+    "get",
+    "app/prod",
+    "API_KEY",
+    "--version",
+    "2",
+    "--reveal",
+  ])
+  .unwrap();
+  let Command::Secret {
+    command: SecretCommand::Get {
+      version, reveal, ..
+    },
+  } = cli.command
+  else {
+    panic!("expected secret get");
+  };
+  assert_eq!((version, reveal), (Some(2), true));
+
+  for arguments in [
+    &["dopbase", "secret", "history", "e", "K", "--limit", "0"][..],
+    &["dopbase", "secret", "history", "e", "K", "--limit", "201"],
+    &["dopbase", "secret", "history", "e", "K", "--before", "0"],
+    &["dopbase", "secret", "rollback", "e", "K", "0"],
+    &["dopbase", "secret", "rollback", "e", "K", "latest"],
+    &["dopbase", "secret", "get", "e", "K", "--version", "0"],
+  ] {
+    assert!(
+      Cli::try_parse_from(arguments).is_err(),
+      "{arguments:?} should be rejected"
+    );
+  }
+}
+
+#[test]
 fn audit_export_parses_its_filters_and_output() {
   let cli = Cli::try_parse_from(["dopbase", "audit", "export"]).unwrap();
   assert!(matches!(
@@ -815,6 +904,20 @@ fn incomplete_secret_commands_show_examples_and_environment_help() {
       &[
         "Usage: dopbase secret delete",
         "dopbase secret delete payment-service/production API_KEY --yes",
+      ],
+    ),
+    (
+      &["dopbase", "secret", "history"],
+      &[
+        "Usage: dopbase secret history",
+        "dopbase secret history payment-service/production API_KEY --before 41",
+      ],
+    ),
+    (
+      &["dopbase", "secret", "rollback"],
+      &[
+        "Usage: dopbase secret rollback",
+        "dopbase secret rollback payment-service/production API_KEY 3 --yes",
       ],
     ),
   ];
@@ -1066,6 +1169,8 @@ fn parses_each_public_command_and_detects_missing_cases() {
     &["dopbase", "secret", "set", "billing/local", "API_KEY"],
     &["dopbase", "secret", "get", "billing/local", "API_KEY"],
     &["dopbase", "secret", "delete", "billing/local", "API_KEY"],
+    &["dopbase", "secret", "history", "billing/local", "API_KEY"],
+    &["dopbase", "secret", "rollback", "billing/local", "API_KEY"],
     &["dopbase", "import", "billing/local", ".env"],
     &["dopbase", "export", "billing/local", "--stdout"],
     &[

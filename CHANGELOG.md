@@ -8,8 +8,54 @@ All notable changes to Dopbase are documented in this file.
 becomes tamper-evident: every record joins a hash chain that `dopbase audit
 verify` checks, `dopbase audit export` ships the log as JSON lines, and a
 configurable retention archives expired records before deleting them.
+Secrets now keep their earlier versions, and `dopbase secret rollback` or the
+History dialog restores one when a change goes wrong.
 
 ### Added
+
+- Secrets keep their version history. Every save (set, import, project init,
+  or rollback) stores the new version encrypted, with the change type, who
+  made it, and when. `dopbase secret history <ENVIRONMENT_REF> <KEY>` lists
+  versions newest first with their status (`current`, `available`, or
+  `expired`), pages with `--limit` and `--before`, prints the next-page
+  command to standard error, and prints the API page unchanged with `--json`.
+  `dopbase secret get <ENVIRONMENT_REF> <KEY> --version <N>` shows one
+  version, and `--reveal` prints its value after password confirmation. The
+  history never contains values; reveals are audited as
+  `secret.version_revealed`. Issue #33.
+
+- `dopbase secret rollback <ENVIRONMENT_REF> <KEY> [VERSION]` saves the value
+  of an earlier version as a new version and leaves the history unchanged, so
+  a rollback can be rolled back too. Without VERSION it lets you pick from the
+  versions that can still be restored. It shows the current version, the one
+  being restored, and the resulting version number, then asks for
+  confirmation unless `--yes` is passed; without a terminal, VERSION and
+  `--yes` are required. The request carries the version you saw, so a
+  rollback is refused with `SECRET_VERSION_CONFLICT` if someone changed the
+  secret in the meantime. Rollbacks are audited as `secret.rolled_back` with
+  the source, previous, and new versions and no value.
+
+- The secrets table in the web UI has a History button on each row, and the
+  update dialog links to it. The History dialog lists versions, reveals an
+  earlier value for thirty seconds after a password check, and rolls back
+  after one confirmation. When the secret changed while the dialog was open,
+  it reloads the history and asks you to try again.
+
+- `GET /api/v1/environments/{id}/secrets/{key}/versions`,
+  `POST .../versions/{version}/reveal`, and `POST .../rollback` serve the same
+  features to scripts. Listing has the access of `secret list`; reveal and
+  rollback need a project manager, the CSRF header and recent password
+  confirmation for browser sessions, and refuse runner and AI agent tokens.
+
+- `secret_history_versions` in `server.toml`, or
+  `DOPBASE_SECRET_HISTORY_VERSIONS`, sets how many of the newest versions of
+  each secret keep their value (2 to 1000, default 20). New instances start
+  with `secret_history_versions = 20` in the generated `server.toml`. Older
+  versions keep their metadata and show as `expired`. Pruning happens when a secret is
+  saved, so a lower count applies to each secret on its next save. Migration
+  0018 adds the `secret_versions` table and records every existing secret as
+  its first version. Backups, restores, and master key rekeying carry the
+  retained versions.
 
 - The audit log is now a hash chain. Every audit record stores its position,
   the hash of the record before it, and the hash of its own contents, so a
@@ -67,6 +113,20 @@ configurable retention archives expired records before deleting them.
   Back up `audit-archive/` separately: snapshots store the database only.
 
 ### Changed
+
+- The update dialog in the web UI shows the key as a read-only field with
+  the current version, and says which version the save creates.
+
+- Dialogs in the web UI stack in a fixed order: page dialogs, then the
+  password confirmation, then "Session expired". Before, a dialog could
+  open behind the one that was already up. When the session expires, every
+  other dialog closes, so saving with an expired session leaves only
+  "Session expired" and its sign-in button on screen, without an error
+  banner behind it.
+
+- Deleting a secret, an environment, or a project also deletes the version
+  history of the secrets involved, and so does a replace import for the keys
+  it removes. Restoring deleted secrets is tracked in #135.
 
 - The unused `user_agent` column is removed from `audit_events`; nothing
   ever recorded a value in it.

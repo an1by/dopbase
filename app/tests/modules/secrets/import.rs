@@ -1,6 +1,6 @@
 use super::*;
 
-async fn browser_call(
+pub(super) async fn browser_call(
   router: &Router,
   path: &str,
   cookie: &str,
@@ -25,7 +25,7 @@ async fn browser_call(
   (status, serde_json::from_slice(&bytes).unwrap())
 }
 
-async fn browser_login(router: &Router) -> (String, String) {
+pub(super) async fn browser_login(router: &Router) -> (String, String) {
   let (status, body, headers) = call(
     router,
     "POST",
@@ -51,7 +51,7 @@ async fn browser_login(router: &Router) -> (String, String) {
   )
 }
 
-async fn expire_confirmation(state: &app::state::AppState) {
+pub(super) async fn expire_confirmation(state: &app::state::AppState) {
   sqlx::query("UPDATE sessions SET recent_auth_at=? WHERE kind='browser'")
     .bind((chrono::Utc::now() - chrono::Duration::minutes(11)).to_rfc3339())
     .execute(state.db.pool())

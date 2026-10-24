@@ -313,6 +313,36 @@ pub async fn rekey_database(
     .await?;
   }
 
+  // 3. Re-wrap data keys of stored versions. Expired versions hold no
+  // ciphertext and are skipped.
+  let rows: Vec<SecretKeyRow> = sqlx::query_as(
+    "SELECT environment_id, key, version, wrapped_key, key_nonce FROM secret_versions WHERE wrapped_key IS NOT NULL",
+  )
+  .fetch_all(&mut *tx)
+  .await?;
+
+  for (env_id, secret_key, version, wrapped_key, key_nonce) in rows {
+    let secret_aad = aad(&env_id, &secret_key, version);
+    let data_key = old_crypto
+      .decrypt_master(&wrapped_key, &key_nonce, &secret_aad)
+      .with_context(|| {
+        format!(
+          "failed to unwrap secret {env_id}:{secret_key} version {version} with provided master key"
+        )
+      })?;
+    let (new_wrapped, new_nonce) = new_crypto.encrypt_master(&data_key, &secret_aad)?;
+    sqlx::query(
+      "UPDATE secret_versions SET wrapped_key = ?, key_nonce = ? WHERE environment_id = ? AND key = ? AND version = ?",
+    )
+    .bind(new_wrapped)
+    .bind(new_nonce)
+    .bind(&env_id)
+    .bind(&secret_key)
+    .bind(version)
+    .execute(&mut *tx)
+    .await?;
+  }
+
   tx.commit().await?;
   Ok(())
 }

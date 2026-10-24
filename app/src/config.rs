@@ -11,9 +11,11 @@ use url::{Host, Url};
 
 use crate::constants::config::{
   AUDIT_ARCHIVE_DIRECTORY_NAME, CLIENT_CONFIG_FILENAME, DATA_DIRECTORY_NAME, DATABASE_FILENAME,
-  DEFAULT_PORT, ENV_AUDIT_RETENTION_DAYS, ENV_DATA_DIR, ENV_DOCS, ENV_HOST, ENV_MASTER_KEY_PATH,
-  ENV_PORT, ENV_PUBLIC_URL, ENV_SHUTDOWN_GRACE_SECONDS, ENV_TRUSTED_PROXIES, ENV_WEB_UI,
-  MASTER_KEY_FILENAME, SERVER_CONFIG_FILENAME, SERVER_HOST_PLACEHOLDER,
+  DEFAULT_PORT, DEFAULT_SECRET_HISTORY_VERSIONS, ENV_AUDIT_RETENTION_DAYS, ENV_DATA_DIR, ENV_DOCS,
+  ENV_HOST, ENV_MASTER_KEY_PATH, ENV_PORT, ENV_PUBLIC_URL, ENV_SECRET_HISTORY_VERSIONS,
+  ENV_SHUTDOWN_GRACE_SECONDS, ENV_TRUSTED_PROXIES, ENV_WEB_UI, MASTER_KEY_FILENAME,
+  MAX_SECRET_HISTORY_VERSIONS, MIN_SECRET_HISTORY_VERSIONS, SERVER_CONFIG_FILENAME,
+  SERVER_HOST_PLACEHOLDER,
 };
 pub use crate::constants::config::{DEFAULT_BIND_ADDRESS, DEFAULT_PUBLIC_URL};
 
@@ -46,6 +48,10 @@ pub struct ServerConfig {
   /// generated `server.toml`.
   #[serde(skip)]
   pub audit_retention_days: Option<u64>,
+  /// Versions per secret that keep their encrypted value and can be rolled
+  /// back to. Older versions keep their metadata only.
+  #[serde(skip)]
+  pub secret_history_versions: u32,
   /// Reverse proxies allowed to report the client address through
   /// `X-Forwarded-For`. Empty trusts no one, so audit records store the
   /// connection's peer address.
@@ -97,6 +103,7 @@ struct ServerConfigFile {
   host: Option<String>,
   shutdown_grace_seconds: Option<u64>,
   audit_retention_days: Option<u64>,
+  secret_history_versions: Option<u32>,
   trusted_proxies: Option<Vec<String>>,
   docs: Option<bool>,
   web_ui: Option<bool>,
@@ -119,6 +126,7 @@ pub struct EnvironmentOverrides {
   pub host: Option<String>,
   pub shutdown_grace_seconds: Option<String>,
   pub audit_retention_days: Option<String>,
+  pub secret_history_versions: Option<String>,
   pub trusted_proxies: Option<String>,
   pub docs: Option<String>,
   pub web_ui: Option<String>,
@@ -134,6 +142,7 @@ impl EnvironmentOverrides {
       host: env::var(ENV_HOST).ok(),
       shutdown_grace_seconds: env::var(ENV_SHUTDOWN_GRACE_SECONDS).ok(),
       audit_retention_days: env::var(ENV_AUDIT_RETENTION_DAYS).ok(),
+      secret_history_versions: env::var(ENV_SECRET_HISTORY_VERSIONS).ok(),
       trusted_proxies: env::var(ENV_TRUSTED_PROXIES).ok(),
       docs: env::var(ENV_DOCS).ok(),
       web_ui: env::var(ENV_WEB_UI).ok(),
@@ -172,6 +181,7 @@ impl ServerConfig {
       public_url: DEFAULT_PUBLIC_URL.into(),
       shutdown_grace_seconds: 10,
       audit_retention_days: None,
+      secret_history_versions: DEFAULT_SECRET_HISTORY_VERSIONS,
       trusted_proxies: Vec::new(),
       docs_enabled: false,
       web_ui_enabled: true,
@@ -266,6 +276,9 @@ impl ServerConfig {
     if let Some(value) = file.audit_retention_days {
       self.audit_retention_days = Some(value);
     }
+    if let Some(value) = file.secret_history_versions {
+      self.secret_history_versions = value;
+    }
     if let Some(values) = file.trusted_proxies {
       self.trusted_proxies = values
         .iter()
@@ -309,6 +322,11 @@ impl ServerConfig {
           .parse()
           .context("invalid DOPBASE_AUDIT_RETENTION_DAYS")?,
       );
+    }
+    if let Some(value) = environment.secret_history_versions {
+      self.secret_history_versions = value
+        .parse()
+        .context("invalid DOPBASE_SECRET_HISTORY_VERSIONS")?;
     }
     if let Some(value) = environment.trusted_proxies {
       self.trusted_proxies = crate::services::client_ip::parse_list(&value)
@@ -438,6 +456,13 @@ impl ServerConfig {
     }
     if self.audit_retention_days == Some(0) {
       bail!("audit_retention_days must be at least 1 day");
+    }
+    if !(MIN_SECRET_HISTORY_VERSIONS..=MAX_SECRET_HISTORY_VERSIONS)
+      .contains(&self.secret_history_versions)
+    {
+      bail!(
+        "secret_history_versions must be between {MIN_SECRET_HISTORY_VERSIONS} and {MAX_SECRET_HISTORY_VERSIONS}"
+      );
     }
     let bind = SocketAddr::from_str(&self.bind_address).context("invalid bind_address")?;
     if self.public_url_source == PublicUrlSource::Explicit {

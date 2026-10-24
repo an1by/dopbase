@@ -27,6 +27,7 @@ async function onSubmit(): Promise<void> {
     title="Confirm your password"
     size="sm"
     persistent
+    layer="auth"
     @close="dismiss">
     <form class="flex flex-col gap-4" novalidate @submit.prevent="onSubmit">
       <div class="flex items-start gap-3">

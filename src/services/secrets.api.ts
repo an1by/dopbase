@@ -145,3 +145,86 @@ export async function exportSecrets(
   );
   return data;
 }
+
+export type SecretChangeType =
+  "created" | "updated" | "imported" | "rolled_back" | "legacy";
+
+/** One stored version of a secret. Never contains the value. */
+export interface SecretVersion {
+  version: number;
+  changeType: SecretChangeType;
+  /** The version a rollback restored. */
+  sourceVersion: number | null;
+  actorType: string;
+  actorLabel: string | null;
+  createdAt: string;
+  current: boolean;
+  /** False once retention has removed the value. */
+  restorable: boolean;
+}
+
+export interface SecretVersionPage {
+  /** Newest first. */
+  items: SecretVersion[];
+  /** Pass as `before` for the next page; null on the last page. */
+  nextBefore: number | null;
+  /** How many of the newest versions keep their value. */
+  retainedVersions: number;
+}
+
+export interface RollbackSecretResponse {
+  key: string;
+  version: number;
+  sourceVersion: number;
+  previousVersion: number;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export async function listSecretVersions(
+  environmentId: string,
+  key: string,
+  options: { before?: number; limit?: number; signal?: AbortSignal } = {},
+): Promise<SecretVersionPage> {
+  const params = new URLSearchParams();
+  if (options.limit !== undefined) params.set("limit", String(options.limit));
+  if (options.before !== undefined)
+    params.set("before", String(options.before));
+  const query = params.size > 0 ? `?${params.toString()}` : "";
+  const { data } = await apiRequest<SecretVersionPage>(
+    `${base(environmentId)}/${encodeURIComponent(key)}/versions${query}`,
+    { signal: options.signal },
+  );
+  return data;
+}
+
+/** Reveals one earlier value. Requires recent password authentication. */
+export async function revealSecretVersion(
+  environmentId: string,
+  key: string,
+  version: number,
+): Promise<RevealedSecret> {
+  const { data } = await apiRequest<RevealedSecret>(
+    `${base(environmentId)}/${encodeURIComponent(key)}/versions/${version}/reveal`,
+    { method: "POST" },
+  );
+  return data;
+}
+
+/**
+ * Saves the value of `version` as a new current version. The server refuses
+ * with `SECRET_VERSION_CONFLICT` when the current version is no longer
+ * `expectedVersion`. Requires recent password authentication.
+ */
+export async function rollbackSecret(
+  environmentId: string,
+  key: string,
+  version: number,
+  expectedVersion: number,
+): Promise<RollbackSecretResponse> {
+  const { data } = await apiRequest<RollbackSecretResponse>(
+    `${base(environmentId)}/${encodeURIComponent(key)}/rollback`,
+    { method: "POST", body: { version, expectedVersion } },
+  );
+  return data;
+}
