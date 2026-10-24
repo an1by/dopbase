@@ -137,6 +137,11 @@ History dialog restores one when a change goes wrong.
   `WINDIR`, and `USERPROFILE` are still injected, with a warning. The summary
   line counts injected keys, as `N of M key(s)` when some were left out.
 
+- Pull request descriptions have a Demo section. Features and improvements
+  need a screenshot or video, and other changes write `Not needed:` with a
+  reason. The template check enforces it, and `CONTRIBUTING.md` explains what
+  counts.
+
 - The update dialog in the web UI shows the key as a read-only field with
   the current version, and says which version the save creates.
 
