@@ -64,4 +64,6 @@ Do not commit `DOPBASE_TOKEN` or a master key to source control. Supply them
 through your shell, process manager, CI secret store, or deployment platform.
 
 `dopbase run` removes `DOPBASE_TOKEN` from the child process before it starts
-the application.
+the application. It also never injects `DOPBASE_TOKEN`, `DOPBASE_URL`,
+`DOPBASE_ENV`, `DOPBASE_DATA_DIR`, or `DOPBASE_SECRETS_PATH` from stored
+secrets, so a secret cannot point the child at another credential or server.
