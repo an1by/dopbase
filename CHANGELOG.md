@@ -124,6 +124,14 @@ History dialog restores one when a change goes wrong.
 
 ### Changed
 
+- Database migrations use UTC timestamp versions
+  (`YYYYMMDDHHMMSS_<name>.up.sql` and `.down.sql`), the format
+  `sqlx migrate add -r` generates, so two branches no longer pick the same
+  four-digit number. The existing migrations kept their names and only gained
+  the timestamp; 0.1.9 databases move onto the new versions automatically at
+  startup, and downgrading to 0.1.9 after this release is not supported.
+  Contributed by meulatea in #140. Issue #139.
+
 - `dopbase run` no longer injects reserved names from stored secrets, and
   prints the skipped names to standard error. The list covers the Dopbase
   control variables (`DOPBASE_TOKEN`, `DOPBASE_URL`, `DOPBASE_ENV`,

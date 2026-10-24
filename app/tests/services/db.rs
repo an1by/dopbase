@@ -197,7 +197,10 @@ async fn secret_versions_migration_keeps_existing_values_as_legacy_versions() {
     .await
     .unwrap();
   MIGRATOR.run(db.pool()).await.unwrap();
-  MIGRATOR.undo(db.pool(), 17).await.unwrap();
+  MIGRATOR
+    .undo(db.pool(), version_before("secret_versions"))
+    .await
+    .unwrap();
   sqlx::query(
     "INSERT INTO projects(id,name,created_at,updated_at) VALUES('prj_test','project','now','now')",
   )
@@ -254,4 +257,28 @@ async fn assert_schema_objects(
       "unexpected state for {object_type} {name}"
     );
   }
+}
+
+/// Return the version immediately before `name` in migration order.
+///
+/// Tests undo to this version to revert `name` without pinning its number, so
+/// migrations added later do not require touching them.
+pub(crate) fn version_before(name: &str) -> i64 {
+  // sqlx turns the underscores in a migration's file name into spaces when it
+  // derives the description.
+  let description = name.replace('_', " ");
+  let mut migrations: Vec<_> = MIGRATOR
+    .iter()
+    .filter(|migration| !migration.migration_type.is_down_migration())
+    .collect();
+  migrations.sort_by_key(|migration| migration.version);
+
+  let mut previous = 0;
+  for migration in migrations {
+    if migration.description.as_ref() == description.as_str() {
+      return previous;
+    }
+    previous = migration.version;
+  }
+  panic!("migration {name} not found");
 }
