@@ -6,7 +6,7 @@ use crate::{
   state::AppState,
 };
 use axum::{
-  extract::{Path, State},
+  extract::{Path, Query, State},
   http::HeaderMap,
 };
 
@@ -154,6 +154,105 @@ pub async fn reveal(
   Ok(HttpResponse::ok(
     service::reveal(&state, &identity, &id, &key).await?,
     "SECRET_REVEALED",
+  ))
+}
+
+/// List secret versions
+///
+/// Return the stored versions of one secret, newest first, with who made
+/// each change and whether its value can still be restored. Values are
+/// never included.
+#[utoipa::path(
+  get,
+  path = crate::constants::api::secrets::VERSIONS,
+  tag = "secrets",
+  security(("bearerAuth" = []), ("cookieAuth" = [])),
+  params(("environment_id" = String, Path, description = "Environment id"), ("key" = String, Path, description = "Secret key"), SecretVersionQuery),
+  responses(
+    (status = 200, description = "Secret versions fetched", body = inline(HttpResponseFormat<SecretVersionPage>)),
+    (status = 401, description = "Authentication is required", body = crate::http::ErrorBody),
+    (status = 403, description = "Only administrators may view secret history", body = crate::http::ErrorBody),
+    (status = 404, description = "The secret or environment was not found", body = crate::http::ErrorBody),
+  ),
+)]
+pub async fn versions(
+  State(state): State<AppState>,
+  identity: AuthIdentity,
+  Path((id, key)): Path<(String, String)>,
+  Query(query): Query<SecretVersionQuery>,
+) -> Result<HttpResponse<SecretVersionPage>, SecretError> {
+  Ok(HttpResponse::ok(
+    service::versions(&state, &identity, &id, &key, query).await?,
+    "SECRET_VERSIONS_FETCHED",
+  ))
+}
+
+/// Reveal a secret version
+///
+/// Decrypt and return the value of one stored version. Requires recent
+/// password authentication and the CSRF header for browser sessions. The
+/// access is recorded in the audit log.
+#[utoipa::path(
+  post,
+  path = crate::constants::api::secrets::VERSION_REVEAL,
+  tag = "secrets",
+  security(("bearerAuth" = []), ("cookieAuth" = [])),
+  params(("environment_id" = String, Path, description = "Environment id"), ("key" = String, Path, description = "Secret key"), ("version" = i64, Path, description = "Secret version")),
+  responses(
+    (status = 200, description = "Secret version revealed", body = inline(HttpResponseFormat<RevealedSecret>)),
+    (status = 401, description = "Authentication is required", body = crate::http::ErrorBody),
+    (status = 403, description = "Recent password authentication and a valid CSRF token are required", body = crate::http::ErrorBody),
+    (status = 404, description = "The version, secret, or environment was not found", body = crate::http::ErrorBody),
+    (status = 410, description = "Retention removed the value of this version", body = crate::http::ErrorBody),
+  ),
+)]
+pub async fn reveal_version(
+  State(state): State<AppState>,
+  headers: HeaderMap,
+  identity: AuthIdentity,
+  Path((id, key, version)): Path<(String, String, i64)>,
+) -> Result<HttpResponse<RevealedSecret>, SecretError> {
+  require_mutation(&identity, &headers)?;
+  Ok(HttpResponse::ok(
+    service::reveal_version(&state, &identity, &id, &key, version).await?,
+    "SECRET_VERSION_REVEALED",
+  ))
+}
+
+/// Roll back a secret
+///
+/// Save the value of an earlier version as a new current version. History
+/// is never rewritten. Pass `expectedVersion` to refuse the rollback when
+/// the secret changed after you looked at it. Requires recent password
+/// authentication and the CSRF header for browser sessions, and is recorded
+/// in the audit log.
+#[utoipa::path(
+  post,
+  path = crate::constants::api::secrets::ROLLBACK,
+  tag = "secrets",
+  security(("bearerAuth" = []), ("cookieAuth" = [])),
+  params(("environment_id" = String, Path, description = "Environment id"), ("key" = String, Path, description = "Secret key")),
+  request_body = RollbackSecretRequest,
+  responses(
+    (status = 200, description = "Secret rolled back", body = inline(HttpResponseFormat<RollbackSecretResponse>)),
+    (status = 401, description = "Authentication is required", body = crate::http::ErrorBody),
+    (status = 403, description = "Recent password authentication and a valid CSRF token are required", body = crate::http::ErrorBody),
+    (status = 404, description = "The version, secret, or environment was not found", body = crate::http::ErrorBody),
+    (status = 409, description = "The version is already current, or the secret changed since `expectedVersion`", body = crate::http::ErrorBody),
+    (status = 410, description = "Retention removed the value of this version", body = crate::http::ErrorBody),
+  ),
+)]
+pub async fn rollback(
+  State(state): State<AppState>,
+  headers: HeaderMap,
+  identity: AuthIdentity,
+  Path((id, key)): Path<(String, String)>,
+  axum::Json(request): axum::Json<RollbackSecretRequest>,
+) -> Result<HttpResponse<RollbackSecretResponse>, SecretError> {
+  require_mutation(&identity, &headers)?;
+  Ok(HttpResponse::ok(
+    service::rollback(&state, &identity, &id, &key, request).await?,
+    "SECRET_ROLLED_BACK",
   ))
 }
 

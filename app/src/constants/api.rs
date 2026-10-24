@@ -117,6 +117,10 @@ pub mod secrets {
   pub const RUNTIME: &str = api_path!("/environments/{environment_id}/secrets/runtime");
   pub const ITEM: &str = api_path!("/environments/{environment_id}/secrets/{key}");
   pub const REVEAL: &str = api_path!("/environments/{environment_id}/secrets/{key}/reveal");
+  pub const VERSIONS: &str = api_path!("/environments/{environment_id}/secrets/{key}/versions");
+  pub const VERSION_REVEAL: &str =
+    api_path!("/environments/{environment_id}/secrets/{key}/versions/{version}/reveal");
+  pub const ROLLBACK: &str = api_path!("/environments/{environment_id}/secrets/{key}/rollback");
 
   pub fn collection(environment_id: &str) -> String {
     super::render(COLLECTION, &[("environment_id", environment_id)])
@@ -150,6 +154,45 @@ pub mod secrets {
     key: &str,
   ) -> String {
     super::render(REVEAL, &[("environment_id", environment_id), ("key", key)])
+  }
+
+  pub fn versions(
+    environment_id: &str,
+    key: &str,
+    params: &[(&str, &str)],
+  ) -> String {
+    super::with_params(
+      &super::render(
+        VERSIONS,
+        &[("environment_id", environment_id), ("key", key)],
+      ),
+      params,
+    )
+  }
+
+  pub fn version_reveal(
+    environment_id: &str,
+    key: &str,
+    version: i64,
+  ) -> String {
+    super::render(
+      VERSION_REVEAL,
+      &[
+        ("environment_id", environment_id),
+        ("key", key),
+        ("version", &version.to_string()),
+      ],
+    )
+  }
+
+  pub fn rollback(
+    environment_id: &str,
+    key: &str,
+  ) -> String {
+    super::render(
+      ROLLBACK,
+      &[("environment_id", environment_id), ("key", key)],
+    )
   }
 }
 

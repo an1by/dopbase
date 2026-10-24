@@ -41,4 +41,16 @@ pub fn routes() -> Router<AppState> {
       crate::constants::api::secrets::REVEAL,
       post(controller::reveal),
     )
+    .route(
+      crate::constants::api::secrets::VERSIONS,
+      get(controller::versions),
+    )
+    .route(
+      crate::constants::api::secrets::VERSION_REVEAL,
+      post(controller::reveal_version),
+    )
+    .route(
+      crate::constants::api::secrets::ROLLBACK,
+      post(controller::rollback),
+    )
 }

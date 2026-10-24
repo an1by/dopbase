@@ -87,6 +87,7 @@ pub enum ChangeType {
   Created,
   Updated,
   Imported,
+  RolledBack,
 }
 impl ChangeType {
   pub fn as_str(self) -> &'static str {
@@ -94,6 +95,7 @@ impl ChangeType {
       Self::Created => "created",
       Self::Updated => "updated",
       Self::Imported => "imported",
+      Self::RolledBack => "rolled_back",
     }
   }
 }
@@ -170,4 +172,63 @@ pub async fn write_version(
     .execute(&mut *conn)
     .await?;
   Ok(())
+}
+#[derive(sqlx::FromRow)]
+pub struct VersionRow {
+  pub version: i64,
+  pub change_type: String,
+  pub source_version: Option<i64>,
+  pub actor_type: String,
+  pub actor_label: Option<String>,
+  pub created_at: String,
+  pub expired_at: Option<String>,
+}
+/// Version metadata, newest first, strictly older than `before` when set.
+pub async fn list_versions(
+  pool: &SqlitePool,
+  environment_id: &str,
+  key: &str,
+  before: Option<i64>,
+  limit: u32,
+) -> Result<Vec<VersionRow>, sqlx::Error> {
+  sqlx::query_as("SELECT version,change_type,source_version,actor_type,actor_label,created_at,expired_at FROM secret_versions WHERE environment_id=? AND key=? AND (? IS NULL OR version<?) ORDER BY version DESC LIMIT ?")
+    .bind(environment_id)
+    .bind(key)
+    .bind(before)
+    .bind(before)
+    .bind(i64::from(limit))
+    .fetch_all(pool)
+    .await
+}
+#[derive(sqlx::FromRow)]
+pub struct StoredVersion {
+  pub version: i64,
+  pub ciphertext: Option<Vec<u8>>,
+  pub value_nonce: Option<Vec<u8>>,
+  pub wrapped_key: Option<Vec<u8>>,
+  pub key_nonce: Option<Vec<u8>>,
+}
+impl StoredVersion {
+  /// The encrypted value, or `None` once retention expired it.
+  pub fn encrypted(&self) -> Option<EncryptedValue> {
+    Some(EncryptedValue {
+      ciphertext: self.ciphertext.clone()?,
+      value_nonce: self.value_nonce.clone()?,
+      wrapped_key: self.wrapped_key.clone()?,
+      key_nonce: self.key_nonce.clone()?,
+    })
+  }
+}
+pub async fn find_version(
+  conn: &mut sqlx::SqliteConnection,
+  environment_id: &str,
+  key: &str,
+  version: i64,
+) -> Result<Option<StoredVersion>, sqlx::Error> {
+  sqlx::query_as("SELECT version,ciphertext,value_nonce,wrapped_key,key_nonce FROM secret_versions WHERE environment_id=? AND key=? AND version=?")
+    .bind(environment_id)
+    .bind(key)
+    .bind(version)
+    .fetch_optional(conn)
+    .await
 }

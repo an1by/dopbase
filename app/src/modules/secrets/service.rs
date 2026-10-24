@@ -231,6 +231,208 @@ pub async fn reveal(
     version: row.version,
   })
 }
+fn secret_not_found() -> HttpError {
+  HttpError::not_found("SECRET_NOT_FOUND", "The requested secret was not found.")
+}
+fn version_not_found() -> HttpError {
+  HttpError::not_found(
+    "SECRET_VERSION_NOT_FOUND",
+    "That version of the secret was not found.",
+  )
+}
+fn version_expired() -> HttpError {
+  HttpError::new(
+    axum::http::StatusCode::GONE,
+    "SECRET_VERSION_EXPIRED",
+    "That version is past the retention limit, so its value is no longer stored.",
+  )
+}
+/// Decrypts one stored version. Fails closed: a version without ciphertext
+/// is expired, and ciphertext that does not authenticate is an internal
+/// error that writes nothing.
+fn decrypt_version(
+  state: &AppState,
+  id: &str,
+  key: &str,
+  stored: &repository::StoredVersion,
+) -> Result<zeroize::Zeroizing<String>, HttpError> {
+  let encrypted = stored.encrypted().ok_or_else(version_expired)?;
+  let clear = state
+    .crypto
+    .decrypt(&encrypted, id, key, stored.version)
+    .map_err(|error| {
+      tracing::error!(%error, version = stored.version, "secret version decryption failed");
+      HttpError::internal()
+    })?;
+  String::from_utf8(clear.to_vec())
+    .map(zeroize::Zeroizing::new)
+    .map_err(|_| HttpError::internal())
+}
+pub async fn versions(
+  state: &AppState,
+  identity: &AuthIdentity,
+  id: &str,
+  key: &str,
+  query: SecretVersionQuery,
+) -> Result<SecretVersionPage, HttpError> {
+  require_metadata_access(identity)?;
+  environment(state, id).await?;
+  let current = repository::find(state.db.pool(), id, key)
+    .await?
+    .ok_or_else(secret_not_found)?;
+  let limit = query.limit.unwrap_or(50).clamp(1, 200);
+  let mut rows =
+    repository::list_versions(state.db.pool(), id, key, query.before, limit + 1).await?;
+  let next_before = if rows.len() > limit as usize {
+    rows.truncate(limit as usize);
+    rows.last().map(|row| row.version)
+  } else {
+    None
+  };
+  Ok(SecretVersionPage {
+    items: rows
+      .into_iter()
+      .map(|row| SecretVersion {
+        current: row.version == current.version,
+        restorable: row.expired_at.is_none(),
+        version: row.version,
+        change_type: row.change_type,
+        source_version: row.source_version,
+        actor_type: row.actor_type,
+        actor_label: row.actor_label,
+        created_at: row.created_at,
+      })
+      .collect(),
+    next_before,
+    retained_versions: state.config.secret_history_versions,
+  })
+}
+pub async fn reveal_version(
+  state: &AppState,
+  identity: &AuthIdentity,
+  id: &str,
+  key: &str,
+  version: i64,
+) -> Result<RevealedSecret, HttpError> {
+  require_recent_browser_auth(identity)?;
+  let (admin_id, email) = require_project_manager(identity)?;
+  let env = environment(state, id).await?;
+  let mut conn = state.db.pool().acquire().await?;
+  let stored = repository::find_version(&mut conn, id, key, version)
+    .await?
+    .ok_or_else(version_not_found)?;
+  drop(conn);
+  let value = decrypt_version(state, id, key, &stored)?;
+  common::audit_standalone(
+    state.db.pool(),
+    identity.audit_actor_type(),
+    Some(admin_id),
+    Some(email),
+    "secret.version_revealed",
+    Some(&env.project_id),
+    Some(id),
+    Some("secret"),
+    Some(key),
+    serde_json::json!({"key":key,"version":version}),
+  )
+  .await?;
+  Ok(RevealedSecret {
+    key: key.into(),
+    value: value.to_string(),
+    version,
+  })
+}
+/// Saves the value of an earlier version as a new current version. Earlier
+/// versions are never changed.
+pub async fn rollback(
+  state: &AppState,
+  identity: &AuthIdentity,
+  id: &str,
+  key: &str,
+  request: RollbackSecretRequest,
+) -> Result<RollbackSecretResponse, HttpError> {
+  require_recent_browser_auth(identity)?;
+  let (admin_id, email) = require_project_manager(identity)?;
+  let env = environment(state, id).await?;
+  // The write reservation is taken before reading, so the version check,
+  // the new version number, and the write are one state transition.
+  let mut tx = state.db.pool().begin_with("BEGIN IMMEDIATE").await?;
+  let current: repository::SecretRow = sqlx::query_as("SELECT key,version,ciphertext,value_nonce,wrapped_key,key_nonce,created_at,updated_at FROM secrets WHERE environment_id=? AND key=?")
+    .bind(id).bind(key).fetch_optional(&mut *tx).await?
+    .ok_or_else(secret_not_found)?;
+  if request
+    .expected_version
+    .is_some_and(|expected| expected != current.version)
+  {
+    return Err(HttpError::conflict(
+      "SECRET_VERSION_CONFLICT",
+      "The secret changed since you loaded it. Reload its history and try again.",
+    ));
+  }
+  if request.version == current.version {
+    return Err(HttpError::conflict(
+      "SECRET_VERSION_IS_CURRENT",
+      "That version is already the current value.",
+    ));
+  }
+  let stored = repository::find_version(&mut tx, id, key, request.version)
+    .await?
+    .ok_or_else(version_not_found)?;
+  let value = decrypt_version(state, id, key, &stored)?;
+  let version = current.version + 1;
+  let encrypted = state
+    .crypto
+    .encrypt(value.as_bytes(), id, key, version)
+    .map_err(|_| HttpError::internal())?;
+  let now = Utc::now().to_rfc3339();
+  repository::write_version(
+    &mut tx,
+    repository::NewVersion {
+      environment_id: id,
+      key,
+      version,
+      encrypted,
+      created_at: &current.created_at,
+      now: &now,
+      change: repository::ChangeType::RolledBack,
+      source_version: Some(request.version),
+      actor: repository::VersionActor {
+        actor_type: identity.audit_actor_type(),
+        actor_id: Some(admin_id),
+        actor_label: Some(email),
+      },
+      keep: state.config.secret_history_versions,
+    },
+  )
+  .await?;
+  common::audit(
+    &mut tx,
+    identity.audit_actor_type(),
+    Some(admin_id),
+    Some(email),
+    "secret.rolled_back",
+    Some(&env.project_id),
+    Some(id),
+    Some("secret"),
+    Some(key),
+    serde_json::json!({
+      "key": key,
+      "sourceVersion": request.version,
+      "previousVersion": current.version,
+      "version": version,
+    }),
+  )
+  .await?;
+  tx.commit().await?;
+  Ok(RollbackSecretResponse {
+    key: key.into(),
+    version,
+    source_version: request.version,
+    previous_version: current.version,
+    created_at: current.created_at,
+    updated_at: now,
+  })
+}
 fn validate_import(request: &ImportSecretsRequest) -> Result<(), HttpError> {
   if request.entries.len() > MAX_SECRETS_PER_ENVIRONMENT {
     return Err(HttpError::new(
