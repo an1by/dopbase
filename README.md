@@ -93,11 +93,12 @@ Commands:
   status   Alias for `dopbase client status`
   init     Create a project, its first environment, and import secrets
   project  Manage projects (create, list, show, rename, delete)
-  env      Manage environments inside a project (create, clone, list, rename, delete)
-  secret   Manage secrets in an environment (list, set, get, delete)
+  env      Manage environments inside a project (create, clone, edit, list, rename, delete)
+  secret   Manage secrets in an environment (list, set, get, delete, history, rollback)
   import   Bulk-import secrets into an environment from a dotenv, JSON, YAML, or TOML source
   export   Export secrets as dotenv, JSON, YAML, TOML, or a Docker env file
   token    Manage CI/runner access tokens for an environment
+  audit    Verify the integrity of the audit log (administrator only)
   run      Run a command with an environment's secrets injected as env vars
   cache    Inspect and clean the encrypted runtime cache for the active server
   admin    Offline server administration
@@ -137,8 +138,12 @@ Environment variables:
   DOPBASE_WEB_UI                  Enable or disable the web UI (default: true)
   DOPBASE_MASTER_KEY_PATH         Path to the server master key file `./path/to/your.key`
   DOPBASE_SHUTDOWN_GRACE_SECONDS  Seconds allowed for graceful shutdown
+  DOPBASE_AUDIT_RETENTION_DAYS    Days to keep audit records (unset keeps the whole log)
+  DOPBASE_SECRET_HISTORY_VERSIONS Versions per secret that can be rolled back to (default: 20)
+  DOPBASE_TRUSTED_PROXIES         Proxies allowed to report the client IP, comma-separated
 
 Quickstart:
+  dopbase server setup                     # initialize the local instance once
   dopbase server start                     # start on http://localhost:8840; fresh instances enter setup
   dopbase server start --background        # run the server in the background (also -b)
   dopbase server stop                      # stop the background server

@@ -91,6 +91,7 @@ See [server setup](./setup).
 | Export to a file          | `dopbase export <ENVIRONMENT_REF> --output <FILE>`          | Runner tokens export their assigned environment without a prompt. `--format` overrides inference; `--force` overwrites an existing file     | `dopbase export payment-service/staging --output secrets.yml --force`                     |
 | Export to standard output | `dopbase export <ENVIRONMENT_REF> --stdout`                 | Defaults to dotenv. Use `--format json`, `--format yaml`, `--format toml`, or export-only `--format docker` for another serialization       | `dopbase export payment-service/staging --stdout --format toml`                           |
 | Run with injected secrets | `dopbase run [ENVIRONMENT_REF] -- <COMMAND>`                | `DOPBASE_TOKEN` takes priority over the saved credential. Everything after `--` is the child command                                        | `dopbase run payment-service/development -- npm start`                                    |
+| Run selected secrets      | `dopbase run [ENVIRONMENT_REF] --only <KEY> -- <COMMAND>`   | `--only` and `--preserve-env` repeat and take comma lists. `--allow-missing` warns instead of stopping on a missing key                     | `dopbase run payment-service/production --only API_KEY,DATABASE_URL -- npm start`         |
 
 ## Tokens, backups, and maintenance
 

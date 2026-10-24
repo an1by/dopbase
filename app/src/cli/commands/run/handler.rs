@@ -1,5 +1,6 @@
 use super::RunArgs;
 use super::cache::{self as runtime_cache, RuntimeSource};
+use super::selection::{SelectionOptions, select};
 use crate::cli::{client, local_config};
 use crate::constants::config::ENV_RUN_ENVIRONMENT;
 use anyhow::{Context, Result, bail};
@@ -11,8 +12,16 @@ pub(crate) async fn execute(
 ) -> Result<i32> {
   let RunArgs {
     environment,
+    only,
+    allow_missing,
+    preserve_env,
     command,
   } = args;
+  let options = SelectionOptions {
+    only,
+    allow_missing,
+    preserve_env,
+  };
   let api = client::any_authenticated_client(server).await?;
   let selection = run_environment(
     environment,
@@ -53,12 +62,48 @@ pub(crate) async fn execute(
       );
     }
   }
+  let loaded_count = loaded.entries.len();
+  let selection = select(loaded.entries, &options, |key| env::var_os(key).is_some())?;
+  if !selection.skipped.is_empty() {
+    eprintln!(
+      "Dopbase warning: skipped reserved name(s): {}",
+      selection.skipped.join(", ")
+    );
+  }
+  if !selection.blocked.is_empty() {
+    eprintln!(
+      "Dopbase warning: skipped name(s) that can load code into the child: {}. Name them in --only to inject them.",
+      selection.blocked.join(", ")
+    );
+  }
+  if !selection.missing.is_empty() {
+    eprintln!(
+      "Dopbase warning: --only key(s) not stored: {}",
+      selection.missing.join(", ")
+    );
+  }
+  if !selection.dangerous.is_empty() {
+    eprintln!(
+      "Dopbase warning: these names can change how programs load or run: {}",
+      selection.dangerous.join(", ")
+    );
+  }
+  if !selection.preserved.is_empty() {
+    eprintln!(
+      "Dopbase: kept existing value for: {}",
+      selection.preserved.join(", ")
+    );
+  }
+  let injected = if selection.inject.len() == loaded_count {
+    format!("{loaded_count} key(s)")
+  } else {
+    format!("{} of {loaded_count} key(s)", selection.inject.len())
+  };
   eprintln!(
-    "Dopbase: {}/{} ({}), {} key(s), source={}",
+    "Dopbase: {}/{} ({}), {injected}, source={}",
     loaded.project,
     loaded.environment,
     loaded.environment_id,
-    loaded.entries.len(),
     loaded.source.as_str(),
   );
   let program = command.first().context("run requires a child command")?;
@@ -66,7 +111,7 @@ pub(crate) async fn execute(
   child_command
     .args(&command[1..])
     .env_remove("DOPBASE_TOKEN");
-  for entry in loaded.entries {
+  for entry in selection.inject {
     child_command.env(entry.key, entry.value);
   }
   #[cfg(unix)]

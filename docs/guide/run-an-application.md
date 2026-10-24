@@ -115,7 +115,7 @@ flowchart TB
     FETCH -. "Unavailable or timed out" .-> CACHE_READ{"Usable matching cache?"}
     CACHE_READ -->|Yes| CACHED["Load the cached environment values"]
     CACHE_READ -->|No| STOP
-    CACHE_WRITE --> INJECT["Override matching variables and remove DOPBASE_TOKEN"]
+    CACHE_WRITE --> INJECT["Apply --only and --preserve-env, skip reserved names, remove DOPBASE_TOKEN"]
     CACHED --> INJECT
     INJECT --> CHILD["Start the application without writing a .env file"]
     CHILD --> RUNTIME["The application reads secrets from its environment"]
@@ -162,15 +162,135 @@ passed. The listing and cleanup preview contain runtime metadata only, never
 secret names or values. See [client configuration](/cli/configuration#encrypted-run-cache)
 for cache storage and cleanup details.
 
-Managed values override same-named variables inherited from the parent process.
-Dopbase removes its own authentication variables before starting the child so
-the application does not receive the credential used to retrieve its secrets.
+## Choose which secrets reach the application
+
+By default the child receives every stored secret, and a stored value replaces a
+variable of the same name inherited from your shell. Two flags change that.
+
+`--only` limits injection to the keys you name. Repeat the flag or separate keys
+with commas:
+
+```bash
+dopbase run payment-service/production --only API_KEY,DATABASE_URL -- npm start
+dopbase run payment-service/production --only API_KEY --only DATABASE_URL -- npm start
+```
+
+If a key named by `--only` is not stored in the environment, Dopbase stops
+before the application starts and lists the missing names. Pass
+`--allow-missing` to start anyway; the missing names are then printed as a
+warning:
+
+```bash
+dopbase run payment-service/development --only OPTIONAL_KEY --allow-missing -- npm run dev
+```
+
+`--preserve-env` keeps the value your shell already has for the named keys. A
+named key your shell does not define still gets the stored secret:
+
+```bash
+PORT=3001 dopbase run payment-service/development --preserve-env PORT,LOG_LEVEL -- npm run dev
+```
+
+There is no option to preserve every inherited variable. Name each key you want
+to keep.
+
+To check which keys arrived without printing their values, list names only:
+
+```bash
+dopbase run payment-service/development --only API_KEY -- sh -c 'env | cut -d= -f1'
+```
+
+### How `--only` and `--preserve-env` differ
+
+`--only` decides which stored secrets enter the application. `--preserve-env`
+decides which value wins when a stored secret and your shell define the same
+name.
+
+Take an environment that stores `API_KEY`, `DATABASE_URL`, and `PORT=8080`,
+started from a shell that already has `PORT=3001`:
+
+| Command                                      | `API_KEY` | `DATABASE_URL` | `PORT`         |
+| -------------------------------------------- | --------- | -------------- | -------------- |
+| `dopbase run ENV -- app`                     | stored    | stored         | `8080`, stored |
+| `dopbase run ENV --only API_KEY -- app`      | stored    | not set        | `3001`, shell  |
+| `dopbase run ENV --preserve-env PORT -- app` | stored    | stored         | `3001`, shell  |
+
+With `--only API_KEY`, the shell's `PORT` survives because `PORT` was never
+selected, and `DATABASE_URL` does not reach the application at all. With
+`--preserve-env PORT`, every secret is still injected and only `PORT` keeps the
+shell's value. If the shell had no `PORT`, the stored `8080` would be used.
+
+|                                     | `--only`                                       | `--preserve-env` |
+| ----------------------------------- | ---------------------------------------------- | ---------------- |
+| Secrets you did not name            | Left out                                       | Injected         |
+| A named key that is not stored      | Stops the run, or warns with `--allow-missing` | Ignored          |
+| A named key your shell does not set | Injected                                       | Injected         |
+| Names that load code                | Injected when named, with a warning            | Still skipped    |
+
+The flags work together. `--only API_KEY,PORT --preserve-env PORT` injects only
+those two keys and keeps the shell's `PORT` if it has one.
+
+### Reserved names
+
+Some stored names are never injected, even when `--only` asks for them. Dopbase
+skips them and prints the skipped names, never their values, to standard error.
+
+- Dopbase control variables: `DOPBASE_TOKEN`, `DOPBASE_URL`, `DOPBASE_ENV`,
+  `DOPBASE_DATA_DIR`, and `DOPBASE_SECRETS_PATH`. A stored secret cannot hand
+  the child a different credential or server.
+- Shell variables: `PATH`, `HOME`, `PS1`, `PS2`, and any name that starts with
+  `XDG_` or `LC_`. Replacing them could make the child run a different program
+  or read a different home directory. Doppler and Infisical skip the same names.
+
+Dopbase also removes `DOPBASE_TOKEN` from the inherited environment, so the
+application never receives the credential used to fetch its secrets.
+
+### Names that load code
+
+Some names make a program load extra code or run extra commands when it starts.
+A stored secret with one of these names could run code inside your application,
+so Dopbase skips them unless you name them in `--only`:
+
+`LD_PRELOAD`, `LD_LIBRARY_PATH`, `DYLD_INSERT_LIBRARIES`, `DYLD_LIBRARY_PATH`,
+`NODE_OPTIONS`, `PERL5OPT`, `PYTHONWARNINGS`, `BASH_ENV`, `PROMPT_COMMAND`,
+`JAVA_TOOL_OPTIONS`, and `PHPRC`.
+
+If your application needs one, for example `NODE_OPTIONS` to raise the Node.js
+memory limit, list it with the other keys the application uses:
+
+```bash
+dopbase run payment-service/production --only API_KEY,NODE_OPTIONS -- npm start
+```
+
+Dopbase then injects it and prints a warning that names it. Without `--only`,
+the warning lists the names it skipped instead.
+
+A few other names change program behavior without loading code: `NODE_VERSION`,
+`BROWSER`, `HOSTNAME`, `WINDIR`, and `USERPROFILE`. Dopbase injects them and
+prints a warning.
+
+If you did not expect one of these names in the environment, find out who
+stored it before you run the application again.
+
+### Order of precedence
+
+For each stored secret, Dopbase checks in this order:
+
+1. With `--only`, keys that were not named are left out.
+2. Reserved names are skipped.
+3. Names that load code are skipped unless `--only` named them.
+4. With `--preserve-env`, a named key your shell already defines keeps the
+   shell's value.
+5. Anything left replaces the inherited variable of the same name.
+
+Every warning and summary goes to standard error and contains names only, so
+the application's standard output stays clean.
 
 ## Runtime behavior
 
 Before starting the application, Dopbase writes the resolved project,
-environment, immutable ID, loaded key count, and `live` or `cache` source to
-standard error. Cached runs also print the fetch timestamp and age. Values are
+environment, immutable ID, injected key count, and `live` or `cache` source to
+standard error. When filtering left keys out, the count reads `2 of 7 key(s)`. Cached runs also print the fetch timestamp and age. Values are
 never printed.
 
 Dopbase then:

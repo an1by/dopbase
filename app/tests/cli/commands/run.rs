@@ -444,3 +444,269 @@ async fn run_injects_secrets_preserves_child_status_and_never_launches_with_a_re
     "run started its child after authentication failed"
   );
 }
+
+use app::cli::commands::{SelectionOptions, select};
+use app::models::SecretInput;
+
+fn entries(keys: &[&str]) -> Vec<SecretInput> {
+  keys
+    .iter()
+    .map(|key| SecretInput {
+      key: (*key).into(),
+      value: format!("{key}-value-marker"),
+    })
+    .collect()
+}
+
+fn injected(selection: &app::cli::commands::Selection) -> Vec<&str> {
+  selection
+    .inject
+    .iter()
+    .map(|entry| entry.key.as_str())
+    .collect()
+}
+
+#[test]
+fn select_keeps_every_ordinary_key_without_options() {
+  let selection = select(
+    entries(&["API_KEY", "DATABASE_URL"]),
+    &SelectionOptions::default(),
+    |_| true,
+  )
+  .unwrap();
+  assert_eq!(injected(&selection), ["API_KEY", "DATABASE_URL"]);
+  assert!(selection.skipped.is_empty() && selection.preserved.is_empty());
+}
+
+#[test]
+fn select_only_filters_and_stops_on_missing_keys_unless_allowed() {
+  let options = SelectionOptions {
+    only: vec!["API_KEY".into(), "OPTIONAL_KEY".into(), "ZETA_KEY".into()],
+    ..Default::default()
+  };
+  let error = select(entries(&["API_KEY", "DATABASE_URL"]), &options, |_| false)
+    .unwrap_err()
+    .to_string();
+  assert!(error.contains("OPTIONAL_KEY, ZETA_KEY"), "{error}");
+  assert!(error.contains("--allow-missing"), "{error}");
+
+  let options = SelectionOptions {
+    allow_missing: true,
+    ..options
+  };
+  let selection = select(entries(&["API_KEY", "DATABASE_URL"]), &options, |_| false).unwrap();
+  assert_eq!(injected(&selection), ["API_KEY"]);
+  assert_eq!(selection.missing, ["OPTIONAL_KEY", "ZETA_KEY"]);
+}
+
+#[test]
+fn select_skips_reserved_names_even_when_requested() {
+  let stored = entries(&[
+    "DOPBASE_TOKEN",
+    "DOPBASE_URL",
+    "DOPBASE_ENV",
+    "DOPBASE_DATA_DIR",
+    "DOPBASE_SECRETS_PATH",
+    "PATH",
+    "HOME",
+    "PS2",
+    "XDG_CONFIG_HOME",
+    "LC_ALL",
+    "DOPBASE_PORT",
+    "SHELL",
+    "API_KEY",
+  ]);
+  let selection = select(stored.clone(), &SelectionOptions::default(), |_| false).unwrap();
+  assert_eq!(injected(&selection), ["DOPBASE_PORT", "SHELL", "API_KEY"]);
+  assert_eq!(selection.skipped.len(), 10);
+  assert!(
+    selection
+      .skipped
+      .iter()
+      .all(|name| !name.contains("value-marker"))
+  );
+
+  let options = SelectionOptions {
+    only: vec!["DOPBASE_TOKEN".into(), "PATH".into()],
+    ..Default::default()
+  };
+  let selection = select(stored, &options, |_| false).unwrap();
+  assert!(selection.inject.is_empty());
+  assert!(selection.missing.is_empty());
+  assert_eq!(selection.skipped, ["DOPBASE_TOKEN", "PATH"]);
+}
+
+#[test]
+fn select_preserves_only_named_keys_the_parent_defines() {
+  let options = SelectionOptions {
+    preserve_env: vec!["PORT".into(), "LOG_LEVEL".into(), "UNSTORED".into()],
+    ..Default::default()
+  };
+  let selection = select(
+    entries(&["PORT", "LOG_LEVEL", "API_KEY"]),
+    &options,
+    |key| key == "PORT" || key == "API_KEY",
+  )
+  .unwrap();
+  assert_eq!(injected(&selection), ["LOG_LEVEL", "API_KEY"]);
+  assert_eq!(selection.preserved, ["PORT"]);
+}
+
+#[test]
+fn select_blocks_code_loading_names_unless_only_names_them() {
+  let stored = entries(&["NODE_OPTIONS", "LD_PRELOAD", "HOSTNAME", "API_KEY"]);
+  let selection = select(stored.clone(), &SelectionOptions::default(), |_| false).unwrap();
+  assert_eq!(injected(&selection), ["HOSTNAME", "API_KEY"]);
+  assert_eq!(selection.blocked, ["NODE_OPTIONS", "LD_PRELOAD"]);
+  assert_eq!(selection.dangerous, ["HOSTNAME"]);
+
+  let options = SelectionOptions {
+    only: vec!["API_KEY".into(), "NODE_OPTIONS".into()],
+    ..Default::default()
+  };
+  let selection = select(stored.clone(), &options, |_| false).unwrap();
+  assert_eq!(injected(&selection), ["NODE_OPTIONS", "API_KEY"]);
+  assert!(selection.blocked.is_empty());
+  assert_eq!(selection.dangerous, ["NODE_OPTIONS"]);
+
+  let options = SelectionOptions {
+    only: vec!["API_KEY".into(), "LD_PRELOAD".into()],
+    preserve_env: vec!["LD_PRELOAD".into()],
+    ..Default::default()
+  };
+  let selection = select(stored, &options, |_| true).unwrap();
+  assert_eq!(injected(&selection), ["API_KEY"]);
+  assert_eq!(selection.preserved, ["LD_PRELOAD"]);
+  assert!(selection.dangerous.is_empty() && selection.blocked.is_empty());
+}
+
+#[cfg(unix)]
+#[tokio::test(flavor = "multi_thread")]
+async fn run_filters_secrets_before_the_child_starts() {
+  use super::support::{Fixture, failure, output};
+  let fixture = Fixture::new().await;
+  let id = fixture.environment().await;
+  for (key, value) in [
+    ("API_KEY", "api-private-marker"),
+    ("DATABASE_URL", "database-private-marker"),
+    ("OTHER_KEY", "other-private-marker"),
+    ("PORT", "stored-port-marker"),
+    ("DOPBASE_URL", "stored-url-marker"),
+    ("PATH", "stored-path-marker"),
+    ("NODE_OPTIONS", "--stored-node-marker"),
+  ] {
+    fixture
+      .request(
+        reqwest::Method::PUT,
+        &format!("/api/v1/environments/{id}/secrets/{key}"),
+        Some(json!({ "value": value })),
+      )
+      .await;
+  }
+  let created = fixture
+    .json(&["token", "create", &id, "--name", "runner"])
+    .await;
+  let token = created["plaintextToken"].as_str().unwrap();
+  let assert_private = |stderr: &[u8]| {
+    let stderr = String::from_utf8_lossy(stderr);
+    assert!(!stderr.contains("private-marker"), "{stderr}");
+    assert!(!stderr.contains("stored-"), "{stderr}");
+  };
+
+  // Repeated and comma-separated --only select exactly those keys.
+  let mut command = fixture.command();
+  command.env("DOPBASE_TOKEN", token).args([
+    "run", &id, "--only", "API_KEY", "--only", "DATABASE_URL,NODE_OPTIONS", "--", "sh", "-c",
+    r#"[ "$API_KEY" = api-private-marker ] && [ -n "$DATABASE_URL" ] && [ -z "${OTHER_KEY+x}" ] && [ -z "${PORT+x}" ] || exit 41; printf child-ok; exit 23"#,
+  ]);
+  let result = output(command, None).await;
+  assert_eq!(result.status.code(), Some(23));
+  assert_eq!(result.stdout, b"child-ok");
+  let stderr = String::from_utf8_lossy(&result.stderr);
+  assert!(stderr.contains("3 of 7 key(s)"), "{stderr}");
+  assert!(
+    stderr.contains("can change how programs load or run: NODE_OPTIONS"),
+    "{stderr}"
+  );
+  assert_private(&result.stderr);
+
+  // A missing --only key stops before the child starts.
+  let marker = fixture.directory.path().join("child-was-started");
+  let mut command = fixture.command();
+  command
+    .env("DOPBASE_TOKEN", token)
+    .env("DOPBASE_CHILD_MARKER", &marker)
+    .args([
+      "run",
+      &id,
+      "--only",
+      "API_KEY,OPTIONAL_KEY",
+      "--",
+      "sh",
+      "-c",
+      r#"printf started > "$DOPBASE_CHILD_MARKER""#,
+    ]);
+  let result = output(command, None).await;
+  failure(
+    &result,
+    "--only key(s) not stored in this environment: OPTIONAL_KEY",
+  );
+  assert!(!marker.exists(), "run started its child with a missing key");
+
+  // --allow-missing warns and runs.
+  let mut command = fixture.command();
+  command.env("DOPBASE_TOKEN", token).args([
+    "run",
+    &id,
+    "--only",
+    "API_KEY,OPTIONAL_KEY",
+    "--allow-missing",
+    "--",
+    "sh",
+    "-c",
+    r#"[ -n "$API_KEY" ] && [ -z "${OPTIONAL_KEY+x}" ] || exit 41"#,
+  ]);
+  let result = output(command, None).await;
+  assert_eq!(result.status.code(), Some(0));
+  assert!(
+    String::from_utf8_lossy(&result.stderr).contains("--only key(s) not stored: OPTIONAL_KEY")
+  );
+
+  // Preserved keys keep the parent value; reserved names never arrive.
+  let mut command = fixture.command();
+  command
+    .env("DOPBASE_TOKEN", token)
+    .env("PORT", "parent-port")
+    .env_remove("NODE_OPTIONS")
+    .args([
+      "run", &id, "--preserve-env", "PORT", "--", "sh", "-c",
+      r#"[ "$PORT" = parent-port ] && [ "$PATH" != stored-path-marker ] && [ -z "${DOPBASE_URL+x}" ] && [ -z "${DOPBASE_TOKEN+x}" ] && [ -z "${NODE_OPTIONS+x}" ] && [ -n "$OTHER_KEY" ] || exit 41"#,
+    ]);
+  let result = output(command, None).await;
+  assert_eq!(
+    result.status.code(),
+    Some(0),
+    "{}",
+    String::from_utf8_lossy(&result.stderr)
+  );
+  let stderr = String::from_utf8_lossy(&result.stderr);
+  assert!(
+    stderr.contains("skipped reserved name(s): DOPBASE_URL, PATH"),
+    "{stderr}"
+  );
+  assert!(stderr.contains("kept existing value for: PORT"), "{stderr}");
+  assert!(
+    stderr.contains("can load code into the child: NODE_OPTIONS"),
+    "{stderr}"
+  );
+  assert_private(&result.stderr);
+
+  // Signals that end the child still reach the caller.
+  let mut command = fixture.command();
+  command
+    .env("DOPBASE_TOKEN", token)
+    .args(["run", &id, "--", "sh", "-c", "kill -TERM $$"]);
+  let result = output(command, None).await;
+  use std::os::unix::process::ExitStatusExt;
+  assert_eq!(result.status.signal(), Some(15));
+}

@@ -706,12 +706,32 @@ how to set the default. Use `dopbase env default --clear` to remove it. An empty
 `DOPBASE_ENV` is an error and does not fall back.
 
 Before starting the child, Dopbase writes the resolved project, environment,
-immutable ID, loaded key count, and whether values came from the live server or
+immutable ID, injected key count, and whether values came from the live server or
 encrypted cache to standard error. It does not print values.
 
-Managed values override same-named variables inherited from the parent process.
-Dopbase authentication variables are removed from the child environment so the
-child application does not receive the credential used to contact Dopbase.
+Choose which secrets reach the child and which inherited values win:
+
+```bash
+dopbase run payment-service/production --only API_KEY,DATABASE_URL -- npm start
+dopbase run payment-service/development --preserve-env PORT,LOG_LEVEL -- npm run dev
+```
+
+| Flag                   | Effect                                                                                         |
+| ---------------------- | ---------------------------------------------------------------------------------------------- |
+| `--only <KEY>`         | Inject only these keys. Repeatable and comma-separated. A key that is not stored stops the run |
+| `--allow-missing`      | With `--only`, warn about keys that are not stored and start the child anyway                  |
+| `--preserve-env <KEY>` | Keep the inherited value for these keys. Repeatable and comma-separated                        |
+
+Without `--preserve-env`, stored values replace same-named variables inherited
+from the parent process. Dopbase never injects its control variables
+(`DOPBASE_TOKEN`, `DOPBASE_URL`, `DOPBASE_ENV`, `DOPBASE_DATA_DIR`,
+`DOPBASE_SECRETS_PATH`) or the shell variables `PATH`, `HOME`, `PS1`, `PS2`,
+`XDG_*`, and `LC_*` from stored secrets. Names that load code, such as
+`LD_PRELOAD` and `NODE_OPTIONS`, are skipped unless `--only` names them, and
+are then injected with a warning. `DOPBASE_TOKEN` is also removed from
+the inherited environment, so the child never receives the credential used to
+contact Dopbase. See [choose which secrets reach the application](/guide/run-an-application#choose-which-secrets-reach-the-application)
+for the full lists.
 
 Every successful live retrieval refreshes the credential-bound encrypted cache.
 Connection failures, timeouts, and 5xx responses fall back to the latest
