@@ -13,6 +13,13 @@ History dialog restores one when a change goes wrong.
 
 ### Added
 
+- `dopbase run` can pick which secrets reach the child. `--only KEY[,KEY]`
+  injects only the named keys and stops before the child starts if one is not
+  stored; `--allow-missing` turns that into a warning.
+  `--preserve-env KEY[,KEY]` keeps the value the shell already has for the
+  named keys. Both flags repeat and take comma lists. Warnings and the summary
+  line go to standard error and contain names only. Issue #17.
+
 - Secrets keep their version history. Every save (set, import, project init,
   or rollback) stores the new version encrypted, with the change type, who
   made it, and when. `dopbase secret history <ENVIRONMENT_REF> <KEY>` lists
@@ -113,6 +120,22 @@ History dialog restores one when a change goes wrong.
   Back up `audit-archive/` separately: snapshots store the database only.
 
 ### Changed
+
+- `dopbase run` no longer injects reserved names from stored secrets, and
+  prints the skipped names to standard error. The list covers the Dopbase
+  control variables (`DOPBASE_TOKEN`, `DOPBASE_URL`, `DOPBASE_ENV`,
+  `DOPBASE_DATA_DIR`, `DOPBASE_SECRETS_PATH`) and the shell variables Doppler
+  and Infisical also skip: `PATH`, `HOME`, `PS1`, `PS2`, and names that start
+  with `XDG_` or `LC_`. Before, a stored `DOPBASE_TOKEN` was injected even
+  though the inherited one was removed.
+  Names that load code into the child (`LD_PRELOAD`, `LD_LIBRARY_PATH`,
+  `DYLD_INSERT_LIBRARIES`, `DYLD_LIBRARY_PATH`, `NODE_OPTIONS`, `PERL5OPT`,
+  `PYTHONWARNINGS`, `BASH_ENV`, `PROMPT_COMMAND`, `JAVA_TOOL_OPTIONS`,
+  `PHPRC`) are skipped too unless `--only` names them; then they are
+  injected with a warning. If you store `NODE_OPTIONS` or another of these on
+  purpose, add it to `--only`. `NODE_VERSION`, `BROWSER`, `HOSTNAME`,
+  `WINDIR`, and `USERPROFILE` are still injected, with a warning. The summary
+  line counts injected keys, as `N of M key(s)` when some were left out.
 
 - The update dialog in the web UI shows the key as a read-only field with
   the current version, and says which version the save creates.
