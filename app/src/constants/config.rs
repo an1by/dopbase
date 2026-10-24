@@ -43,6 +43,46 @@ pub const ENV_RUN_ENVIRONMENT: &str = "DOPBASE_ENV";
 pub const ENV_SERVER_URL: &str = "DOPBASE_URL";
 pub const ENV_SHUTDOWN_GRACE_SECONDS: &str = "DOPBASE_SHUTDOWN_GRACE_SECONDS";
 pub const ENV_TOKEN: &str = "DOPBASE_TOKEN";
+/// Not read yet; reserved so a future file-mount mode cannot be spoofed by a
+/// stored secret.
+pub const ENV_SECRETS_PATH: &str = "DOPBASE_SECRETS_PATH";
+
+/// Control variables `dopbase run` never injects from stored secrets.
+pub const RUN_RESERVED_NAMES: [&str; 5] = [
+  ENV_TOKEN,
+  ENV_SERVER_URL,
+  ENV_RUN_ENVIRONMENT,
+  ENV_DATA_DIR,
+  ENV_SECRETS_PATH,
+];
+/// Shell variables `dopbase run` never injects from stored secrets: the
+/// union of what Doppler and Infisical skip.
+pub const RUN_SHELL_RESERVED_NAMES: [&str; 4] = ["PATH", "HOME", "PS1", "PS2"];
+pub const RUN_SHELL_RESERVED_PREFIXES: [&str; 2] = ["XDG_", "LC_"];
+/// Names that make a program load extra code or run extra commands.
+/// `dopbase run` skips them unless `--only` names them, then warns.
+pub const RUN_CODE_LOADING_NAMES: [&str; 11] = [
+  "LD_PRELOAD",
+  "LD_LIBRARY_PATH",
+  "DYLD_INSERT_LIBRARIES",
+  "DYLD_LIBRARY_PATH",
+  "NODE_OPTIONS",
+  "PERL5OPT",
+  "PYTHONWARNINGS",
+  "BASH_ENV",
+  "PROMPT_COMMAND",
+  "JAVA_TOOL_OPTIONS",
+  "PHPRC",
+];
+/// Names that change program behavior without loading code. `dopbase run`
+/// injects them and warns.
+pub const RUN_SENSITIVE_NAMES: [&str; 5] = [
+  "NODE_VERSION",
+  "BROWSER",
+  "HOSTNAME",
+  "WINDIR",
+  "USERPROFILE",
+];
 
 /// Every environment variable read by the Dopbase executable.
 pub const fn executable_environment_names() -> [&'static str; 15] {
