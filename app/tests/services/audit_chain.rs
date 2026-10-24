@@ -268,7 +268,7 @@ async fn rolling_back_the_chain_leaves_records_as_legacy() {
   // Reverting the chain migrations drops the chain columns but keeps the
   // records; reapplying starts a new chain and never seals the old ones.
   app::services::db::MIGRATOR
-    .undo(db.pool(), 13)
+    .undo(db.pool(), crate::db::version_before("audit_chain"))
     .await
     .unwrap();
   db.migrate().await.unwrap();
