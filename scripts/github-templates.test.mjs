@@ -19,8 +19,14 @@ const releaseTemplate = readFileSync(
   "utf8",
 );
 
-function completedPullRequest() {
+const DEMO_PROMPT =
+  '<!-- Features and improvements: attach a screenshot or a short video that shows the change working, in the UI or in a terminal. Drag the file into this box. Remove credentials, tokens, secret values, and private endpoints first. Docs, tests, CI, dependency, or refactor-only changes: write "Not needed:" and the reason. -->';
+
+function completedPullRequest(
+  demo = "Not needed: this only changes repository templates.",
+) {
   return pullRequestTemplate
+    .replace(DEMO_PROMPT, demo)
     .replace(
       "<!-- Explain what changed and why. Keep this focused on the problem this pull request solves. -->",
       "Add repository templates and validate them in CI.",
@@ -45,9 +51,40 @@ test("rejects empty sections and unchecked checklist items", () => {
   assert(errors.includes("The Summary section needs an answer."));
   assert(errors.includes("The Compatibility section needs an answer."));
   assert(errors.includes("The Verification section needs an answer."));
+  assert(errors.includes("The Demo section needs an answer."));
   assert(
     errors.some((error) => error.startsWith("Check this item before merging:")),
   );
+});
+
+test("accepts a screenshot, a video, or an uploaded file as the demo", () => {
+  for (const demo of [
+    "![run --only output](https://github.com/user-attachments/assets/1b2c3d4e-0000-4000-8000-000000000000)",
+    '<img width="800" alt="Secrets table" src="https://github.com/user-attachments/assets/1b2c3d4e-0000-4000-8000-000000000000" />',
+    "https://github.com/user-attachments/assets/1b2c3d4e-0000-4000-8000-000000000000",
+    "Recording: https://example.com/demo/run-only.mp4",
+  ]) {
+    assert.deepEqual(
+      validatePullRequestBody(completedPullRequest(demo)),
+      [],
+      demo,
+    );
+  }
+});
+
+test("rejects a demo without media or a reason", () => {
+  for (const demo of [
+    "Ran it locally and it works.",
+    "Not needed:",
+    "See https://example.com/demo",
+  ]) {
+    assert(
+      validatePullRequestBody(completedPullRequest(demo)).includes(
+        'The Demo section needs a screenshot or video, or "Not needed:" with a reason.',
+      ),
+      demo,
+    );
+  }
 });
 
 test("rejects a removed template marker", () => {
