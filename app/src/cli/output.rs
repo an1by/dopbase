@@ -182,6 +182,20 @@ pub(super) fn printable(value: &str) -> String {
     .collect()
 }
 
+/// Quotes a value for POSIX shells when it holds anything beyond characters
+/// that never need quoting.
+pub(super) fn shell_quote(value: &str) -> String {
+  let plain = !value.is_empty()
+    && value
+      .bytes()
+      .all(|byte| byte.is_ascii_alphanumeric() || b"@%+=:,./_-".contains(&byte));
+  if plain {
+    value.to_owned()
+  } else {
+    format!("'{}'", value.replace('\'', "'\\''"))
+  }
+}
+
 pub(super) fn timestamp(
   value: &Value,
   field: &str,

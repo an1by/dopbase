@@ -259,24 +259,10 @@ fn next_page_command(
     ("--cursor", Some(cursor)),
   ] {
     if let Some(value) = value {
-      command.push_str(&format!(" {flag} {}", shell_quote(value)));
+      command.push_str(&format!(" {flag} {}", output::shell_quote(value)));
     }
   }
   output::printable(&command)
-}
-
-/// Quotes a value for POSIX shells when it holds anything beyond characters
-/// that never need quoting.
-fn shell_quote(value: &str) -> String {
-  let plain = !value.is_empty()
-    && value
-      .bytes()
-      .all(|byte| byte.is_ascii_alphanumeric() || b"@%+=:,./_-".contains(&byte));
-  if plain {
-    value.to_owned()
-  } else {
-    format!("'{}'", value.replace('\'', "'\\''"))
-  }
 }
 
 fn report_export(
