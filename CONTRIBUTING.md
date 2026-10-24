@@ -104,6 +104,25 @@ may still ask for a demo when the reason doesn't fit the change.
 Screenshots, videos, and logs must not show credentials, tokens, secret values,
 or private endpoints. Use test data and blur or crop anything else.
 
+### Add a database migration
+
+Generate migrations with the sqlx CLI from `app/`, so the version is the UTC
+creation time instead of the next free number:
+
+```bash
+cargo install sqlx-cli --no-default-features --features sqlite
+cd app
+sqlx migrate add -r <name>
+```
+
+Use a lowercase `snake_case` name, keep one logical change per pair, and make
+the down file reverse exactly that change.
+
+Do not edit or rename a migration after it ships in a release: sqlx checksums
+applied migrations and refuses to start when one changes. Databases created by
+0.1.9 or earlier are moved onto the timestamped versions automatically at
+startup; see [`app/migrations/README.md`](./app/migrations/README.md).
+
 ## Check your work
 
 Run the complete repository checks when your change crosses several targets:
@@ -203,7 +222,7 @@ matches both package versions, builds the Linux and macOS tar.gz archives, creat
 `checksums.txt`, and publishes the release only after all four targets succeed.
 Release scripts live in `scripts/release/`.
 
-A manual Release workflow run executes all checks and builds without publishing. 
+A manual Release workflow run executes all checks and builds without publishing.
 Tag runs publish only after all uploads are verified.
 Published assets are preserved on reruns.
 
