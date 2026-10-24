@@ -77,6 +77,7 @@ const consoleLabel = computed(() =>
       :open="sessionExpired"
       title="Session expired"
       size="sm"
+      layer="session"
       persistent>
       <div class="flex flex-col gap-4">
         <div class="flex items-start gap-3">

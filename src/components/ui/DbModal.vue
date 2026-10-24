@@ -1,13 +1,19 @@
 <script setup lang="ts">
-import { onBeforeUnmount, onMounted, ref, watch } from "vue";
+import { computed, onBeforeUnmount, onMounted, ref, watch } from "vue";
 import { XIcon } from "~/assets/icons";
 import { acquireScrollLock, releaseScrollLock } from "~/composable/scroll-lock";
+import { modalsSuspended } from "~/composable/modal-suspension";
 
 /**
  * DbModal — the single dialog primitive. Renders via Teleport, closes on
  * Escape and backdrop click (unless `persistent`), and locks body scroll
  * while open. Below `sm` it docks to the bottom of the screen; the body
  * scrolls on its own so the header and footer actions stay in reach.
+ *
+ * `layer` decides stacking, independent of mount order: page dialogs sit
+ * below the password confirmation (`auth`), which sits below "Session
+ * expired" (`session`). While the session is gone every dialog except the
+ * session layer hides and asks its owner to close.
  */
 const props = withDefaults(
   defineProps<{
@@ -15,8 +21,9 @@ const props = withDefaults(
     title: string;
     size?: "sm" | "md" | "lg" | "xl";
     persistent?: boolean;
+    layer?: "page" | "auth" | "session";
   }>(),
-  { size: "md" },
+  { size: "md", layer: "page" },
 );
 
 const emit = defineEmits<{ close: [] }>();
@@ -29,6 +36,16 @@ const widthClass = {
   lg: "max-w-2xl",
   xl: "max-w-4xl",
 }[props.size];
+
+const layerClass = {
+  page: "z-50",
+  auth: "z-[60]",
+  session: "z-[70]",
+}[props.layer];
+
+const visible = computed(
+  () => props.open && !(modalsSuspended.value && props.layer !== "session"),
+);
 
 function onKeydown(event: KeyboardEvent): void {
   if (event.key === "Escape" && !props.persistent) emit("close");
@@ -43,22 +60,25 @@ function focusPanel(): void {
   });
 }
 
-watch(
-  () => props.open,
-  (open) => {
-    if (open) {
-      document.addEventListener("keydown", onKeydown);
-      acquireScrollLock();
-      focusPanel();
-    } else {
-      document.removeEventListener("keydown", onKeydown);
-      releaseScrollLock();
-    }
-  },
-);
+watch(visible, (open) => {
+  if (open) {
+    document.addEventListener("keydown", onKeydown);
+    acquireScrollLock();
+    focusPanel();
+  } else {
+    document.removeEventListener("keydown", onKeydown);
+    releaseScrollLock();
+  }
+});
+
+// Ask the owner to close as well, so its draft and pending state reset. An
+// owner that refuses (for example mid-save) stays hidden all the same.
+watch(modalsSuspended, (suspended) => {
+  if (suspended && props.open && props.layer !== "session") emit("close");
+});
 
 onMounted(() => {
-  if (props.open) {
+  if (visible.value) {
     document.addEventListener("keydown", onKeydown);
     acquireScrollLock();
     focusPanel();
@@ -67,15 +87,16 @@ onMounted(() => {
 
 onBeforeUnmount(() => {
   document.removeEventListener("keydown", onKeydown);
-  if (props.open) releaseScrollLock();
+  if (visible.value) releaseScrollLock();
 });
 </script>
 
 <template>
   <Teleport to="body">
     <div
-      v-if="open"
-      class="fixed inset-0 z-50 flex items-end justify-center bg-black/60 pt-4 sm:items-center sm:p-4"
+      v-if="visible"
+      :class="layerClass"
+      class="fixed inset-0 flex items-end justify-center bg-black/60 pt-4 sm:items-center sm:p-4"
       @mousedown.self="!persistent && emit('close')">
       <div
         ref="panel"
