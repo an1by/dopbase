@@ -432,6 +432,7 @@ fn uncomment_server_examples(reference: &str) -> String {
           "public_url",
           "shutdown_grace_seconds",
           "audit_retention_days",
+          "secret_history_versions",
           "trusted_proxies",
           "docs",
           "web_ui",
@@ -471,13 +472,14 @@ fn generated_references_load_defaults_and_uncommented_server_examples() {
     app::constants::config::CLIENT_CONFIG_FILENAME,
   ] {
     let contents = fs::read_to_string(data_dir.join(filename)).unwrap();
-    // Everything is a commented example except the audit retention that new
-    // instances start with.
+    // Everything is a commented example except the audit retention and
+    // secret history that new instances start with.
     let active = toml::from_str::<toml::Table>(&contents).unwrap();
     if filename == SERVER_CONFIG_FILENAME {
       assert_eq!(
         active,
-        toml::from_str::<toml::Table>("audit_retention_days = 365").unwrap()
+        toml::from_str::<toml::Table>("audit_retention_days = 365\nsecret_history_versions = 20")
+          .unwrap()
       );
     } else {
       assert!(active.is_empty());
@@ -506,6 +508,7 @@ fn generated_references_load_defaults_and_uncommented_server_examples() {
   );
   assert_eq!(reloaded.shutdown_grace_seconds, 10);
   assert_eq!(reloaded.audit_retention_days, Some(365));
+  assert_eq!(reloaded.secret_history_versions, 20);
   assert_eq!(
     reloaded
       .trusted_proxies
@@ -703,6 +706,64 @@ fn audit_retention_days_reads_from_file_and_environment() {
   assert!(
     format!("{error:#}").contains("invalid DOPBASE_AUDIT_RETENTION_DAYS"),
     "{error}"
+  );
+}
+
+#[test]
+fn secret_history_versions_reads_from_file_and_environment() {
+  let directory = tempfile::TempDir::new().unwrap();
+  let data_dir = directory.path().join("data");
+  fs::create_dir_all(&data_dir).unwrap();
+  let config_path = data_dir.join(SERVER_CONFIG_FILENAME);
+  let overrides = ServerOverrides {
+    data_dir: Some(data_dir.clone()),
+    ..Default::default()
+  };
+
+  assert_eq!(ServerConfig::default().secret_history_versions, 20);
+
+  fs::write(&config_path, "secret_history_versions = 50\n").unwrap();
+  let from_file =
+    ServerConfig::load_with_environment(&overrides, EnvironmentOverrides::default()).unwrap();
+  assert_eq!(from_file.secret_history_versions, 50);
+
+  // The environment variable wins over the file.
+  let from_environment = ServerConfig::load_with_environment(
+    &overrides,
+    EnvironmentOverrides {
+      secret_history_versions: Some("5".into()),
+      ..Default::default()
+    },
+  )
+  .unwrap();
+  assert_eq!(from_environment.secret_history_versions, 5);
+
+  // One retained version would leave nothing to roll back to.
+  for value in ["1", "1001"] {
+    let error = ServerConfig::load_with_environment(
+      &overrides,
+      EnvironmentOverrides {
+        secret_history_versions: Some(value.into()),
+        ..Default::default()
+      },
+    )
+    .unwrap_err();
+    assert!(
+      format!("{error:#}").contains("secret_history_versions must be between 2 and 1000"),
+      "{value}: {error:#}"
+    );
+  }
+  let error = ServerConfig::load_with_environment(
+    &overrides,
+    EnvironmentOverrides {
+      secret_history_versions: Some("many".into()),
+      ..Default::default()
+    },
+  )
+  .unwrap_err();
+  assert!(
+    format!("{error:#}").contains("invalid DOPBASE_SECRET_HISTORY_VERSIONS"),
+    "{error:#}"
   );
 }
 
