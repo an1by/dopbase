@@ -135,6 +135,21 @@ async fn rekey_database_preserves_values_and_swaps_keys() {
   .execute(&pool)
   .await
   .unwrap();
+  sqlx::query(
+    "CREATE TABLE secret_versions (
+      environment_id TEXT NOT NULL,
+      key TEXT NOT NULL,
+      version INTEGER NOT NULL,
+      ciphertext BLOB,
+      value_nonce BLOB,
+      wrapped_key BLOB,
+      key_nonce BLOB,
+      PRIMARY KEY(environment_id, key, version)
+    );",
+  )
+  .execute(&pool)
+  .await
+  .unwrap();
 
   let (old_key, new_key) = distinct_keys();
   let old_crypto = CryptoService::from_key(old_key.clone());
@@ -172,12 +187,67 @@ async fn rekey_database_preserves_values_and_swaps_keys() {
   .await
   .unwrap();
 
+  // An earlier retained version, and one whose ciphertext retention removed.
+  let earlier = old_crypto
+    .encrypt(b"earlier-password", "env_test", "DB_PASS", 0)
+    .unwrap();
+  sqlx::query(
+    "INSERT INTO secret_versions VALUES ('env_test','DB_PASS',0,?,?,?,?),('env_test','DB_PASS',1,?,?,?,?),('env_test','DB_PASS',-1,NULL,NULL,NULL,NULL)",
+  )
+  .bind(&earlier.ciphertext)
+  .bind(&earlier.value_nonce)
+  .bind(&earlier.wrapped_key)
+  .bind(&earlier.key_nonce)
+  .bind(&encrypted.ciphertext)
+  .bind(&encrypted.value_nonce)
+  .bind(&encrypted.wrapped_key)
+  .bind(&encrypted.key_nonce)
+  .execute(&pool)
+  .await
+  .unwrap();
+
   assert!(
     new_crypto
       .decrypt(&encrypted, "env_test", "DB_PASS", 1)
       .is_err()
   );
   rekey_database(&pool, &old_key, &new_key).await.unwrap();
+
+  for (version, expected) in [
+    (0_i64, b"earlier-password".as_slice()),
+    (1, cleartext.as_slice()),
+  ] {
+    let row: (Vec<u8>, Vec<u8>, Vec<u8>, Vec<u8>) = sqlx::query_as(
+      "SELECT ciphertext, value_nonce, wrapped_key, key_nonce FROM secret_versions WHERE version = ?",
+    )
+    .bind(version)
+    .fetch_one(&pool)
+    .await
+    .unwrap();
+    let stored = EncryptedValue {
+      ciphertext: row.0,
+      value_nonce: row.1,
+      wrapped_key: row.2,
+      key_nonce: row.3,
+    };
+    assert_eq!(
+      new_crypto
+        .decrypt(&stored, "env_test", "DB_PASS", version)
+        .unwrap()
+        .as_slice(),
+      expected,
+      "version {version} was not re-wrapped"
+    );
+  }
+  let expired: Option<Vec<u8>> =
+    sqlx::query_scalar("SELECT wrapped_key FROM secret_versions WHERE version = -1")
+      .fetch_one(&pool)
+      .await
+      .unwrap();
+  assert!(
+    expired.is_none(),
+    "expired versions stay without ciphertext"
+  );
 
   let metadata: (Vec<u8>, Vec<u8>) = sqlx::query_as(
     "SELECT verification_ciphertext, verification_nonce FROM instance_metadata WHERE id = 1",
