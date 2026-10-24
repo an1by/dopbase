@@ -106,7 +106,30 @@ pub async fn set(
   } else {
     "secret.created"
   };
-  sqlx::query("INSERT INTO secrets(environment_id,key,version,ciphertext,value_nonce,wrapped_key,key_nonce,created_at,updated_at)VALUES(?,?,?,?,?,?,?,?,?) ON CONFLICT(environment_id,key) DO UPDATE SET version=excluded.version,ciphertext=excluded.ciphertext,value_nonce=excluded.value_nonce,wrapped_key=excluded.wrapped_key,key_nonce=excluded.key_nonce,updated_at=excluded.updated_at").bind(id).bind(&key).bind(version).bind(encrypted.ciphertext).bind(encrypted.value_nonce).bind(encrypted.wrapped_key).bind(encrypted.key_nonce).bind(&created_at).bind(&now).execute(&mut *tx).await?;
+  repository::write_version(
+    &mut tx,
+    repository::NewVersion {
+      environment_id: id,
+      key: &key,
+      version,
+      encrypted,
+      created_at: &created_at,
+      now: &now,
+      change: if existing.is_some() {
+        repository::ChangeType::Updated
+      } else {
+        repository::ChangeType::Created
+      },
+      source_version: None,
+      actor: repository::VersionActor {
+        actor_type: identity.audit_actor_type(),
+        actor_id: Some(admin_id),
+        actor_label: Some(email),
+      },
+      keep: state.config.secret_history_versions,
+    },
+  )
+  .await?;
   common::audit(
     &mut tx,
     identity.audit_actor_type(),
@@ -132,6 +155,7 @@ pub async fn delete(
   let (admin_id, email) = require_project_manager(identity)?;
   let env = environment(state, id).await?;
   let mut tx = state.db.pool().begin_with("BEGIN IMMEDIATE").await?;
+  // The version history goes with it through the foreign key cascade.
   let deleted = sqlx::query("DELETE FROM secrets WHERE environment_id=? AND key=?")
     .bind(id)
     .bind(key)
@@ -374,8 +398,30 @@ pub async fn import(
     ));
   }
   for (entry, version, value) in encrypted {
-    sqlx::query("INSERT INTO secrets(environment_id,key,version,ciphertext,value_nonce,wrapped_key,key_nonce,created_at,updated_at)VALUES(?,?,?,?,?,?,?,?,?) ON CONFLICT(environment_id,key)DO UPDATE SET version=excluded.version,ciphertext=excluded.ciphertext,value_nonce=excluded.value_nonce,wrapped_key=excluded.wrapped_key,key_nonce=excluded.key_nonce,updated_at=excluded.updated_at").bind(id).bind(&entry.key).bind(version).bind(value.ciphertext).bind(value.value_nonce).bind(value.wrapped_key).bind(value.key_nonce).bind(existing.get(&entry.key).map_or(&now,|row|&row.created_at)).bind(&now).execute(&mut *tx).await?;
+    repository::write_version(
+      &mut tx,
+      repository::NewVersion {
+        environment_id: id,
+        key: &entry.key,
+        version,
+        encrypted: value,
+        created_at: existing
+          .get(&entry.key)
+          .map_or(now.as_str(), |row| row.created_at.as_str()),
+        now: &now,
+        change: repository::ChangeType::Imported,
+        source_version: None,
+        actor: repository::VersionActor {
+          actor_type: identity.audit_actor_type(),
+          actor_id: Some(admin_id),
+          actor_label: Some(email),
+        },
+        keep: state.config.secret_history_versions,
+      },
+    )
+    .await?;
   }
+  // Deleting a secret cascades to its version history.
   for key in &deleted {
     sqlx::query("DELETE FROM secrets WHERE environment_id=? AND key=?")
       .bind(id)

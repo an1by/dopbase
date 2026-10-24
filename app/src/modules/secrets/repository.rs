@@ -79,3 +79,95 @@ pub async fn upsert_layout(
         .await?;
   Ok(())
 }
+
+/// What produced a stored version. Stored as text in
+/// `secret_versions.change_type`.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum ChangeType {
+  Created,
+  Updated,
+  Imported,
+}
+impl ChangeType {
+  pub fn as_str(self) -> &'static str {
+    match self {
+      Self::Created => "created",
+      Self::Updated => "updated",
+      Self::Imported => "imported",
+    }
+  }
+}
+pub struct VersionActor<'a> {
+  pub actor_type: &'a str,
+  pub actor_id: Option<&'a str>,
+  pub actor_label: Option<&'a str>,
+}
+pub struct NewVersion<'a> {
+  pub environment_id: &'a str,
+  pub key: &'a str,
+  pub version: i64,
+  pub encrypted: EncryptedValue,
+  /// When the secret itself was first created. Kept across versions.
+  pub created_at: &'a str,
+  pub now: &'a str,
+  pub change: ChangeType,
+  pub source_version: Option<i64>,
+  pub actor: VersionActor<'a>,
+  /// How many of the newest versions keep their ciphertext.
+  pub keep: u32,
+}
+/// Makes `version` the current value of the secret and records it in the
+/// history, then expires ciphertext beyond the retention count. This is the
+/// only write path for secret values.
+///
+/// The upsert must stay `ON CONFLICT DO UPDATE`. `INSERT OR REPLACE` would
+/// delete the row first and cascade away the whole history.
+pub async fn write_version(
+  conn: &mut sqlx::SqliteConnection,
+  new: NewVersion<'_>,
+) -> Result<(), sqlx::Error> {
+  let EncryptedValue {
+    ciphertext,
+    value_nonce,
+    wrapped_key,
+    key_nonce,
+  } = new.encrypted;
+  sqlx::query("INSERT INTO secrets(environment_id,key,version,ciphertext,value_nonce,wrapped_key,key_nonce,created_at,updated_at)VALUES(?,?,?,?,?,?,?,?,?) ON CONFLICT(environment_id,key) DO UPDATE SET version=excluded.version,ciphertext=excluded.ciphertext,value_nonce=excluded.value_nonce,wrapped_key=excluded.wrapped_key,key_nonce=excluded.key_nonce,updated_at=excluded.updated_at")
+    .bind(new.environment_id)
+    .bind(new.key)
+    .bind(new.version)
+    .bind(&ciphertext)
+    .bind(&value_nonce)
+    .bind(&wrapped_key)
+    .bind(&key_nonce)
+    .bind(new.created_at)
+    .bind(new.now)
+    .execute(&mut *conn)
+    .await?;
+  sqlx::query("INSERT INTO secret_versions(environment_id,key,version,ciphertext,value_nonce,wrapped_key,key_nonce,change_type,source_version,actor_type,actor_id,actor_label,created_at)VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?)")
+    .bind(new.environment_id)
+    .bind(new.key)
+    .bind(new.version)
+    .bind(ciphertext)
+    .bind(value_nonce)
+    .bind(wrapped_key)
+    .bind(key_nonce)
+    .bind(new.change.as_str())
+    .bind(new.source_version)
+    .bind(new.actor.actor_type)
+    .bind(new.actor.actor_id)
+    .bind(new.actor.actor_label)
+    .bind(new.now)
+    .execute(&mut *conn)
+    .await?;
+  sqlx::query("UPDATE secret_versions SET ciphertext=NULL,value_nonce=NULL,wrapped_key=NULL,key_nonce=NULL,expired_at=? WHERE environment_id=? AND key=? AND expired_at IS NULL AND version NOT IN (SELECT version FROM secret_versions WHERE environment_id=? AND key=? ORDER BY version DESC LIMIT ?)")
+    .bind(new.now)
+    .bind(new.environment_id)
+    .bind(new.key)
+    .bind(new.environment_id)
+    .bind(new.key)
+    .bind(i64::from(new.keep))
+    .execute(&mut *conn)
+    .await?;
+  Ok(())
+}
