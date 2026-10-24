@@ -129,15 +129,17 @@ async fn backup_and_restore_lifecycle() {
   assert_eq!(status, 201);
   let env_id = env["data"]["id"].as_str().unwrap();
 
-  let (status, _, _) = call(
-    &router,
-    "PUT",
-    &format!("/api/v1/environments/{env_id}/secrets/API_KEY"),
-    Some(&token),
-    Some(json!({"value": "super-secret-key-123"})),
-  )
-  .await;
-  assert_eq!(status, 200);
+  for value in ["first-key-000", "super-secret-key-123"] {
+    let (status, _, _) = call(
+      &router,
+      "PUT",
+      &format!("/api/v1/environments/{env_id}/secrets/API_KEY"),
+      Some(&token),
+      Some(json!({ "value": value })),
+    )
+    .await;
+    assert_eq!(status, 200);
+  }
 
   // 2. Initialize new backup with custom name
   let (status, create_res, _) = call(
@@ -272,6 +274,29 @@ async fn backup_and_restore_lifecycle() {
   .await;
   assert_eq!(status, 200);
   assert_eq!(reveal_res["data"]["value"], "super-secret-key-123");
+
+  // Version history comes back with the snapshot, so a restored secret can
+  // still roll back to its earlier value.
+  let (status, history, _) = call(
+    &router,
+    "GET",
+    &format!("/api/v1/environments/{env_id}/secrets/API_KEY/versions"),
+    Some(&token),
+    None,
+  )
+  .await;
+  assert_eq!(status, 200);
+  assert_eq!(history["data"]["items"].as_array().unwrap().len(), 2);
+  let (status, earlier, _) = call(
+    &router,
+    "POST",
+    &format!("/api/v1/environments/{env_id}/secrets/API_KEY/versions/1/reveal"),
+    Some(&token),
+    None,
+  )
+  .await;
+  assert_eq!(status, 200);
+  assert_eq!(earlier["data"]["value"], "first-key-000");
 
   // Verify NEW_SECRET is gone (restored to point-in-time)
   let (status, _, _) = call(
@@ -580,6 +605,15 @@ async fn bootstrap_restore_with_different_master_key() {
   )
   .await;
   assert_eq!(status, 200);
+  let (status, _, _) = call(
+    &router1,
+    "PUT",
+    &format!("/api/v1/environments/{env_id}/secrets/DATABASE_URL"),
+    Some(&token1),
+    Some(json!({"value": "postgres://broken"})),
+  )
+  .await;
+  assert_eq!(status, 200);
 
   // Download Server 1 backup
   let (status, backup_item, _) = call(
@@ -706,6 +740,17 @@ async fn bootstrap_restore_with_different_master_key() {
   .await;
   assert_eq!(status, 200);
   let token2 = login["data"]["token"].as_str().unwrap();
+
+  // Earlier versions are re-keyed too, so a rollback works on server2.
+  let (status, rolled_back, _) = call(
+    &router2,
+    "POST",
+    &format!("/api/v1/environments/{env_id}/secrets/DATABASE_URL/rollback"),
+    Some(token2),
+    Some(json!({"version": 1, "expectedVersion": 2})),
+  )
+  .await;
+  assert_eq!(status, 200, "{rolled_back}");
 
   // Decrypt secret on server2 using server2's own re-keyed master key!
   let (status, secret_res, _) = call(
