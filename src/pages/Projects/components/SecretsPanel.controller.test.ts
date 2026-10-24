@@ -10,6 +10,7 @@ import * as secretsApi from "~/services/secrets.api";
 import * as authApi from "~/services/auth.api";
 import { ApiError } from "~/services/http.client";
 import { mountController } from "~/tests/mount-controller";
+import { useAuthStore } from "~/stores/auth.store";
 
 vi.mock("~/services/secrets.api");
 vi.mock("~/services/auth.api");
@@ -183,6 +184,20 @@ describe("useSecretsPanelController", () => {
     expect(secretsApi.revealSecret).toHaveBeenCalledTimes(2);
     expect(c.revealedKey.value).toBe("DATABASE_URL");
     expect(c.revealedValue.value).toBe("postgres://secret");
+  });
+
+  it("shows no save error behind the session-expired dialog", async () => {
+    vi.mocked(secretsApi.setSecret).mockRejectedValue(
+      new ApiError(401, { UNAUTHORIZED: "Sign in again." }),
+    );
+    const c = makeController();
+    useAuthStore().sessionExpired = true;
+    await expect(c.setSecret("DATABASE_URL", "new-value")).rejects.toThrow();
+    expect(c.actionError.value).toBeNull();
+
+    useAuthStore().sessionExpired = false;
+    await expect(c.setSecret("DATABASE_URL", "new-value")).rejects.toThrow();
+    expect(c.actionError.value).toBe("Could not save the secret.");
   });
 
   it("setSecret saves and reloads", async () => {
