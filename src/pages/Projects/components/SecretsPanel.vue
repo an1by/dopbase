@@ -18,13 +18,13 @@ import {
   DbModal,
   DbSkeleton,
   DbTextarea,
-  DbCode,
 } from "~/components/ui";
 import {
   EyeIcon,
   EyeOffIcon,
   HistoryIcon,
   KeyIcon,
+  LockIcon,
   PencilIcon,
   TrashIcon,
 } from "~/assets/icons";
@@ -652,18 +652,33 @@ async function confirmDelete(): Promise<void> {
           mono
           hint="Use letters, numbers, '_', and '-'. The first character cannot be a number." />
         <div v-else class="flex flex-col gap-1.5">
-          <span class="text-xs font-medium text-ink-muted">Key</span>
-          <DbCode>{{ form.secret.key }}</DbCode>
-          <span class="text-xs text-ink-muted">
-            Current version: v{{ form.secret.version }}. Saving creates a new
-            version.
+          <div class="rounded-control bg-raised" data-testid="secret-key-field">
+            <p class="px-3.5 pb-0.5 pt-2 text-xs font-semibold text-ink-muted">
+              Key
+            </p>
+            <div class="flex h-9 items-center gap-2 px-3.5">
+              <LockIcon
+                class="h-3.5 w-3.5 shrink-0 text-ink-faint"
+                aria-hidden="true" />
+              <span
+                class="min-w-0 flex-1 truncate font-mono text-xs text-ink-strong"
+                :title="form.secret.key">
+                {{ form.secret.key }}
+              </span>
+              <DbBadge>v{{ form.secret.version }}</DbBadge>
+            </div>
+          </div>
+          <p class="text-xs text-ink-muted">
+            Keys can't be renamed. Saving stores the new value as v{{
+              form.secret.version + 1
+            }}.
             <button
               type="button"
-              class="cursor-pointer text-accent-strong underline"
+              class="cursor-pointer text-accent-strong underline-offset-2 hover:underline"
               @click="openHistory(form.secret.key)">
               See history
             </button>
-          </span>
+          </p>
         </div>
         <DbTextarea
           v-model="form.value"
