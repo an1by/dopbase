@@ -80,8 +80,29 @@ Use commit messages that explain the change in plain language. A pull request sh
 - How the solution works
 - How it was tested
 - Any compatibility, security, or migration concerns
+- What the change looks like when it runs
 
-Screenshots are useful for visible interface changes. Logs and screenshots must not contain credentials or private endpoints.
+### Show a demo
+
+A pull request that adds a feature or improves existing behavior needs a
+screenshot or a short video in the Demo section. Reviewers use it to see the
+change without checking out the branch. This applies to the CLI as much as the
+web UI: a terminal screenshot of the new command or flag counts.
+
+Drag the image or video into the pull request description and GitHub uploads
+it. A Markdown image, an `<img>` or `<video>` tag, or a link to a `.png`,
+`.jpg`, `.gif`, `.webp`, `.mp4`, `.mov`, or `.webm` file also works.
+
+Changes to documentation, tests, CI, dependencies, or internal refactors that
+users can't see don't need a demo. Write `Not needed:` followed by the reason,
+for example `Not needed: documentation only.`
+
+The template check fails when the Demo section has neither media nor a
+`Not needed:` reason. It can't tell a feature from a refactor, so reviewers
+may still ask for a demo when the reason doesn't fit the change.
+
+Screenshots, videos, and logs must not show credentials, tokens, secret values,
+or private endpoints. Use test data and blur or crop anything else.
 
 ## Check your work
 

@@ -79,7 +79,8 @@ History dialog restores one when a change goes wrong.
   without a chain position that is newer than the chain fails verification.
   The database rejects updates of sealed records. The chain columns are
   additive: existing audit endpoints, filters, and clients keep their shape,
-  and verification reads no secret values.
+  and verification reads no secret values. Contributed by bosd in #123.
+  Issue #119.
 
 - `dopbase audit verify --anchor SEQ:HASH`, or `anchorSeq` and `anchorHash`
   on the verify endpoint, compares the log with a head saved outside the
@@ -106,7 +107,8 @@ History dialog restores one when a change goes wrong.
   the end. Each line is the record exactly as the audit list API returns it,
   chain fields (`seq`, `prevHash`, `recordHash`) included, so any exported
   record can serve as a verification anchor. Export requires an
-  administrator account and reads no secret values.
+  administrator account and reads no secret values. Contributed by bosd in
+  #124. Issue #119.
 
 - `audit_retention_days` in `server.toml`, or `DOPBASE_AUDIT_RETENTION_DAYS`,
   sets how many days audit records are kept; unset keeps them forever. New
@@ -118,6 +120,7 @@ History dialog restores one when a change goes wrong.
   Retention runs at startup and then once a day, never inside the request
   that writes a record.
   Back up `audit-archive/` separately: snapshots store the database only.
+  Contributed by bosd in #125. Issue #119.
 
 ### Changed
 
@@ -136,6 +139,11 @@ History dialog restores one when a change goes wrong.
   purpose, add it to `--only`. `NODE_VERSION`, `BROWSER`, `HOSTNAME`,
   `WINDIR`, and `USERPROFILE` are still injected, with a warning. The summary
   line counts injected keys, as `N of M key(s)` when some were left out.
+
+- Pull request descriptions have a Demo section. Features and improvements
+  need a screenshot or video, and other changes write `Not needed:` with a
+  reason. The template check enforces it, and `CONTRIBUTING.md` explains what
+  counts.
 
 - The update dialog in the web UI shows the key as a read-only field with
   the current version, and says which version the save creates.

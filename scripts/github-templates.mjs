@@ -6,6 +6,7 @@ const SECTION_DEFINITIONS = [
   { marker: "<!-- pr-template:summary -->", heading: "Summary" },
   { marker: "<!-- pr-template:compatibility -->", heading: "Compatibility" },
   { marker: "<!-- pr-template:verification -->", heading: "Verification" },
+  { marker: "<!-- pr-template:demo -->", heading: "Demo" },
   { marker: "<!-- pr-template:checklist -->", heading: "Checklist" },
 ];
 
@@ -21,7 +22,25 @@ export const REQUIRED_CHECKLIST_ITEMS = [
   "I kept this pull request focused on one problem.",
   "I added or updated tests for behavior changes, or explained why tests are not needed.",
   "I updated the documentation and `CHANGELOG.md` when public behavior changed, or explained why they are not needed.",
+  "I added a screenshot or video demo for a feature or improvement, or explained why one is not needed.",
 ];
+
+// A Markdown or HTML image, an HTML video, a GitHub upload, or a link to an
+// image or video file.
+const DEMO_MEDIA_PATTERNS = [
+  /!\[[^\]]*\]\([^)\s]+[^)]*\)/,
+  /<(img|video)\b[^>]*\bsrc=/i,
+  /https:\/\/github\.com\/user-attachments\/assets\/[\w-]+/,
+  /https:\/\/\S+\.(png|jpe?g|gif|webp|mp4|mov|webm)(\?\S*)?(\s|\)|$)/i,
+];
+const DEMO_EXEMPTION = /^not needed:\s*\S/im;
+
+function hasDemo(content) {
+  return (
+    DEMO_EXEMPTION.test(content) ||
+    DEMO_MEDIA_PATTERNS.some((pattern) => pattern.test(content))
+  );
+}
 
 function escapeRegex(value) {
   return value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
@@ -92,6 +111,10 @@ export function validatePullRequestBody(body) {
       .trim();
     if (!/[A-Za-z0-9]/.test(visibleContent)) {
       errors.push(`The ${section.heading} section needs an answer.`);
+    } else if (section.heading === "Demo" && !hasDemo(visibleContent)) {
+      errors.push(
+        'The Demo section needs a screenshot or video, or "Not needed:" with a reason.',
+      );
     }
   }
 
