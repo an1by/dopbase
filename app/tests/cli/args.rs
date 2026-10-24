@@ -69,6 +69,59 @@ fn run_preserves_child_token_flags_after_the_separator() {
 }
 
 #[test]
+fn run_selection_flags_repeat_and_split_on_commas() {
+  let cli = Cli::try_parse_from([
+    "dopbase",
+    "run",
+    "env_482731",
+    "--only",
+    "API_KEY,DATABASE_URL",
+    "--only",
+    "OPTIONAL_KEY",
+    "--allow-missing",
+    "--preserve-env",
+    "PORT",
+    "--preserve-env",
+    "LOG_LEVEL,TZ",
+    "--",
+    "printenv",
+    "--only",
+    "child-value",
+  ])
+  .unwrap();
+  let Command::Run(RunArgs {
+    only,
+    allow_missing,
+    preserve_env,
+    command,
+    ..
+  }) = cli.command
+  else {
+    panic!("expected run command");
+  };
+  assert_eq!(only, ["API_KEY", "DATABASE_URL", "OPTIONAL_KEY"]);
+  assert!(allow_missing);
+  assert_eq!(preserve_env, ["PORT", "LOG_LEVEL", "TZ"]);
+  assert_eq!(command, ["printenv", "--only", "child-value"]);
+}
+
+#[test]
+fn run_selection_flags_reject_empty_or_invalid_keys() {
+  for arguments in [
+    &["--only", ""][..],
+    &["--only", "API_KEY,,DATABASE_URL"],
+    &["--only", "1KEY"],
+    &["--preserve-env", "PORT="],
+    &["--allow-missing"],
+  ] {
+    let mut argv = vec!["dopbase", "run", "env_482731"];
+    argv.extend_from_slice(arguments);
+    argv.extend_from_slice(&["--", "true"]);
+    assert!(Cli::try_parse_from(&argv).is_err(), "{arguments:?}");
+  }
+}
+
+#[test]
 fn login_does_not_accept_the_short_token_flag() {
   assert!(Cli::try_parse_from(["dopbase", "login", "-t"]).is_err());
 }
