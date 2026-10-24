@@ -13,7 +13,7 @@ const props = withDefaults(
   defineProps<{
     open: boolean;
     title: string;
-    size?: "sm" | "md" | "lg";
+    size?: "sm" | "md" | "lg" | "xl";
     persistent?: boolean;
   }>(),
   { size: "md" },
@@ -27,6 +27,7 @@ const widthClass = {
   sm: "max-w-sm",
   md: "max-w-lg",
   lg: "max-w-2xl",
+  xl: "max-w-4xl",
 }[props.size];
 
 function onKeydown(event: KeyboardEvent): void {
