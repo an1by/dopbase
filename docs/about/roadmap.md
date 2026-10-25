@@ -7,6 +7,20 @@ description: "The Dopbase roadmap: what ships and what is planned next."
 
 The roadmap describes intent, not a release commitment. Work may move as implementation and security review uncover new requirements.
 
+## Trust and security
+
+People trust Dopbase with production credentials, so security work does not
+wait for a version number. These items ship as they are ready, and the
+independent review is published before 1.0.
+
+- Signed release archives with Sigstore, plus an SBOM and build provenance
+  for every release
+- A published threat model and a security policy with response times for
+  reported vulnerabilities
+- An independent penetration test and cryptography review, with the report
+  made public
+- Written project governance and credit for outside contributors
+
 ## Current release: v0.1.x
 
 Version 0.1 builds the core of a self-hosted secrets manager. One executable
@@ -30,6 +44,7 @@ what they need to run, audit, and recover an instance.
 - Instance status and server log management
 - Encrypted full-instance backups and recovery-aware factory reset
 - Self-hosted binaries for macOS and Linux on AMD64 and ARM64
+- SSO and OpenID Connect (moved here due to demand)
 
 ## v0.2.0: Team features
 
@@ -57,6 +72,8 @@ pipelines and containers, and lets the master key live in a cloud key service.
 - GitHub Actions and GitLab CI integrations
 - Docker workflows
 - Webhooks and secret references
+- PostgreSQL as a storage backend next to SQLite
+- SDKs for Node.js, Python, and Go
 
 ## v0.4.0: Compliance and operations
 
@@ -69,13 +86,31 @@ for operators who want less manual upkeep.
 - Scheduled backups
 - Automatic upgrades
 - Cloud migration tools
+- Audit log streaming to SIEM tools
+- Telemetry integrations and log monitoring
+
+## v1.0.0: Stable (after a year of development)
+
+Version 1.0 is the release teams can build on for years. Interfaces stop
+changing without notice, and Dopbase Cloud opens to teams around the world.
+
+- Stable REST API, CLI flags, and database migrations, with a published
+  deprecation policy
+- A long-term support line and a written upgrade policy
+- A published independent security review
+- Dopbase Cloud, a managed Dopbase server, with data regions in the EU and
+  the US
+- SOC 2 Type II and ISO 27001 for Dopbase Cloud, and a GDPR data processing
+  agreement
+- A public status page for Dopbase Cloud
+- The Admin UI and documentation in more languages
 
 ## Later, based on demand
 
-- Dopbase Cloud, a managed Dopbase server
-- Native Windows binaries
+- Dopbase Cloud, a managed Dopbase server (most requested)
 - High availability
 - Enterprise policies and SCIM
 - Dedicated or regional deployments
+- Native Windows binaries
 
 See [product status](/guide/product-status) for current capabilities and operational boundaries.
