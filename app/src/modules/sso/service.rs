@@ -837,13 +837,15 @@ pub async fn callback(
   .bind(&now)
   .fetch_optional(state.db.pool())
   .await;
-  let flow = match flow {
-    Ok(Some(flow)) => flow,
-    Ok(None) => {
-      state.rate_limiter.failure(&limit_key).await;
-      return error_location(Target::Login, "expired");
-    }
-    Err(_) => return error_location(Target::Login, "failed"),
+  // Early returns stay in let-else. Inside a match that binds `flow`, CodeQL
+  // reads the returned error page as the flow itself and reports it reaching
+  // the nonce check.
+  let Ok(found) = flow else {
+    return error_location(Target::Login, "failed");
+  };
+  let Some(flow) = found else {
+    state.rate_limiter.failure(&limit_key).await;
+    return error_location(Target::Login, "expired");
   };
 
   match finish_callback(state, &flow, &query).await {
