@@ -250,6 +250,8 @@ const config = defineConfig({
             { text: "Run an application", link: "/guide/run-an-application" },
             { text: "AI agent access", link: "/guide/ai-agent-access" },
             { text: "Single sign-on", link: "/guide/single-sign-on" },
+            { text: "Sign in with Google", link: "/guide/sso-google" },
+            { text: "Sign in with Keycloak", link: "/guide/sso-keycloak" },
             {
               text: "Backup and restore",
               link: "/guide/backups-and-restore",

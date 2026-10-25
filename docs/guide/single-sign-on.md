@@ -53,6 +53,11 @@ reverse proxy that terminates TLS, use the URL people open in their browser.
    settings work.
 5. Select **Turn on**. The sign-in page now shows a **Sign in with …** button.
 
+[Sign in with Google](./sso-google) walks through these steps for Google,
+including the Google Cloud console side.
+[Sign in with Keycloak](./sso-keycloak) does the same with a local Keycloak in
+Docker, which is a quick way to try single sign-on.
+
 Changing the issuer URL, client ID, or client secret turns single sign-on off
 until root runs another test sign-in.
 
