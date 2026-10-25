@@ -747,6 +747,10 @@ pub async fn restore_database_from_archive(
     sqlx::query("DELETE FROM environment_env_layout").execute(&mut *tx).await?;
     sqlx::query("DELETE FROM environments").execute(&mut *tx).await?;
     sqlx::query("DELETE FROM projects").execute(&mut *tx).await?;
+    sqlx::query("DELETE FROM cli_device_requests").execute(&mut *tx).await?;
+    sqlx::query("DELETE FROM sso_flows").execute(&mut *tx).await?;
+    sqlx::query("DELETE FROM admin_identities").execute(&mut *tx).await?;
+    sqlx::query("DELETE FROM sso_providers").execute(&mut *tx).await?;
     sqlx::query("DELETE FROM sessions").execute(&mut *tx).await?;
     sqlx::query("DELETE FROM admins").execute(&mut *tx).await?;
     sqlx::query("DELETE FROM instance_metadata").execute(&mut *tx).await?;
@@ -770,6 +774,11 @@ pub async fn restore_database_from_archive(
     // The chain's genesis and pruning anchor belong to the restored records.
     sqlx::query("INSERT INTO audit_chain_anchor SELECT * FROM backup_db.audit_chain_anchor").execute(&mut *tx).await?;
     sqlx::query("INSERT INTO audit_chain_genesis SELECT * FROM backup_db.audit_chain_genesis").execute(&mut *tx).await?;
+    // The backup uses this server's master key, or was re-keyed to it
+    // before this point, so its SSO client secret decrypts here. Identities of accounts the restore left
+    // out, such as a replaced root, are dropped.
+    sqlx::query("INSERT INTO sso_providers SELECT * FROM backup_db.sso_providers").execute(&mut *tx).await?;
+    sqlx::query("INSERT INTO admin_identities SELECT * FROM backup_db.admin_identities WHERE admin_id IN (SELECT id FROM admins)").execute(&mut *tx).await?;
 
     let mut effective_admin_id = preserve_admin.map(|admin| admin.admin_id.to_string());
 

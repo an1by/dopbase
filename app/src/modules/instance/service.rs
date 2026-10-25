@@ -177,6 +177,10 @@ pub async fn factory_reset(
       "environment_env_layout",
       "environments",
       "projects",
+      "cli_device_requests",
+      "sso_flows",
+      "admin_identities",
+      "sso_providers",
       "sessions",
       "admins",
     ] {
