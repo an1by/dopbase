@@ -65,13 +65,10 @@ pub async fn login(
   }
   state.rate_limiter.clear(&limit_key).await;
   let (admin_id, email, _, role_value) = admin.expect("validated");
-  let role = match role_value.as_str() {
-    "root" => AdminRole::Root,
-    "admin" => AdminRole::Admin,
-    "member" => AdminRole::Member,
-    _ => return Err(HttpError::internal()),
-  };
+  let role = AdminRole::parse_human(&role_value).ok_or_else(HttpError::internal)?;
   // The password was right, so saying why it is refused leaks nothing.
+  // TODO(rbac): root is the fixed break-glass role that keeps password
+  // sign-in. Check a permission instead once roles are configurable.
   if role != AdminRole::Root
     && crate::modules::sso::service::policy(state)
       .await?
@@ -162,14 +159,21 @@ pub(crate) async fn issue_session(
   let session_id = token::public_id(SESSION_ID_PREFIX);
   // Keep revoked/expired session history for 30 days for operational
   // diagnosis, then prune it during the naturally recurring login path.
-  let retention_cutoff = (now - Duration::days(30)).to_rfc3339();
-  sqlx::query("DELETE FROM sessions WHERE (revoked_at IS NOT NULL AND revoked_at < ?) OR (absolute_expires_at < ?) OR (idle_expires_at < ?)")
-    .bind(&retention_cutoff)
-    .bind(&retention_cutoff)
-    .bind(&retention_cutoff)
-    .execute(&mut **tx)
-    .await?;
-  sqlx::query("INSERT INTO sessions(id,admin_id,kind,token_hash,csrf_hash,created_at,last_used_at,recent_auth_at,idle_expires_at,absolute_expires_at) VALUES(?,?,?,?,?,?,?,?,?,?)").bind(&session_id).bind(admin_id).bind(kind.as_str()).bind(token::hash(&raw)).bind(csrf.as_ref().map(|v|token::hash(v))).bind(now.to_rfc3339()).bind(now.to_rfc3339()).bind(now.to_rfc3339()).bind(idle.to_rfc3339()).bind(absolute.to_rfc3339()).execute(&mut **tx).await?;
+  repository::prune_sessions(tx, &(now - Duration::days(30)).to_rfc3339()).await?;
+  repository::insert_session(
+    tx,
+    repository::NewSession {
+      id: &session_id,
+      admin_id,
+      kind: kind.as_str(),
+      token_hash: &token::hash(&raw),
+      csrf_hash: csrf.as_deref().map(token::hash).as_deref(),
+      now: &now.to_rfc3339(),
+      idle_expires_at: &idle.to_rfc3339(),
+      absolute_expires_at: &absolute.to_rfc3339(),
+    },
+  )
+  .await?;
   Ok(IssuedSession {
     id: session_id,
     token: raw,
@@ -187,6 +191,8 @@ async fn password_confirmation(
   let hash = repository::password_hash(state.db.pool(), admin_id)
     .await?
     .unwrap_or_default();
+  // TODO(rbac): root keeps its password when single sign-on is required.
+  // Check a permission instead once roles are configurable.
   Ok(
     common::has_password(&hash)
       && (role == AdminRole::Root
@@ -262,11 +268,7 @@ pub async fn logout(
   };
   let now = Utc::now().to_rfc3339();
   let mut tx = state.db.pool().begin().await?;
-  sqlx::query("UPDATE sessions SET revoked_at=? WHERE id=?")
-    .bind(&now)
-    .bind(session_id)
-    .execute(&mut *tx)
-    .await?;
+  repository::revoke_session(&mut tx, session_id, &now).await?;
   common::audit(
     &mut tx,
     identity.audit_actor_type(),
@@ -331,11 +333,7 @@ pub async fn reauthenticate(
     _ => unreachable!(),
   };
   let mut tx = state.db.pool().begin().await?;
-  sqlx::query("UPDATE sessions SET recent_auth_at=? WHERE id=?")
-    .bind(Utc::now().to_rfc3339())
-    .bind(session_id)
-    .execute(&mut *tx)
-    .await?;
+  repository::mark_recent_auth(&mut tx, session_id, &Utc::now().to_rfc3339()).await?;
   common::audit(
     &mut tx,
     identity.audit_actor_type(),
@@ -399,18 +397,10 @@ pub async fn change_password(
   }
   state.rate_limiter.clear(&limit_key).await;
   let new_hash = common::hash_password_async(request.new_password.clone()).await?;
+  let now = Utc::now().to_rfc3339();
   let mut tx = state.db.pool().begin().await?;
-  sqlx::query("UPDATE admins SET password_hash=?,updated_at=? WHERE id=?")
-    .bind(new_hash)
-    .bind(Utc::now().to_rfc3339())
-    .bind(admin_id)
-    .execute(&mut *tx)
-    .await?;
-  sqlx::query("UPDATE sessions SET revoked_at=? WHERE admin_id=? AND revoked_at IS NULL")
-    .bind(Utc::now().to_rfc3339())
-    .bind(admin_id)
-    .execute(&mut *tx)
-    .await?;
+  repository::set_password_hash(&mut tx, admin_id, &new_hash, &now).await?;
+  repository::revoke_sessions_of(&mut tx, admin_id, &now).await?;
   common::audit(
     &mut tx,
     identity.audit_actor_type(),

@@ -4,7 +4,11 @@
 //! so this works the same whether the browser session came from a password
 //! or from single sign-on.
 
-use super::{model::*, service::issue_session};
+use super::{
+  model::*,
+  repository::{self, NewDeviceRequest},
+  service::issue_session,
+};
 use crate::{
   constants::{
     api::auth::CLI_APPROVE_PAGE,
@@ -33,27 +37,6 @@ use chrono::{DateTime, Duration, Utc};
 const USER_CODE_ALPHABET: &[u8] = b"BCDFGHJKLMNPQRSTVWXZ";
 const USER_CODE_LENGTH: usize = 8;
 const MAX_HOSTNAME_LENGTH: usize = 64;
-/// A login can be approved by anyone signed in; a confirmation only by the
-/// owner of the CLI session it confirms. Binds the approver's account ID.
-const OWNED_BY_APPROVER: &str =
-  "(purpose='login' OR target_session_id IN (SELECT id FROM sessions WHERE admin_id=?))";
-
-#[derive(sqlx::FromRow)]
-struct PendingRow {
-  client_hostname: Option<String>,
-  client_ip: Option<String>,
-  created_at: String,
-  expires_at: String,
-  purpose: String,
-}
-
-#[derive(sqlx::FromRow)]
-struct DeviceRow {
-  id: String,
-  status: String,
-  expires_at: String,
-  last_polled_at: Option<String>,
-}
 
 fn generate_user_code() -> Result<String, HttpError> {
   let mut code = String::with_capacity(USER_CODE_LENGTH);
@@ -189,26 +172,14 @@ pub async fn start(
   let ip_address = client_ip::current().map(|address| address.to_string());
   let device_code = token::generate(DEVICE_CODE_PREFIX).map_err(|_| HttpError::internal())?;
 
+  let now_text = now.to_rfc3339();
   let mut tx = state.db.pool().begin().await?;
   // Expired rows stay for an hour so a late poll still reads "expired"
   // rather than "invalid", then this recurring path removes them.
-  sqlx::query("DELETE FROM cli_device_requests WHERE expires_at < ?")
-    .bind((now - Duration::hours(1)).to_rfc3339())
-    .execute(&mut *tx)
+  repository::delete_stale_device_requests(&mut tx, &(now - Duration::hours(1)).to_rfc3339())
     .await?;
-  let pending: i64 = sqlx::query_scalar(
-    "SELECT COUNT(*) FROM cli_device_requests WHERE status='pending' AND expires_at > ?",
-  )
-  .bind(now.to_rfc3339())
-  .fetch_one(&mut *tx)
-  .await?;
-  let pending_here: i64 = sqlx::query_scalar(
-    "SELECT COUNT(*) FROM cli_device_requests WHERE status='pending' AND expires_at > ? AND client_ip IS ?",
-  )
-  .bind(now.to_rfc3339())
-  .bind(&ip_address)
-  .fetch_one(&mut *tx)
-  .await?;
+  let (pending, pending_here) =
+    repository::pending_device_requests(&mut tx, ip_address.as_deref(), &now_text).await?;
   if pending >= MAX_PENDING_CLI_DEVICE_REQUESTS
     || pending_here >= MAX_PENDING_CLI_DEVICE_REQUESTS_PER_CLIENT
   {
@@ -220,20 +191,22 @@ pub async fn start(
   let mut user_code = None;
   for _ in 0..3 {
     let candidate = generate_user_code()?;
-    let inserted = sqlx::query("INSERT INTO cli_device_requests(id,device_code_hash,user_code_hash,status,purpose,target_session_id,client_hostname,client_ip,created_at,expires_at) VALUES(?,?,?,'pending',?,?,?,?,?,?) ON CONFLICT(user_code_hash) DO NOTHING")
-      .bind(token::public_id(DEVICE_REQUEST_ID_PREFIX))
-      .bind(token::hash(&device_code))
-      .bind(token::hash(&candidate))
-      .bind(purpose)
-      .bind(target_session)
-      .bind(&hostname)
-      .bind(&ip_address)
-      .bind(now.to_rfc3339())
-      .bind(expires_at.to_rfc3339())
-      .execute(&mut *tx)
-      .await?
-      .rows_affected();
-    if inserted == 1 {
+    let inserted = repository::insert_device_request(
+      &mut tx,
+      NewDeviceRequest {
+        id: &token::public_id(DEVICE_REQUEST_ID_PREFIX),
+        device_code_hash: &token::hash(&device_code),
+        user_code_hash: &token::hash(&candidate),
+        purpose,
+        target_session_id: target_session,
+        client_hostname: hostname.as_deref(),
+        client_ip: ip_address.as_deref(),
+        now: &now_text,
+        expires_at: &expires_at.to_rfc3339(),
+      },
+    )
+    .await?;
+    if inserted {
       user_code = Some(candidate);
       break;
     }
@@ -261,13 +234,9 @@ pub async fn poll(
   device_code: &str,
 ) -> Result<DeviceTokenResponse, HttpError> {
   let now = Utc::now();
-  let row: Option<DeviceRow> = sqlx::query_as(
-    "SELECT id,status,expires_at,last_polled_at FROM cli_device_requests WHERE device_code_hash=?",
-  )
-  .bind(token::hash(device_code))
-  .fetch_optional(state.db.pool())
-  .await?;
-  let row = row.ok_or_else(invalid_code)?;
+  let row = repository::device_request(state.db.pool(), &token::hash(device_code))
+    .await?
+    .ok_or_else(invalid_code)?;
   match row.status.as_str() {
     "consumed" | "cancelled" => return Err(invalid_code()),
     "denied" => {
@@ -295,11 +264,7 @@ pub async fn poll(
       }
       None => false,
     };
-    sqlx::query("UPDATE cli_device_requests SET last_polled_at=? WHERE id=?")
-      .bind(now.to_rfc3339())
-      .bind(&row.id)
-      .execute(state.db.pool())
-      .await?;
+    repository::touch_device_request(state.db.pool(), &row.id, &now.to_rfc3339()).await?;
     return Ok(DeviceTokenResponse {
       status: if too_fast {
         DevicePollStatus::SlowDown
@@ -313,37 +278,22 @@ pub async fn poll(
   let mut tx = state.db.pool().begin().await?;
   // The status check and the flip happen in one statement, so two polls
   // racing on the same approved code cannot both receive a session.
-  let approved: Option<(Option<String>, String, Option<String>)> = sqlx::query_as(
-    "UPDATE cli_device_requests SET status='consumed' WHERE id=? AND status='approved' RETURNING approved_by,purpose,target_session_id",
-  )
-  .bind(&row.id)
-  .fetch_optional(&mut *tx)
-  .await?;
+  let approved = repository::consume_device_request(&mut tx, &row.id).await?;
   let (approved_by, purpose, target_session) = approved.ok_or_else(invalid_code)?;
   let admin_id = approved_by.ok_or_else(invalid_code)?;
-  let (email, role_value): (String, String) =
-    sqlx::query_as("SELECT email,role FROM admins WHERE id=?")
-      .bind(&admin_id)
-      .fetch_optional(&mut *tx)
-      .await?
-      .ok_or_else(invalid_code)?;
-  let role = match role_value.as_str() {
-    "root" => AdminRole::Root,
-    "admin" => AdminRole::Admin,
-    "member" => AdminRole::Member,
-    _ => return Err(HttpError::internal()),
-  };
-  if purpose == "reauth" {
-    let confirmed = sqlx::query(
-      "UPDATE sessions SET recent_auth_at=? WHERE id=? AND admin_id=? AND revoked_at IS NULL",
-    )
-    .bind(now.to_rfc3339())
-    .bind(&target_session)
-    .bind(&admin_id)
-    .execute(&mut *tx)
+  let (email, role_value) = repository::account(&mut tx, &admin_id)
     .await?
-    .rows_affected();
-    if confirmed == 0 {
+    .ok_or_else(invalid_code)?;
+  let role = AdminRole::parse_human(&role_value).ok_or_else(HttpError::internal)?;
+  if purpose == "reauth" {
+    let confirmed = repository::confirm_session_of(
+      &mut tx,
+      target_session.as_deref(),
+      &admin_id,
+      &now.to_rfc3339(),
+    )
+    .await?;
+    if !confirmed {
       return Err(invalid_code());
     }
     common::audit(
@@ -400,11 +350,12 @@ pub async fn cancel(
   state: &AppState,
   device_code: &str,
 ) -> Result<(), HttpError> {
-  sqlx::query("UPDATE cli_device_requests SET status='cancelled',decided_at=? WHERE device_code_hash=? AND status IN ('pending','approved')")
-    .bind(Utc::now().to_rfc3339())
-    .bind(token::hash(device_code))
-    .execute(state.db.pool())
-    .await?;
+  repository::cancel_device_request(
+    state.db.pool(),
+    &token::hash(device_code),
+    &Utc::now().to_rfc3339(),
+  )
+  .await?;
   Ok(())
 }
 
@@ -435,14 +386,9 @@ pub async fn inspect(
 ) -> Result<DeviceRequestDetails, HttpError> {
   let (admin_id, _, session_id) = require_browser_human(identity)?;
   let (limit_key, hash) = user_code_hash(state, session_id, user_code).await?;
-  let details: Option<PendingRow> = sqlx::query_as(
-    &format!("SELECT client_hostname,client_ip,created_at,expires_at,purpose FROM cli_device_requests WHERE user_code_hash=? AND status='pending' AND expires_at > ? AND {OWNED_BY_APPROVER}"),
-  )
-  .bind(hash)
-  .bind(Utc::now().to_rfc3339())
-  .bind(admin_id)
-  .fetch_optional(state.db.pool())
-  .await?;
+  let details =
+    repository::pending_device_request(state.db.pool(), &hash, admin_id, &Utc::now().to_rfc3339())
+      .await?;
   let Some(row) = details else {
     state.rate_limiter.failure(&limit_key).await;
     return Err(unknown_user_code());
@@ -473,17 +419,7 @@ pub async fn decide(
   let (limit_key, hash) = user_code_hash(state, session_id, user_code).await?;
   let now = Utc::now().to_rfc3339();
   let mut tx = state.db.pool().begin().await?;
-  let decided: Option<(String, Option<String>)> = sqlx::query_as(
-    &format!("UPDATE cli_device_requests SET status=?,approved_by=?,decided_at=? WHERE user_code_hash=? AND status='pending' AND expires_at > ? AND {OWNED_BY_APPROVER} RETURNING id,client_hostname"),
-  )
-  .bind(if approve { "approved" } else { "denied" })
-  .bind(approve.then_some(admin_id))
-  .bind(&now)
-  .bind(hash)
-  .bind(&now)
-  .bind(admin_id)
-  .fetch_optional(&mut *tx)
-  .await?;
+  let decided = repository::decide_device_request(&mut tx, &hash, admin_id, approve, &now).await?;
   let Some((request_id, hostname)) = decided else {
     drop(tx);
     state.rate_limiter.failure(&limit_key).await;

@@ -6,6 +6,7 @@ use axum::{
 pub mod controller;
 pub mod doc;
 pub mod model;
+mod repository;
 pub mod service;
 pub fn routes() -> Router<AppState> {
   Router::new()

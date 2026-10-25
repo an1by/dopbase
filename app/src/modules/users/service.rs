@@ -1,4 +1,7 @@
-use super::model::*;
+use super::{
+  model::*,
+  repository::{self, NewUser, UserRow},
+};
 use crate::{
   constants::errors::PASSWORD_REQUIRED,
   extractors::{require_admin_browser, require_mutation, require_recent_browser_auth},
@@ -20,6 +23,9 @@ fn actor(identity: &AuthIdentity) -> (&str, &str) {
   }
 }
 
+// TODO(rbac): only the fixed admin and member roles can be given out here.
+// Accept any assignable role from the role tables once roles are
+// configurable.
 fn human_role(role: Option<AdminRole>) -> Result<AdminRole, HttpError> {
   match role.unwrap_or(AdminRole::Admin) {
     AdminRole::Root => Err(HttpError::forbidden(
@@ -35,17 +41,8 @@ fn human_role(role: Option<AdminRole>) -> Result<AdminRole, HttpError> {
 }
 
 fn parse_role(value: &str) -> Result<AdminRole, HttpError> {
-  match value {
-    "root" => Ok(AdminRole::Root),
-    "admin" => Ok(AdminRole::Admin),
-    "member" => Ok(AdminRole::Member),
-    _ => Err(HttpError::internal()),
-  }
+  AdminRole::parse_human(value).ok_or_else(HttpError::internal)
 }
-
-const USER_COLUMNS: &str = "a.id,a.email,a.role,a.created_at,a.updated_at,a.password_hash<>'' AS has_password,EXISTS(SELECT 1 FROM admin_identities i WHERE i.admin_id=a.id) AS sso_linked";
-
-type UserRow = (String, String, String, String, String, bool, bool);
 
 fn user(row: UserRow) -> Result<UserResponse, HttpError> {
   let (id, email, role, created_at, updated_at, has_password, sso_linked) = row;
@@ -64,9 +61,7 @@ async fn fetch_user(
   state: &AppState,
   id: &str,
 ) -> Result<UserResponse, HttpError> {
-  sqlx::query_as::<_, UserRow>(&format!("SELECT {USER_COLUMNS} FROM admins a WHERE a.id=?"))
-    .bind(id)
-    .fetch_optional(state.db.pool())
+  repository::find(state.db.pool(), id)
     .await?
     .map(user)
     .transpose()?
@@ -78,12 +73,11 @@ pub async fn list(
   identity: &AuthIdentity,
 ) -> Result<Vec<UserResponse>, HttpError> {
   require_admin_browser(identity)?;
-  let rows: Vec<UserRow> = sqlx::query_as(&format!(
-    "SELECT {USER_COLUMNS} FROM admins a ORDER BY CASE a.role WHEN 'root' THEN 0 WHEN 'admin' THEN 1 ELSE 2 END, a.email"
-  ))
-  .fetch_all(state.db.pool())
-  .await?;
-  rows.into_iter().map(user).collect()
+  repository::list(state.db.pool())
+    .await?
+    .into_iter()
+    .map(user)
+    .collect()
 }
 
 pub async fn get(
@@ -132,16 +126,16 @@ pub async fn create(
   let id = token::public_id("usr_");
   let now = Utc::now().to_rfc3339();
   let mut tx = state.db.pool().begin().await?;
-  let inserted = sqlx::query(
-    "INSERT INTO admins(id,email,password_hash,role,created_at,updated_at) VALUES(?,?,?,?,?,?)",
+  let inserted = repository::insert(
+    &mut tx,
+    NewUser {
+      id: &id,
+      email: &email,
+      password_hash: &hash,
+      role: requested_role.as_str(),
+      now: &now,
+    },
   )
-  .bind(&id)
-  .bind(&email)
-  .bind(hash)
-  .bind(requested_role.as_str())
-  .bind(&now)
-  .bind(&now)
-  .execute(&mut *tx)
   .await;
   if let Err(error) = inserted {
     if error.to_string().contains("UNIQUE") {
@@ -180,13 +174,12 @@ pub async fn update(
   require_mutation(identity, headers)?;
   require_recent_browser_auth(identity)?;
   require_admin_browser(identity)?;
-  let (old_email, old_role): (String, String) =
-    sqlx::query_as("SELECT email,role FROM admins WHERE id=?")
-      .bind(id)
-      .fetch_optional(state.db.pool())
-      .await?
-      .ok_or_else(|| HttpError::not_found("USER_NOT_FOUND", "The user was not found."))?;
+  let (old_email, old_role) = repository::account(state.db.pool(), id)
+    .await?
+    .ok_or_else(|| HttpError::not_found("USER_NOT_FOUND", "The user was not found."))?;
   let (actor_id, _) = actor(identity);
+  // TODO(rbac): root is protected by its fixed role name here and below.
+  // Check permissions instead once roles are configurable.
   if old_role == "root" && id != actor_id {
     return Err(HttpError::forbidden(
       "ROOT_PROTECTED",
@@ -227,24 +220,15 @@ pub async fn update(
   };
   let now = Utc::now().to_rfc3339();
   let mut tx = state.db.pool().begin().await?;
-  let result = if let Some(hash) = password_hash {
-    sqlx::query("UPDATE admins SET email=?,password_hash=?,role=?,updated_at=? WHERE id=?")
-      .bind(&email)
-      .bind(hash)
-      .bind(new_role.as_str())
-      .bind(&now)
-      .bind(id)
-      .execute(&mut *tx)
-      .await
-  } else {
-    sqlx::query("UPDATE admins SET email=?,role=?,updated_at=? WHERE id=?")
-      .bind(&email)
-      .bind(new_role.as_str())
-      .bind(&now)
-      .bind(id)
-      .execute(&mut *tx)
-      .await
-  };
+  let result = repository::update(
+    &mut tx,
+    id,
+    &email,
+    password_hash.as_deref(),
+    new_role.as_str(),
+    &now,
+  )
+  .await;
   if let Err(error) = result {
     if error.to_string().contains("UNIQUE") {
       return Err(HttpError::conflict(
@@ -254,11 +238,7 @@ pub async fn update(
     }
     return Err(error.into());
   }
-  sqlx::query("UPDATE sessions SET revoked_at=? WHERE admin_id=? AND revoked_at IS NULL")
-    .bind(&now)
-    .bind(id)
-    .execute(&mut *tx)
-    .await?;
+  repository::revoke_sessions(&mut tx, id, &now).await?;
   let (_, actor_email) = actor(identity);
   common::audit(
     &mut tx,
@@ -293,10 +273,7 @@ pub async fn delete(
       "You cannot delete your own account.",
     ));
   }
-  let target_role: Option<String> = sqlx::query_scalar("SELECT role FROM admins WHERE id=?")
-    .bind(id)
-    .fetch_optional(state.db.pool())
-    .await?;
+  let target_role = repository::role(state.db.pool(), id).await?;
   match target_role.as_deref() {
     None => {
       return Err(HttpError::not_found(
@@ -314,10 +291,7 @@ pub async fn delete(
     _ => return Err(HttpError::internal()),
   }
   let mut tx = state.db.pool().begin().await?;
-  sqlx::query("DELETE FROM admins WHERE id=? AND role IN ('admin','member')")
-    .bind(id)
-    .execute(&mut *tx)
-    .await?;
+  repository::delete(&mut tx, id).await?;
   common::audit(
     &mut tx,
     identity.audit_actor_type(),
@@ -349,6 +323,8 @@ pub async fn unlink_sso(
   require_admin_browser(identity)?;
   let target = fetch_user(state, id).await?;
   let (actor_id, _) = actor(identity);
+  // TODO(rbac): only root may change root. Check a permission instead once
+  // roles are configurable.
   if target.role == AdminRole::Root && id != actor_id {
     return Err(HttpError::forbidden(
       "ROOT_PROTECTED",
