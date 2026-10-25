@@ -13,6 +13,76 @@ History dialog restores one when a change goes wrong.
 
 ### Added
 
+- Accounts can go without a password once single sign-on is on. Administrators
+  leave the password empty on the Users page, which marks such accounts, and
+  the person signs in through the provider and can set a password later on the
+  Account page. Root can turn on **Require single sign-on**, which refuses
+  password sign-in for everyone except root, so root stays the way back in.
+  Turning single sign-on off lifts it, and the settings page warns how many
+  accounts have no password before you turn it off or remove it. Sensitive
+  actions can be confirmed at the provider in a popup that asks for a fresh
+  sign-in (`max_age=0`) and checks `auth_time`; in the CLI, an account that
+  cannot use a password, because it has none or single sign-on is required,
+  approves a code in the Admin UI instead of typing one, and only the owner of
+  that terminal session can approve it. Administrators can unlink an account's
+  identity, and people with a password can unlink their own. Root can also
+  hide the password form so the sign-in page shows only the single sign-on
+  button; passwords keep working in the CLI and the API, and root reaches the
+  form at `/login?password`. In the API, `POST /api/v1/users` accepts no `password` while single sign-on
+  is on, users report `hasPassword` and `ssoLinked`, and
+  `GET /api/v1/auth/session` reports `hasPassword`, `passwordConfirmation`,
+  and `ssoConfirmation`. New audit events: `sso_identity.unlinked` and
+  `sso_provider.policy_changed`. Issue #121.
+
+- Single sign-on for the Admin UI through one OpenID Connect provider, with
+  presets for Google, Microsoft Entra ID, Okta, Auth0, Amazon Cognito, Clerk,
+  Supabase, and Keycloak. It needs an HTTPS public URL (`localhost` excepted):
+  the settings page stays locked and says how to set one until then, and the
+  server refuses setup and sign-ins without it. Issuers entered with or
+  without a trailing slash are stored the way the provider publishes them.
+  Root configures it on the new Single sign-on page, registers the redirect URI it shows, and
+  must complete a test sign-in, which links the root account, before turning it
+  on. The sign-in page then shows a **Sign in with …** button. A first sign-in
+  links to an existing admin or member account only when the provider marks
+  the email as verified; later sign-ins match the provider's subject
+  identifier, so an email change at the provider cannot move the identity. Root
+  is never linked by email, unknown emails are refused, and people can link
+  from the Account page by hand. Saving a different issuer, for example when
+  moving from Google to Keycloak, removes the old links and turns single
+  sign-on off until the next test sign-in; people then link again by verified
+  email. Entra accounts link by email only with the
+  `xms_edov` claim. Sign-ins use PKCE, a nonce, and a `state` bound to the
+  starting browser, and finish through a one-time handoff code, so the
+  session cookie and CSRF token are set the same way as for password login.
+  The client secret is encrypted with the master key, re-encrypted on key
+  rotation, and restored with backups. Passwords keep working. New audit
+  events: `sso_provider.*`, `sso_identity.linked`, and `sso_login.failed`;
+  logins record `method: sso`. Issue #121.
+
+- `dopbase login --browser` signs the CLI in through the Admin UI, so the
+  password is never typed in the terminal. It prints a link to copy into any
+  browser and a short code, then waits until the code is approved at
+  `/cli/approve`. `--browser-open` also opens the link in this machine's
+  browser, and `--password` forces the password prompt. The approval page
+  stands on its own, with the code entered in one box per character. It uses
+  the browser's current session and shows which account it will sign in, with
+  a button to switch. Approving needs a recent confirmation, so an older
+  session gets the usual confirm dialog instead of being signed out. With no
+  session, or one that ends while the page is open, it goes to the sign-in page
+  and back, without the "session expired" dialog. Plain
+  `dopbase login` keeps asking for a password and switches to the browser when
+  the server reports that single sign-on is on or password login is off. The
+  new `GET /api/v1/auth/methods` endpoint reports which methods a server
+  accepts. The approval page shows the requesting hostname and IP address.
+  After an approval it counts down for 5 seconds and closes the tab. If the
+  browser won't let it, because the tab wasn't opened by a script, the page
+  says it can be closed by hand.
+  Approvals and
+  denials are audited as `cli_login.approved` and `cli_login.denied`, and the
+  issued session as `login.succeeded` with `method: browser`. Codes expire
+  after 10 minutes and work once, wrong codes are rate limited per session,
+  and Ctrl+C cancels the pending request. Issue #30.
+
 - `dopbase run` can pick which secrets reach the child. `--only KEY[,KEY]`
   injects only the named keys and stops before the child starts if one is not
   stored; `--allow-missing` turns that into a warning.
@@ -124,6 +194,19 @@ History dialog restores one when a change goes wrong.
 
 ### Changed
 
+- `GET /api/v1/auth/session` returns a `csrfToken` for browser sessions. Before,
+  only the tab that signed in had a token, so an Admin UI tab opened from a
+  link or in a new window could read but not change anything. The new token is
+  derived from the session's own on the server, and both stay valid.
+
+- The error code for an invalid email is now `EMAIL_INVALID`. It was spelled
+  `EMAIL_INVAILD`; API clients that match on it need the new spelling.
+
+- Adding a migration file now rebuilds the binary. `sqlx::migrate!` embeds the
+  migrations at compile time, and without a build script a new file was only
+  picked up after some Rust source changed, so local builds and tests could run
+  a stale set.
+
 - Database migrations use UTC timestamp versions
   (`YYYYMMDDHHMMSS_<name>.up.sql` and `.down.sql`), the format
   `sqlx migrate add -r` generates, so two branches no longer pick the same
@@ -203,6 +286,27 @@ History dialog restores one when a change goes wrong.
 
 - Improved security to prevent secret value guessing.
   CWE-306: Reported by kta1kri.
+
+### Security
+
+- A failed login now takes as long for an unknown email, or an account with
+  no password, as for a wrong password: Dopbase verifies against a dummy hash.
+  Before, an unknown email answered at once, which told an attacker which
+  emails have accounts.
+- Turning on **Require single sign-on** signs out every account except root,
+  so sessions started with a password, CLI ones included, do not outlive the
+  policy.
+- One client can hold at most 20 pending single sign-on sign-ins and 20
+  pending CLI login requests, so the anonymous endpoints cannot be used to
+  fill the global caps and block everyone else.
+- Redirect targets after sign-in refuse backslashes and control characters,
+  which browsers can turn into a path to another site.
+
+### Fixed
+
+- The "confirm your password" dialog clears the password field whenever it
+  closes. Before, a password typed and then cancelled was still filled in the
+  next time the dialog opened.
 
 ## 0.1.9 - 2026-10-07
 
