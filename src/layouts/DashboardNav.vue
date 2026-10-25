@@ -6,6 +6,7 @@ import {
   ArchiveIcon,
   FolderIcon,
   HistoryIcon,
+  KeyIcon,
   ServerIcon,
   UserIcon,
   UsersIcon,
@@ -48,6 +49,12 @@ const navItems = [
     match: (r: string) => r.startsWith("/backups"),
   },
   {
+    name: "sso",
+    label: "Single sign-on",
+    icon: KeyIcon,
+    match: (r: string) => r.startsWith("/sso"),
+  },
+  {
     name: "audit",
     label: "Audit",
     icon: HistoryIcon,
@@ -70,11 +77,14 @@ const navItems = [
 const isActive = (item: (typeof navItems)[number]): boolean =>
   item.match(route.path);
 const visibleNavItems = computed(() =>
-  navItems.filter((item) =>
-    item.name === "backups" || item.name === "users" || item.name === "audit"
+  navItems.filter((item) => {
+    if (item.name === "sso") return auth.isRoot;
+    return item.name === "backups" ||
+      item.name === "users" ||
+      item.name === "audit"
       ? auth.isAdmin
-      : true,
-  ),
+      : true;
+  }),
 );
 </script>
 
