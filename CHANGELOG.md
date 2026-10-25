@@ -36,8 +36,12 @@ History dialog restores one when a change goes wrong.
 
 - Single sign-on for the Admin UI through one OpenID Connect provider, with
   presets for Google, Microsoft Entra ID, Okta, Auth0, Amazon Cognito, Clerk,
-  Supabase, and Keycloak. It needs an HTTPS public URL (`localhost` excepted):
-  the settings page stays locked and says how to set one until then, and the
+  Supabase, and Keycloak. The presets live in one file,
+  `app/src/modules/sso/presets.toml`, so adding a provider takes one new entry
+  and no database or Admin UI change; `CONTRIBUTING.md` lists the fields.
+  `GET /api/v1/sso/provider` returns the list as `presets`, and saving an
+  unknown preset fails with `SSO_PRESET_INVALID`. It needs an HTTPS public
+  URL (`localhost` excepted): the settings page stays locked and says how to set one until then, and the
   server refuses setup and sign-ins without it. Issuers entered with or
   without a trailing slash are stored the way the provider publishes them.
   Root configures it on the new Single sign-on page, registers the redirect URI it shows, and
@@ -192,7 +196,29 @@ History dialog restores one when a change goes wrong.
   Back up `audit-archive/` separately: snapshots store the database only.
   Contributed by bosd in #125. Issue #119.
 
+- A Sign in with Google tutorial, with a diagram of the sign-in flow, that
+  covers the Google Auth Platform setup, the OAuth client, the Dopbase
+  settings, and the errors people run into most, such as
+  `redirect_uri_mismatch`.
+
+- A Sign in with Keycloak tutorial, with screenshots, that runs Keycloak in
+  Docker next to a local Dopbase and walks from creating the realm and client
+  to a member signing in. It is tested with Keycloak 26.4.7 and ends with
+  what changes for production and the common errors.
+
+- Screenshots in the documentation open full size when clicked. Escape, the
+  Close button, or a click on the image closes the view.
+
 ### Changed
+
+- The SQL for single sign-on, sign-in, CLI login, and users now lives in each
+  module's `repository.rs`, with the services calling it, as in the other
+  modules. Behavior is unchanged.
+
+- Code that hard-codes one of the four fixed roles (root, admin, member,
+  ai_agent) is marked with a `TODO(rbac):` comment, so the role-based access
+  control work can find every place with `rg "TODO\(rbac\)"`.
+  `CONTRIBUTING.md` and `CONTEXT.md` explain the marker.
 
 - `GET /api/v1/auth/session` returns a `csrfToken` for browser sessions. Before,
   only the tab that signed in had a token, so an Admin UI tab opened from a
