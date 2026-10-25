@@ -19,13 +19,18 @@ documentation, and SQLite storage in one executable.
 - An embedded browser Admin UI covering setup, sign-in, project and
   environment management, secret management with a `.env` editor, runner
   tokens, audit events, and instance status
-- Process injection through `dopbase run`
+- Process injection through `dopbase run`, with `--only` and `--preserve-env`
+  to choose which secrets reach the process
+- Secret version history and rollback in the CLI and the Admin UI
 - Human authentication and environment-scoped runner tokens
+- Single sign-on for the Admin UI through one OpenID Connect provider, and
+  browser approval for `dopbase login`
 - Root, admin, member, and AI agent identities with role-aware permissions
 - User and AI account management, account metadata, and last-sign-in details
 - Instance status, resource health, and a root-only factory reset
 - Root-only full-instance encrypted backups with account-aware restore
-- Audit records
+- Audit records in a hash chain, with `dopbase audit verify`, `list`, and
+  `export`, and configurable retention
 - Self-hosted binaries for macOS and Linux on AMD64 and ARM64
 
 ## Current boundaries
