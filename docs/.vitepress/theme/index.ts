@@ -2,6 +2,7 @@ import "@fontsource-variable/fira-code";
 import DefaultTheme from "vitepress/theme";
 import { h } from "vue";
 import HomeTerminal from "./components/HomeTerminal.vue";
+import ImageViewer from "./components/ImageViewer.vue";
 import TableViewer from "./components/TableViewer.vue";
 import "./custom.css";
 
@@ -14,6 +15,7 @@ export default {
   },
   enhanceApp({ app }) {
     app.component("HomeTerminal", HomeTerminal);
+    app.component("ImageViewer", ImageViewer);
     app.component("TableViewer", TableViewer);
   },
 };

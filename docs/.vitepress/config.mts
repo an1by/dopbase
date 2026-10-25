@@ -154,8 +154,18 @@ const config = defineConfig({
   markdown: {
     theme: { light: "github-light", dark: "github-dark" },
     config(md) {
+      const image = md.renderer.rules.image;
       const tableOpen = md.renderer.rules.table_open;
       const tableClose = md.renderer.rules.table_close;
+
+      if (image) {
+        md.renderer.rules.image = (tokens, idx, options, env, slf) => {
+          const alt = md.utils.escapeHtml(
+            slf.renderInlineAsText(tokens[idx].children ?? [], options, env),
+          );
+          return `<ImageViewer alt="${alt}">${image(tokens, idx, options, env, slf)}</ImageViewer>`;
+        };
+      }
 
       if (!tableOpen) return;
 

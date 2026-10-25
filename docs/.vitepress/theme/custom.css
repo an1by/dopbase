@@ -561,6 +561,163 @@
   width: max-content;
 }
 
+.image-viewer {
+  background: none;
+  border: 0;
+  cursor: zoom-in;
+  display: inline-block;
+  max-width: 100%;
+  padding: 0;
+}
+
+.image-viewer img {
+  border: 1px solid var(--vp-c-divider);
+  border-radius: 8px;
+  transition: border-color 0.15s;
+}
+
+.image-viewer:hover img,
+.image-viewer:focus-visible img {
+  border-color: var(--vp-c-brand-1);
+}
+
+.image-viewer:focus-visible {
+  outline: 2px solid var(--vp-c-brand-1);
+  outline-offset: 2px;
+}
+
+.image-viewer__dialog {
+  background: transparent;
+  border: 0;
+  box-sizing: border-box;
+  cursor: zoom-out;
+  height: 100dvh;
+  inset: 0;
+  margin: 0;
+  max-height: none;
+  max-width: none;
+  overflow: hidden;
+  padding: 64px 24px;
+  width: 100dvw;
+}
+
+.image-viewer__dialog[open] {
+  display: grid;
+  place-items: center;
+}
+
+.image-viewer__dialog::backdrop {
+  animation: image-viewer-fade 0.18s ease-out;
+  background: rgb(0 0 0 / 88%);
+  backdrop-filter: blur(4px);
+}
+
+.image-viewer__figure {
+  align-items: center;
+  animation: image-viewer-zoom 0.2s ease-out;
+  display: flex;
+  flex-direction: column;
+  margin: 0;
+  max-height: 100%;
+  max-width: 100%;
+  min-height: 0;
+}
+
+.image-viewer__figure img {
+  border-radius: 10px;
+  box-shadow: 0 24px 64px rgb(0 0 0 / 50%);
+  max-height: calc(100dvh - 128px);
+  max-width: min(100%, 1600px);
+  object-fit: contain;
+}
+
+.image-viewer__figure figcaption {
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 2;
+  bottom: 16px;
+  color: rgb(255 255 255 / 80%);
+  cursor: text;
+  display: -webkit-box;
+  font-size: 14px;
+  left: 50%;
+  line-clamp: 2;
+  line-height: 20px;
+  max-width: min(72ch, calc(100vw - 32px));
+  overflow: hidden;
+  position: fixed;
+  text-align: center;
+  transform: translateX(-50%);
+  width: max-content;
+}
+
+.image-viewer__close {
+  align-items: center;
+  background: rgb(255 255 255 / 12%);
+  border: 1px solid rgb(255 255 255 / 20%);
+  border-radius: 999px;
+  color: #fff;
+  cursor: pointer;
+  display: flex;
+  height: 40px;
+  justify-content: center;
+  position: fixed;
+  right: 16px;
+  top: 16px;
+  transition:
+    background 0.15s,
+    border-color 0.15s;
+  width: 40px;
+}
+
+.image-viewer__close:hover {
+  background: rgb(255 255 255 / 22%);
+  border-color: rgb(255 255 255 / 45%);
+}
+
+.image-viewer__close:focus-visible {
+  outline: 2px solid var(--vp-c-brand-1);
+  outline-offset: 2px;
+}
+
+.image-viewer__close svg {
+  fill: none;
+  height: 18px;
+  stroke: currentColor;
+  stroke-linecap: round;
+  stroke-width: 2;
+  width: 18px;
+}
+
+html.image-viewer-open {
+  overflow: hidden;
+}
+
+@keyframes image-viewer-fade {
+  from {
+    opacity: 0;
+  }
+}
+
+@keyframes image-viewer-zoom {
+  from {
+    opacity: 0;
+    transform: scale(0.96);
+  }
+}
+
+@media (max-width: 639px) {
+  .image-viewer__dialog {
+    padding: 64px 12px;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .image-viewer__dialog::backdrop,
+  .image-viewer__figure {
+    animation: none;
+  }
+}
+
 @media print {
   .table-viewer__toolbar {
     display: none;

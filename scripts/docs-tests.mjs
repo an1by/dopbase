@@ -78,6 +78,19 @@ graph TD
   console.log("Mermaid fences use the interactive zoom viewer.");
 }
 
+async function testImageViewer() {
+  const markdown = await createMarkdownRenderer("docs", config.markdown);
+  const rendered = await markdown.render("![A screenshot](./shot.png)");
+
+  assert(
+    /<ImageViewer alt="A screenshot"><img [^>]*alt="A screenshot"[^>]*><\/ImageViewer>/.test(
+      rendered,
+    ),
+    `Images must open in the full-size viewer. Received:\n${rendered}`,
+  );
+  console.log("Images open in the full-size viewer.");
+}
+
 async function testDocumentationVersion() {
   assert.equal(documentationVersion, pkg.version);
 
@@ -119,4 +132,5 @@ Version {{version}}
 
 await testMermaidDiagrams();
 await testMermaidViewer();
+await testImageViewer();
 await testDocumentationVersion();
