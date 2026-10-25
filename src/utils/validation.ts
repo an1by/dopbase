@@ -37,10 +37,17 @@ export function isValidSecretKey(value: string): boolean {
 /**
  * Only same-origin, non-protocol-relative paths may be used as post-login
  * redirect targets. Blocks absolute URLs (`https://…`) and protocol-relative
- * shortcuts (`//host`).
+ * shortcuts (`//host`). Backslashes and control characters are refused too,
+ * because browsers read `/\evil.example` and `/<tab>/evil.example` as
+ * `//evil.example`.
  */
 export function isSafeRedirect(value: string): boolean {
   return (
-    value.startsWith("/") && !value.startsWith("//") && !value.includes("://")
+    value.length <= 512 &&
+    value.startsWith("/") &&
+    !value.startsWith("//") &&
+    !value.includes("://") &&
+    !value.includes("\\") &&
+    !/[\u0000-\u001f\u007f]/.test(value)
   );
 }
