@@ -336,3 +336,115 @@ async fn secret_rollback_offers_restorable_versions_in_a_terminal() {
   assert!(!terminal.finish().success());
   assert_eq!(current_value(&fixture, &id).await, "marker-one");
 }
+
+/// An account without a password confirms plaintext access by approving a
+/// code in the Admin UI, where single sign-on works.
+#[cfg(unix)]
+#[tokio::test(flavor = "multi_thread")]
+async fn reveal_asks_for_browser_confirmation_when_the_account_has_no_password() {
+  use super::support::{browser_credentials, terminal::Terminal};
+  use app::cli::session;
+  use serde_json::{Value, json};
+  let fixture = Fixture::new().await;
+  let id = fixture.environment().await;
+  fixture
+    .request(
+      reqwest::Method::PUT,
+      &format!("/api/v1/environments/{id}/secrets/API_KEY"),
+      Some(json!({"value":"browser-confirmed-marker"})),
+    )
+    .await;
+  let (root_cookie, root_csrf) = browser_credentials(&fixture).await;
+  let api = reqwest::Client::new();
+  api
+    .post(format!("{}/api/v1/users", fixture.url))
+    .header("cookie", &root_cookie)
+    .header("x-dopbase-csrf", &root_csrf)
+    .json(&json!({"email":"member@example.com","password":"correct-horse-456","role":"member"}))
+    .send()
+    .await
+    .unwrap()
+    .error_for_status()
+    .unwrap();
+  let login = |kind: &'static str| {
+    let api = api.clone();
+    let url = fixture.url.clone();
+    async move {
+      api
+        .post(format!("{url}/api/v1/auth/login"))
+        .json(
+          &json!({"email":"member@example.com","password":"correct-horse-456","sessionKind":kind}),
+        )
+        .send()
+        .await
+        .unwrap()
+        .error_for_status()
+        .unwrap()
+    }
+  };
+  let cli: Value = login("cli").await.json().await.unwrap();
+  // The member's Admin UI tab, signed in while the account still had a
+  // password; it approves the request later.
+  let browser = login("browser").await;
+  let cookie = browser
+    .headers()
+    .get("set-cookie")
+    .unwrap()
+    .to_str()
+    .unwrap()
+    .split(';')
+    .next()
+    .unwrap()
+    .to_owned();
+  let browser: Value = browser.json().await.unwrap();
+  let csrf = browser["data"]["csrfToken"].as_str().unwrap().to_owned();
+  session::save(
+    &fixture.resolved(),
+    cli["data"]["token"].as_str().unwrap(),
+    Some("member@example.com"),
+  )
+  .unwrap();
+
+  // Make the member an SSO-only account: no password, one linked identity.
+  let pool = fixture.state.db.pool();
+  let now = chrono::Utc::now().to_rfc3339();
+  sqlx::query("UPDATE admins SET password_hash='' WHERE email='member@example.com'")
+    .execute(pool)
+    .await
+    .unwrap();
+  sqlx::query("INSERT INTO sso_providers(id,preset,display_name,issuer,client_id,client_secret_ciphertext,client_secret_nonce,enabled,verified_at,created_at,updated_at) VALUES('sso_t','generic','Acme SSO','https://idp.example.com','client',x'00',x'00',1,?,?,?)")
+    .bind(&now)
+    .bind(&now)
+    .bind(&now)
+    .execute(pool)
+    .await
+    .unwrap();
+  sqlx::query("INSERT INTO admin_identities(id,admin_id,provider_id,issuer,subject,linked_via,created_at) SELECT 'idn_t',id,'sso_t','https://idp.example.com','member-subject','manual',? FROM admins WHERE email='member@example.com'")
+    .bind(&now)
+    .execute(pool)
+    .await
+    .unwrap();
+
+  let mut command = fixture.command();
+  command.args(["secret", "get", &id, "API_KEY", "--reveal"]);
+  let mut terminal = Terminal::new(command);
+  terminal.reply("Waiting for approval", "");
+  let code = regex::Regex::new(r"code=([A-Z]{4}-[A-Z]{4})")
+    .unwrap()
+    .captures(&terminal.transcript)
+    .unwrap()[1]
+    .to_owned();
+  assert!(!terminal.transcript.contains("Password:"));
+  api
+    .post(format!("{}/api/v1/auth/cli/approve", fixture.url))
+    .header("cookie", &cookie)
+    .header("x-dopbase-csrf", &csrf)
+    .json(&json!({"userCode":code}))
+    .send()
+    .await
+    .unwrap()
+    .error_for_status()
+    .unwrap();
+  assert!(terminal.finish().success(), "{}", terminal.transcript);
+  assert!(terminal.transcript.contains("browser-confirmed-marker"));
+}
