@@ -2,6 +2,8 @@ import { apiRequest } from "./http.client";
 
 /** Session kinds supported by the server. Browser UI always sends `"browser"`. */
 export type SessionKind = "browser" | "cli";
+// TODO(rbac): the four fixed roles. Read roles from the server once they are
+// configurable.
 export type AccountRole = "root" | "admin" | "member" | "ai_agent";
 
 export interface LoginRequest {

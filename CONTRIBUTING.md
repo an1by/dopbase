@@ -164,6 +164,23 @@ was removed from the file keeps working and behaves like `generic`. Run
 `cargo test sso_presets` from `app/` to check the file, then rebuild: the file
 is compiled into the binary.
 
+### Mark code that RBAC will replace
+
+Dopbase has four fixed roles: root, admin, member, and ai_agent. Role-based
+access control (RBAC) will replace them. Until then, mark code that hard-codes a
+role with a `TODO(rbac):` comment. That covers role names, labels for roles,
+and rules about which role may do something.
+
+```rust
+// TODO(rbac): only the fixed admin and member roles link by email. Decide by
+// permission once roles are configurable.
+```
+
+Use the same marker in Rust, TypeScript, SQL, and Vue templates
+(`<!-- TODO(rbac): ... -->`). Put it directly above the code and say what is
+hard-coded and what should replace it. `rg "TODO\(rbac\)"` lists every place
+the RBAC work has to touch, so keep other planned work under a different tag.
+
 ## Check your work
 
 Run the complete repository checks when your change crosses several targets:

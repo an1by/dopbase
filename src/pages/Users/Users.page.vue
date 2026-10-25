@@ -72,6 +72,9 @@ const { state, actions } = useUsersController();
               {{ user.email }}
             </p>
             <div class="flex flex-wrap items-center gap-1.5">
+              <!-- TODO(rbac): badge labels for the fixed roles. Show each
+                   role's own name from the server once roles are
+                   configurable. -->
               <DbBadge :tone="user.role === 'root' ? 'accent' : 'neutral'">
                 {{
                   user.role === "root"

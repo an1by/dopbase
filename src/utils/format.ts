@@ -65,6 +65,8 @@ export function formatBytes(bytes: number): string {
   return `${val >= 10 ? Math.round(val) : val.toFixed(1)} ${units[unitIndex]}`;
 }
 
+// TODO(rbac): labels for the fixed roles. Show each role's own name from the
+// server once roles are configurable.
 const ROLE_LABELS: Record<AccountRole, string> = {
   root: "Root Administrator",
   admin: "Administrator",

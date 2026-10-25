@@ -36,6 +36,8 @@ import {
   tokenExpiryUnits,
 } from "~/utils/token-expiry";
 
+// TODO(rbac): the fixed roles an admin can give out. List assignable roles
+// from the server once roles are configurable.
 export const roleOptions = [
   { value: "member", label: "Member - project management" },
   { value: "admin", label: "Admin - user management" },
