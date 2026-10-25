@@ -82,7 +82,7 @@ describe("apiRequest", () => {
   it("throws ApiError carrying the error code map", async () => {
     fetchMock.mockResolvedValueOnce(
       jsonResponse(
-        { success: false, error: { EMAIL_INVAILD: "Please use proper email" } },
+        { success: false, error: { EMAIL_INVALID: "Please use proper email" } },
         422,
       ),
     );
@@ -90,7 +90,7 @@ describe("apiRequest", () => {
     expect(error).toBeInstanceOf(ApiError);
     const apiError = error as ApiError;
     expect(apiError.status).toBe(422);
-    expect(apiError.hasCode("EMAIL_INVAILD")).toBe(true);
+    expect(apiError.hasCode("EMAIL_INVALID")).toBe(true);
     expect(apiError.message).toBe("Please use proper email");
   });
 

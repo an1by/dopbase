@@ -215,12 +215,12 @@ export function useUsersController() {
       if (err instanceof ApiError) {
         let handled = false;
         if (
-          err.hasCode("EMAIL_INVAILD") ||
+          err.hasCode("EMAIL_INVALID") ||
           err.hasCode("EMAIL_INVALID") ||
           err.hasCode("EMAIL_TAKEN")
         ) {
           fieldErrors.value.email =
-            err.codes.EMAIL_INVAILD ??
+            err.codes.EMAIL_INVALID ??
             err.codes.EMAIL_INVALID ??
             err.codes.EMAIL_TAKEN ??
             "Please enter a valid email address.";

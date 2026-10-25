@@ -147,7 +147,7 @@ describe("useUsersController", () => {
 
     vi.mocked(usersApi.createUser).mockRejectedValueOnce(
       new ApiError(400, {
-        EMAIL_INVAILD: "Please enter a valid email address.",
+        EMAIL_INVALID: "Please enter a valid email address.",
       }),
     );
 

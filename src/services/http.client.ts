@@ -38,7 +38,7 @@ export class ApiError extends Error {
     this.codes = codes;
   }
 
-  /** The first (and usually only) error code, e.g. `"EMAIL_INVAILD"`. */
+  /** The first (and usually only) error code, e.g. `"EMAIL_INVALID"`. */
   get firstCode(): string | undefined {
     return Object.keys(this.codes)[0];
   }

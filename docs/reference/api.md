@@ -60,7 +60,7 @@ Errors map stable codes to safe messages:
 {
   "success": false,
   "error": {
-    "EMAIL_INVAILD": "Please use proper email"
+    "EMAIL_INVALID": "Please use proper email"
   }
 }
 ```

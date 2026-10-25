@@ -11,7 +11,7 @@ use regex::Regex;
 use serde_json::Value;
 
 use crate::{
-  constants::errors::{EMAIL_INVAILD, EMAIL_INVAILD_MESSAGE},
+  constants::errors::{EMAIL_INVALID, EMAIL_INVALID_MESSAGE},
   http::HttpError,
   services::{audit_chain::AuditEntry, token},
 };
@@ -36,8 +36,8 @@ pub fn validate_email(value: &str) -> Result<String, HttpError> {
   let valid = EMAIL.get_or_init(|| Regex::new(r"^[^\s@]+@[^\s@]+\.[^\s@]+$").unwrap());
   if normalized.len() > 254 || !valid.is_match(&normalized) {
     return Err(HttpError::validation(BTreeMap::from([(
-      EMAIL_INVAILD.into(),
-      EMAIL_INVAILD_MESSAGE.into(),
+      EMAIL_INVALID.into(),
+      EMAIL_INVALID_MESSAGE.into(),
     )])));
   }
   Ok(normalized)

@@ -84,9 +84,9 @@ describe("useLoginController", () => {
     }
   });
 
-  it("maps EMAIL_INVAILD to the email field", async () => {
+  it("maps EMAIL_INVALID to the email field", async () => {
     vi.mocked(authApi.login).mockRejectedValueOnce(
-      new ApiError(422, { EMAIL_INVAILD: "Please use proper email" }),
+      new ApiError(422, { EMAIL_INVALID: "Please use proper email" }),
     );
     const c = useLoginController();
     c.email.value = "a@b.c";

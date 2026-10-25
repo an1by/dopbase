@@ -907,7 +907,7 @@ async fn validation_uses_required_error_map() {
   assert_eq!(status, 422);
   assert_eq!(
     body,
-    json!({"success":false,"error":{"EMAIL_INVAILD":"Please use proper email"}})
+    json!({"success":false,"error":{"EMAIL_INVALID":"Please use proper email"}})
   );
   state.db.close().await;
 }
