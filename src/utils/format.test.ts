@@ -4,6 +4,7 @@ import {
   formatDateTime,
   formatDuration,
   formatRelativeTime,
+  formatRole,
 } from "./format";
 
 const NOW = new Date("2026-08-28T12:00:00Z");
@@ -73,5 +74,14 @@ describe("formatDuration", () => {
   it("formats days and hours", () => {
     expect(formatDuration(86400)).toBe("1d");
     expect(formatDuration(93600)).toBe("1d 2h");
+  });
+});
+
+describe("formatRole", () => {
+  it("names each role and passes unknown ones through", () => {
+    expect(formatRole("root")).toBe("Root Administrator");
+    expect(formatRole("member")).toBe("Member");
+    expect(formatRole("ai_agent")).toBe("AI Agent");
+    expect(formatRole("auditor")).toBe("auditor");
   });
 });

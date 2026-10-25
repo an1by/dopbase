@@ -96,4 +96,20 @@ describe("useAccountController", () => {
     expect(root.formattedRole.value).toBe("Root Administrator");
     expect(root.formattedLastLogin.value).toBe("1m ago");
   });
+
+  it("sets a first password without asking for a current one", async () => {
+    await signIn(useAuthStore());
+    useAuthStore().session = {
+      ...useAuthStore().session!,
+      hasPassword: false,
+    };
+    vi.mocked(authApi.changePassword).mockResolvedValueOnce();
+    const c = useAccountController();
+    expect(c.needsCurrentPassword.value).toBe(false);
+    c.newPassword.value = "brandnewpassword";
+    c.confirmPassword.value = "brandnewpassword";
+    await c.submit();
+    expect(c.fieldErrors.value.currentPassword).toBeUndefined();
+    expect(authApi.changePassword).toHaveBeenCalledWith("", "brandnewpassword");
+  });
 });
