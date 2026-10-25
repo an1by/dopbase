@@ -1,4 +1,5 @@
 mod audit_chain;
+mod cache;
 mod client_ip;
 mod crypto;
 mod db;
