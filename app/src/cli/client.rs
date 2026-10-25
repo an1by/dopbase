@@ -574,6 +574,202 @@ pub async fn login(
   ApiClient::new(server, Some(token))
 }
 
+/// Sign in the way the server prefers. Browser approval wins once single
+/// sign-on is on or password login is off; servers that predate the methods
+/// endpoint keep the password prompt.
+pub async fn interactive_login(
+  server: &ResolvedServer,
+  save: bool,
+) -> Result<ApiClient> {
+  if !io::stdin().is_terminal() {
+    bail!("interactive login requires a terminal. Set DOPBASE_TOKEN for automation");
+  }
+  if prefers_browser_login(server).await {
+    browser_login(server, false, save).await
+  } else {
+    login(server, save).await
+  }
+}
+
+async fn prefers_browser_login(server: &ResolvedServer) -> bool {
+  let Ok(client) = ApiClient::new(server, None) else {
+    return false;
+  };
+  match client.request(Method::GET, api::auth::METHODS, None).await {
+    Ok(methods) => {
+      methods.get("password").and_then(Value::as_bool) == Some(false)
+        || methods.get("sso").is_some_and(|sso| !sso.is_null())
+    }
+    Err(_) => false,
+  }
+}
+
+/// Sign in by approving a short code in the Admin UI. The terminal never
+/// handles a password, and the browser never receives the CLI token.
+pub async fn browser_login(
+  server: &ResolvedServer,
+  open_browser: bool,
+  save: bool,
+) -> Result<ApiClient> {
+  let client = ApiClient::new(server, None)?;
+  let session = browser_approval(
+    &client,
+    BrowserApproval::Login,
+    open_browser,
+    CliCancelled::Login,
+  )
+  .await?;
+  let token = session
+    .get("token")
+    .and_then(Value::as_str)
+    .context("login response did not contain a token")?
+    .to_owned();
+  let email = session
+    .get("email")
+    .and_then(Value::as_str)
+    .context("login response did not contain an email")?;
+  if save {
+    save_credential(server, &token, Some(email))?;
+  }
+  ApiClient::new(server, Some(token))
+}
+
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum BrowserApproval {
+  /// Sign a new CLI session in.
+  Login,
+  /// Confirm the signed-in CLI session, for accounts that cannot use a
+  /// password. `has_password` only changes the wording.
+  Confirmation { has_password: bool },
+}
+
+/// Print a code, open the approval page, and wait until the request is
+/// approved in the Admin UI. Returns the issued session for a login and
+/// `null` for a confirmation.
+async fn browser_approval(
+  client: &ApiClient,
+  approval: BrowserApproval,
+  open_browser: bool,
+  cancelled: CliCancelled,
+) -> Result<Value> {
+  let purpose = match approval {
+    BrowserApproval::Login => "login",
+    BrowserApproval::Confirmation { .. } => "reauth",
+  };
+  let device = client
+    .request(
+      Method::POST,
+      api::auth::CLI_DEVICE,
+      Some(json!({"hostname":local_hostname(),"purpose":purpose})),
+    )
+    .await?;
+  let field = |name: &str| {
+    device
+      .get(name)
+      .and_then(Value::as_str)
+      .with_context(|| format!("login response did not contain {name}"))
+  };
+  let device_code = Zeroizing::new(field("deviceCode")?.to_owned());
+  let user_code = field("userCode")?;
+  let approval_url = field("verificationUriComplete")?;
+  let interval = device.get("interval").and_then(Value::as_u64).unwrap_or(5);
+  let expires_in = device
+    .get("expiresIn")
+    .and_then(Value::as_u64)
+    .unwrap_or(600);
+
+  let (title, action) = match approval {
+    BrowserApproval::Login => ("Dopbase login", "Approve this login in the Admin UI"),
+    BrowserApproval::Confirmation {
+      has_password: false,
+    } => (
+      "Confirm plaintext access",
+      "This account has no password, so confirm in the Admin UI",
+    ),
+    BrowserApproval::Confirmation { has_password: true } => (
+      "Confirm plaintext access",
+      "Password confirmation is turned off for this account, so confirm in the Admin UI",
+    ),
+  };
+  eprintln!(
+    "{title}\nServer: {}\n\n{action}. Copy this link into a browser where you can sign in to Dopbase:\n\n    {approval_url}\n\nThen check that the page shows this code:\n\n    {user_code}\n",
+    client.base_url
+  );
+  if open_browser {
+    if webbrowser::open(approval_url).is_ok() {
+      eprintln!("Opened the link in your browser.\n");
+    } else {
+      eprintln!("Could not open a browser. Copy the link above instead.\n");
+    }
+  }
+  eprintln!("Waiting for approval. Press Ctrl+C to cancel.");
+
+  tokio::select! {
+    result = poll_device_login(client, &device_code, interval, expires_in) => result,
+    signal = tokio::signal::ctrl_c() => {
+      signal?;
+      // Best effort: the code expires on its own if this does not arrive.
+      let cancel = client.request(
+        Method::POST,
+        api::auth::CLI_CANCEL,
+        Some(json!({"deviceCode":device_code.as_str()})),
+      );
+      let _ = tokio::time::timeout(Duration::from_secs(2), cancel).await;
+      Err(cancelled.into())
+    }
+  }
+}
+
+async fn poll_device_login(
+  client: &ApiClient,
+  device_code: &str,
+  mut interval: u64,
+  expires_in: u64,
+) -> Result<Value> {
+  let deadline = tokio::time::Instant::now() + Duration::from_secs(expires_in + interval);
+  loop {
+    tokio::time::sleep(Duration::from_secs(interval)).await;
+    if tokio::time::Instant::now() > deadline {
+      bail!("the login request expired before it was approved. Run `dopbase login` again");
+    }
+    let mut data = client
+      .request(
+        Method::POST,
+        api::auth::CLI_TOKEN,
+        Some(json!({"deviceCode":device_code})),
+      )
+      .await?;
+    match data.get("status").and_then(Value::as_str) {
+      // A confirmation has no session to return.
+      Some("approved") => {
+        return Ok(
+          data
+            .get_mut("session")
+            .map(Value::take)
+            .unwrap_or(Value::Null),
+        );
+      }
+      // RFC 8628: back off by five seconds each time the server asks.
+      Some("slowDown") => interval += 5,
+      Some("pending") => {}
+      _ => bail!("server returned an unknown login status"),
+    }
+  }
+}
+
+fn local_hostname() -> Option<String> {
+  #[cfg(unix)]
+  {
+    nix::unistd::gethostname()
+      .ok()
+      .and_then(|name| name.into_string().ok())
+  }
+  #[cfg(not(unix))]
+  {
+    env::var("COMPUTERNAME").ok()
+  }
+}
+
 async fn prompt_login(server: &ResolvedServer) -> Result<(String, String)> {
   let server_url = server.url.clone();
   let mut prompt = tokio::task::spawn_blocking(move || prompt_credentials(&server_url));
@@ -624,7 +820,7 @@ async fn acquire_human_client_with_credential(
       bail!("the configured Dopbase credential is invalid or expired");
     }
   }
-  login(server, true)
+  interactive_login(server, true)
     .await
     .map(HumanClient::NewlyAuthenticated)
 }
@@ -662,6 +858,33 @@ impl HumanClient {
     match self {
       HumanClient::NewlyAuthenticated(client) => Ok(client),
       HumanClient::Existing(client) => {
+        // Older servers omit the field; they only know passwords.
+        let session = client
+          .request(Method::GET, api::auth::SESSION, None)
+          .await?;
+        let password_confirmation = session
+          .get("passwordConfirmation")
+          .and_then(Value::as_bool)
+          .unwrap_or(true);
+        if !password_confirmation {
+          if session.get("ssoConfirmation").is_some_and(Value::is_string) {
+            let has_password = session
+              .get("hasPassword")
+              .and_then(Value::as_bool)
+              .unwrap_or(false);
+            browser_approval(
+              &client,
+              BrowserApproval::Confirmation { has_password },
+              false,
+              CliCancelled::PasswordConfirmation,
+            )
+            .await?;
+            return Ok(client);
+          }
+          bail!(
+            "this account cannot confirm plaintext access: it has no password and no single sign-on link. Set a password in the Admin UI"
+          );
+        }
         let password = prompt_password_confirmation().await?;
         let request = client.request(
           Method::POST,
