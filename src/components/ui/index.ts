@@ -3,6 +3,7 @@ export { default as DbBadge } from "./DbBadge.vue";
 export { default as DbButton } from "./DbButton.vue";
 export { default as DbCheckbox } from "./DbCheckbox.vue";
 export { default as DbCode } from "./DbCode.vue";
+export { default as DbCodeInput } from "./DbCodeInput.vue";
 export { default as DbConfirmDialog } from "./DbConfirmDialog.vue";
 export { default as DbCopyButton } from "./DbCopyButton.vue";
 export { default as DbEmptyState } from "./DbEmptyState.vue";

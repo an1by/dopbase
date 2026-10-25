@@ -16,6 +16,10 @@ pub struct UserResponse {
   pub created_at: String,
   /// ISO 8601 last update timestamp.
   pub updated_at: String,
+  /// The account can sign in with a password.
+  pub has_password: bool,
+  /// The account has a single sign-on identity linked.
+  pub sso_linked: bool,
 }
 
 /// Request to create a new user account.
@@ -24,8 +28,10 @@ pub struct UserResponse {
 pub struct CreateUserRequest {
   /// User email address.
   pub email: String,
-  /// Account password (minimum 12 characters).
-  pub password: String,
+  /// Account password (minimum 12 characters). Leave it out to create an
+  /// account that signs in only through single sign-on, which must be on.
+  #[serde(default)]
+  pub password: Option<String>,
   /// Account role (`admin` or `member`). Defaults to `admin`.
   #[serde(default)]
   pub role: Option<AdminRole>,

@@ -65,6 +65,19 @@ impl AdminRole {
       Self::AiAgent => "ai_agent",
     }
   }
+
+  /// The role of a person who signs in, read from `admins.role`. AI agents
+  /// never sign in, so they and unknown values give `None`.
+  // TODO(rbac): maps the fixed role names. Load the account's roles from
+  // the role tables instead once roles are configurable.
+  pub fn parse_human(value: &str) -> Option<Self> {
+    match value {
+      "root" => Some(Self::Root),
+      "admin" => Some(Self::Admin),
+      "member" => Some(Self::Member),
+      _ => None,
+    }
+  }
 }
 
 #[derive(Clone, Copy, Debug, Deserialize, Serialize, ToSchema, PartialEq, Eq)]

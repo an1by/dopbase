@@ -17,6 +17,10 @@ export interface AdminSession {
   recentAuthentication: boolean;
   role: AccountRole;
   lastLoginAt?: string | null;
+  /** Unknown (undefined) until the session is fetched from the server. */
+  hasPassword?: boolean;
+  passwordConfirmation?: boolean;
+  ssoConfirmation?: string | null;
 }
 
 export type BootstrapState = "unknown" | "setupRequired" | "ready";
@@ -116,11 +120,29 @@ export const useAuthStore = defineStore("auth", () => {
 
   /** Signs in with email + password and stores the browser session. */
   async function login(email: string, password: string): Promise<void> {
-    const response = await authApi.login({
-      email,
-      password,
-      sessionKind: "browser",
-    });
+    adopt(
+      await authApi.login({
+        email,
+        password,
+        sessionKind: "browser",
+      }),
+    );
+  }
+
+  /**
+   * Finishes a single sign-on login by trading the handoff code for a
+   * browser session. Returns the path the sign-in started from, if any.
+   */
+  async function completeSso(code: string): Promise<string | null> {
+    const response = await authApi.exchangeSso(code);
+    adopt(response.session);
+    // The exchange does not say whether the account has a password; the
+    // session endpoint does, and the Account page needs it.
+    await fetchSession().catch(() => undefined);
+    return response.redirectTo;
+  }
+
+  function adopt(response: authApi.LoginResponse): void {
     session.value = {
       adminId: response.adminId,
       email: response.email,
@@ -133,9 +155,16 @@ export const useAuthStore = defineStore("auth", () => {
     sessionExpired.value = false;
   }
 
-  /** Re-checks the cookie session and throws ApiError(401) when absent. */
-  async function fetchSession(): Promise<void> {
-    const response = await authApi.fetchSession();
+  /**
+   * Re-checks the cookie session and throws ApiError(401) when absent.
+   * `quiet` skips the global "session expired" handling for that 401.
+   */
+  async function fetchSession(
+    options: { quiet?: boolean } = {},
+  ): Promise<void> {
+    const response = await authApi.fetchSession(
+      options.quiet ? { notifyAuthEvents: false } : {},
+    );
     session.value = {
       adminId: response.adminId,
       email: response.email,
@@ -143,7 +172,13 @@ export const useAuthStore = defineStore("auth", () => {
       recentAuthentication: response.recentAuthentication,
       role: response.role ?? "admin",
       lastLoginAt: response.lastLoginAt ?? null,
+      hasPassword: response.hasPassword,
+      passwordConfirmation: response.passwordConfirmation,
+      ssoConfirmation: response.ssoConfirmation,
     };
+    // A tab opened after sign-in, such as a CLI approval link, has no token
+    // yet, and one left from an earlier session no longer matches.
+    if (response.csrfToken) setCsrf(response.csrfToken);
     sessionExpired.value = false;
   }
 
@@ -198,6 +233,7 @@ export const useAuthStore = defineStore("auth", () => {
     isAdmin,
     setCsrf,
     loadBootstrapStatus,
+    completeSso,
     bootstrap,
     login,
     fetchSession,

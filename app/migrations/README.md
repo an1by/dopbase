@@ -57,6 +57,13 @@ The current pre-release schema is assembled in this order:
 20261023083943_audit_chain_integrity.up.sql
 20261023095824_audit_drop_user_agent.up.sql
 20261024010048_secret_versions.up.sql
+20261024105858_cli_device_requests.up.sql
+20261024125458_sso_providers.up.sql
+20261024125459_admin_identities.up.sql
+20261024125500_sso_flows.up.sql
+20261024132206_sso_require.up.sql
+20261024132207_sso_flows_reauth.up.sql
+20261024132208_cli_device_reauth.up.sql
 ```
 
 The up file applies the change. The down file removes only that version's

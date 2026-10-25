@@ -97,7 +97,7 @@ export function useSetupController() {
 
   function mapApiError(error: unknown): void {
     if (error instanceof ApiError) {
-      if (error.hasCode("EMAIL_INVAILD")) {
+      if (error.hasCode("EMAIL_INVALID")) {
         fieldErrors.value.email = "Enter a valid email address.";
         return;
       }

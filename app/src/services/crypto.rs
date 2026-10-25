@@ -343,8 +343,37 @@ pub async fn rekey_database(
     .await?;
   }
 
+  // 4. Re-encrypt single sign-on client secrets.
+  let rows: Vec<(String, Vec<u8>, Vec<u8>)> =
+    sqlx::query_as("SELECT id, client_secret_ciphertext, client_secret_nonce FROM sso_providers")
+      .fetch_all(&mut *tx)
+      .await?;
+
+  for (provider_id, ciphertext, nonce) in rows {
+    let provider_aad = sso_client_secret_aad(&provider_id);
+    let secret = old_crypto
+      .decrypt_master(&ciphertext, &nonce, &provider_aad)
+      .with_context(|| {
+        format!("failed to decrypt the SSO client secret of {provider_id} with provided master key")
+      })?;
+    let (new_ciphertext, new_nonce) = new_crypto.encrypt_master(&secret, &provider_aad)?;
+    sqlx::query(
+      "UPDATE sso_providers SET client_secret_ciphertext = ?, client_secret_nonce = ? WHERE id = ?",
+    )
+    .bind(new_ciphertext)
+    .bind(new_nonce)
+    .bind(&provider_id)
+    .execute(&mut *tx)
+    .await?;
+  }
+
   tx.commit().await?;
   Ok(())
+}
+
+/// Binds an encrypted client secret to its provider row.
+pub fn sso_client_secret_aad(provider_id: &str) -> Vec<u8> {
+  format!("sso_provider:{provider_id}:client_secret").into_bytes()
 }
 
 pub fn parse_master_key(input: &[u8]) -> Result<Vec<u8>> {

@@ -26,6 +26,7 @@ in your installed version.
 | Health and compatibility                           | `/api/v1/health`                                     |
 | Initial administrator                              | `/api/v1/bootstrap`                                  |
 | Login and sessions                                 | `/api/v1/auth`                                       |
+| Single sign-on settings                            | `/api/v1/sso`                                        |
 | Projects                                           | `/api/v1/projects`                                   |
 | Environments                                       | `/api/v1/environments`                               |
 | Secrets, import, export, and runtime values        | `/api/v1/environments/{id}/secrets`                  |
@@ -60,7 +61,7 @@ Errors map stable codes to safe messages:
 {
   "success": false,
   "error": {
-    "EMAIL_INVAILD": "Please use proper email"
+    "EMAIL_INVALID": "Please use proper email"
   }
 }
 ```
@@ -164,7 +165,10 @@ streams the filtered list as JSON lines.
 ## Authentication
 
 - Browser sessions use an HttpOnly, SameSite Strict cookie and require the
-  server-issued `X-Dopbase-CSRF` header for mutations.
+  server-issued `X-Dopbase-CSRF` header for mutations. Sign-in returns the
+  token, and `GET /api/v1/auth/session` returns `csrfToken` too, so a tab
+  opened later can get one. That token is derived from the session's own, and
+  both stay valid.
 - CLI sessions, runner identities, and AI service accounts use `Authorization: Bearer <token>`.
 - A runner token can retrieve runtime secrets and export the snapshot of its
   assigned environment. It cannot list secret metadata, mutate secrets, reveal
@@ -183,6 +187,45 @@ Account and agent-token administration requires a root/admin browser session;
 CLI bearer sessions cannot administer accounts. AI bearer tokens may only read
 metadata and [instance status](/ui/audit-instance#instance-status). See
 [identity and tokens](/reference/identity) for the complete role matrix.
+
+## Browser CLI login
+
+The CLI signs in through the Admin UI with a device flow:
+
+- `POST /api/v1/auth/cli/device` starts a request and returns a secret
+  `deviceCode`, a `userCode` such as `WDJB-MJHT`, the approval link, the
+  expiry, and the polling `interval`. It needs no authentication.
+- `POST /api/v1/auth/cli/token` polls with the `deviceCode`. The status is
+  `pending`, `slowDown` when polled faster than the interval, or `approved`
+  with the new CLI session. A denied request fails with
+  `DEVICE_ACCESS_DENIED`, an expired one with `DEVICE_CODE_EXPIRED`, and a
+  used or cancelled one with `DEVICE_CODE_INVALID`.
+- `POST /api/v1/auth/cli/cancel` withdraws a waiting request.
+- `POST /api/v1/auth/cli/inspect`, `/approve`, and `/deny` take the `userCode`
+  from a browser session with the CSRF header. Approving also needs a recent
+  confirmation.
+
+`GET /api/v1/auth/methods` is public and reports whether the server accepts
+passwords, shows the password form, and offers single sign-on.
+
+## Single sign-on
+
+Root manages the provider under `/api/v1/sso/provider` (`GET`, `PUT`,
+`DELETE`) and turns it on, requires it, or hides the password form with `PUT`
+on `/enabled`, `/required`, and `/password-form`. All of these need a root
+browser session; changes also need the CSRF header and a recent
+confirmation. `GET` also returns `presets`, the providers the settings page
+lists, and `PUT` refuses a `preset` that is not one of them with
+`SSO_PRESET_INVALID`.
+
+The browser signs in with `GET /api/v1/auth/sso/start`, which redirects to the
+provider. The provider returns to `GET /api/v1/auth/sso/callback`, which sends
+the browser to the Admin UI with a one-time code in the URL fragment, and
+`POST /api/v1/auth/sso/exchange` trades that code for a session. Signed-in
+users link with `POST /api/v1/auth/sso/link`, read or remove their identity
+with `GET` or `DELETE /api/v1/auth/sso/identity`, and confirm sensitive
+actions with `POST /api/v1/auth/sso/reauth`. Administrators remove another
+user's link with `DELETE /api/v1/users/{id}/sso`.
 
 ## Compatibility
 

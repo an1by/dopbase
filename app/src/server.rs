@@ -83,6 +83,10 @@ pub(crate) async fn prepare_instance(config: &ServerConfig) -> Result<(DbClient,
       "environment_env_layout",
       "environments",
       "projects",
+      "cli_device_requests",
+      "sso_flows",
+      "admin_identities",
+      "sso_providers",
       "sessions",
       "service_accounts",
       "admins",
@@ -119,6 +123,9 @@ async fn build_instance_state(
   let admin_count: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM admins")
     .fetch_one(db.pool())
     .await?;
+  // The presets are compiled in; a broken file fails here, not at the first
+  // sign-in.
+  modules::sso::presets::all();
   let setup_token = if setup_enabled && admin_count == 0 {
     Some(token::generate("setup_")?)
   } else {
@@ -130,6 +137,7 @@ async fn build_instance_state(
     crypto,
     setup: Arc::new(tokio::sync::RwLock::new(SetupState { token: setup_token })),
     rate_limiter: RateLimiter::default(),
+    oidc: Default::default(),
     maintenance: Arc::new(std::sync::atomic::AtomicBool::new(false)),
     started_at: std::time::Instant::now(),
   })

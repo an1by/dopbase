@@ -21,6 +21,43 @@ and 24-hour absolute lifetime. CLI sessions are opaque bearer tokens with a
 session file. Offline password recovery verifies the master key, requires
 the server to be stopped, and revokes every human session.
 
+### Single sign-on
+
+Root can let people sign in to the Admin UI through an OpenID Connect provider.
+A sign-in links to an existing admin or member account by verified email the
+first time, then by the provider's subject identifier. It never creates an
+account. While it is on, administrators can create accounts without a password,
+and root can require single sign-on for everyone else. Root always keeps its
+password. See [single sign-on](/guide/single-sign-on).
+
+### Browser login
+
+`dopbase login --browser` signs the CLI in through the Admin UI, so you never
+type your password in the terminal. The CLI prints a link and a short code such
+as `WDJB-MJHT`, then waits. Copy the link into a browser on any device, sign
+in, check that the page shows the same code and the machine you expect, and
+approve it. The CLI saves an ordinary CLI session in the encrypted session
+file. The page then closes its tab after 5 seconds, unless you choose to keep
+it open. Some browsers only let a page close tabs a script opened, so the page
+may ask you to close it yourself. `--browser-open` does the same and also opens the link in this machine's
+browser.
+
+If this browser is already signed in, the link opens straight on the request
+and shows which account it will sign in, with a button to switch accounts.
+Otherwise the page asks you to sign in first and then brings you back to the
+code. Approving needs a recent confirmation, like other sensitive actions: if
+you last entered your password or used single sign-on more than 10 minutes
+ago, the page asks you to confirm before it approves. Nothing signs you out.
+Because a signed-in browser opens the request right away, check the code and
+the device before approving, and deny any link someone else sent you.
+
+Approving gives that terminal a session for up to 90 days. A code expires after
+10 minutes and works once, and one client can have at most 20 requests waiting.
+When single sign-on is on, plain `dopbase login` uses this flow too;
+`--password` forces the prompt. The CLI token goes straight from the server to
+the CLI and never reaches the browser. If you did not start a request, deny it;
+the waiting CLI stops with an error.
+
 ## Machine identities
 
 CI jobs, servers, containers, deployment systems, and automation use
@@ -52,10 +89,13 @@ The encrypted payload also caches the administrator email for offline
 `dopbase client status` output. The password is never stored.
 
 Human `secret get --reveal` and `export` operations in the official CLI require
-interactive password confirmation every time. Runner tokens can export their
+interactive password confirmation every time. An account that cannot use a
+password, because it has none or single sign-on is required, approves a code in
+the Admin UI instead. Runner tokens can export their
 assigned environment without a prompt, using `DOPBASE_TOKEN` or a saved runner
 credential. Direct HTTP clients follow the server's authentication policy;
-browser exports require recent password authentication and a valid CSRF header.
+browser exports require recent authentication, with a password or single
+sign-on, and a valid CSRF header.
 
 For application servers, create a runner token scoped to one environment:
 

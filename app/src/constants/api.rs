@@ -71,6 +71,21 @@ pub mod auth {
   pub const SESSION: &str = api_path!("/auth/session");
   pub const REAUTHENTICATE: &str = api_path!("/auth/reauthenticate");
   pub const CHANGE_PASSWORD: &str = api_path!("/auth/change-password");
+  pub const METHODS: &str = api_path!("/auth/methods");
+  pub const CLI_DEVICE: &str = api_path!("/auth/cli/device");
+  pub const CLI_TOKEN: &str = api_path!("/auth/cli/token");
+  pub const CLI_CANCEL: &str = api_path!("/auth/cli/cancel");
+  pub const CLI_INSPECT: &str = api_path!("/auth/cli/inspect");
+  pub const CLI_APPROVE: &str = api_path!("/auth/cli/approve");
+  pub const CLI_DENY: &str = api_path!("/auth/cli/deny");
+  pub const SSO_START: &str = api_path!("/auth/sso/start");
+  pub const SSO_CALLBACK: &str = api_path!("/auth/sso/callback");
+  pub const SSO_EXCHANGE: &str = api_path!("/auth/sso/exchange");
+  pub const SSO_LINK: &str = api_path!("/auth/sso/link");
+  pub const SSO_IDENTITY: &str = api_path!("/auth/sso/identity");
+  pub const SSO_REAUTH: &str = api_path!("/auth/sso/reauth");
+  /// Admin UI page where a user approves a browser CLI login.
+  pub const CLI_APPROVE_PAGE: &str = "/cli/approve";
 }
 
 pub mod projects {
@@ -239,9 +254,24 @@ pub mod instance {
   pub const FACTORY_RESET: &str = api_path!("/instance/factory-reset");
 }
 
+pub mod sso {
+  pub const PROVIDER: &str = api_path!("/sso/provider");
+  pub const PROVIDER_ENABLED: &str = api_path!("/sso/provider/enabled");
+  pub const PROVIDER_REQUIRED: &str = api_path!("/sso/provider/required");
+  pub const PROVIDER_PASSWORD_FORM: &str = api_path!("/sso/provider/password-form");
+  /// Admin UI pages the provider callback sends the browser back to.
+  pub const LOGIN_PAGE: &str = "/login";
+  pub const HANDOFF_PAGE: &str = "/login/sso";
+  pub const SETTINGS_PAGE: &str = "/sso";
+  pub const ACCOUNT_PAGE: &str = "/account";
+  /// Popup page that closes itself after a reauthentication.
+  pub const CONFIRMED_PAGE: &str = "/sso/confirmed";
+}
+
 pub mod users {
   pub const COLLECTION: &str = api_path!("/users");
   pub const ITEM: &str = api_path!("/users/{id}");
+  pub const SSO: &str = api_path!("/users/{id}/sso");
 
   pub fn item(id: &str) -> String {
     super::render(ITEM, &[("id", id)])

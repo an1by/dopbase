@@ -9,17 +9,32 @@ Audit records answer who performed a sensitive action, where it happened, and wh
 
 ## Audit events in {{version}}
 
-| Area                  | Events                                                                                                                                                                                                               |
-| --------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| Secrets               | `secret.created`, `secret.updated`, `secret.deleted`, `secret.revealed`, `secret.version_revealed`, `secret.rolled_back`, `secret.imported`, `secret.import_previewed`, `secret.exported`, `secret.runtime_accessed` |
-| Projects              | `project.created`, `project.renamed`, `project.deleted`, `project.initialized`                                                                                                                                       |
-| Environments          | `environment.created`, `environment.renamed`, `environment.deleted`                                                                                                                                                  |
-| Runner tokens         | `token.created`, `token.revoked`                                                                                                                                                                                     |
-| Authentication        | `login.succeeded`, `login.failed`, `logout.succeeded`                                                                                                                                                                |
-| Administrator & users | `admin.bootstrapped`, `admin.created`, `admin.updated`, `admin.deleted`, `admin.reauthenticated`, `admin.password_changed`                                                                                           |
-| AI service accounts   | `service_account.created`, `service_account.deleted`, `service_account.token_created`, `service_account.token_revoked`                                                                                               |
-| Backups               | `backup.created`, `backup.downloaded`, `backup.uploaded`, `backup.restored`, `backup.deleted`, `master_key.downloaded`, `backup.restored_bootstrap`                                                                  |
-| Audit log             | `audit.pruned`                                                                                                                                                                                                       |
+| Area                  | Events                                                                                                                                                                                                                                              |
+| --------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Secrets               | `secret.created`, `secret.updated`, `secret.deleted`, `secret.revealed`, `secret.version_revealed`, `secret.rolled_back`, `secret.imported`, `secret.import_previewed`, `secret.exported`, `secret.runtime_accessed`                                |
+| Projects              | `project.created`, `project.renamed`, `project.deleted`, `project.initialized`                                                                                                                                                                      |
+| Environments          | `environment.created`, `environment.renamed`, `environment.deleted`                                                                                                                                                                                 |
+| Runner tokens         | `token.created`, `token.revoked`                                                                                                                                                                                                                    |
+| Authentication        | `login.succeeded`, `login.failed`, `logout.succeeded`, `cli_login.approved`, `cli_login.denied`                                                                                                                                                     |
+| Single sign-on        | `sso_provider.created`, `sso_provider.updated`, `sso_provider.verified`, `sso_provider.enabled`, `sso_provider.disabled`, `sso_provider.deleted`, `sso_provider.policy_changed`, `sso_identity.linked`, `sso_identity.unlinked`, `sso_login.failed` |
+| Administrator & users | `admin.bootstrapped`, `admin.created`, `admin.updated`, `admin.deleted`, `admin.reauthenticated`, `admin.password_changed`                                                                                                                          |
+| AI service accounts   | `service_account.created`, `service_account.deleted`, `service_account.token_created`, `service_account.token_revoked`                                                                                                                              |
+| Backups               | `backup.created`, `backup.downloaded`, `backup.uploaded`, `backup.restored`, `backup.deleted`, `master_key.downloaded`, `backup.restored_bootstrap`                                                                                                 |
+| Audit log             | `audit.pruned`                                                                                                                                                                                                                                      |
+
+A successful login records `login.succeeded` with the session kind and, for
+single sign-on and browser CLI logins, a `method` of `sso` or `browser`.
+`sso_identity.linked` records whether the link came from a verified email
+(`auto`) or from a signed-in user (`manual`). `sso_login.failed` records a
+reason such as `account_not_found` or `email_unverified`, never provider output.
+`admin.reauthenticated` records a `method` of `sso` or `browser` when the
+confirmation came from the provider or from a CLI approval in the Admin UI.
+`login.failed` records `password_login_disabled` when a right password was
+refused because single sign-on is required.
+`sso_provider.policy_changed` records which sign-in option changed:
+`requireSso` with the number of `revokedSessions`, or `hidePasswordForm`.
+`sso_provider.updated` records `identitiesRemoved`, the number of links a new
+issuer removed.
 
 Successful import previews record `secret.import_previewed`. The record
 identifies the actor and environment and includes only the import mode and

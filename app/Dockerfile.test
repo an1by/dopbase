@@ -22,7 +22,7 @@ RUN rustup component add clippy rustfmt
 
 WORKDIR /workspace
 
-COPY app/Cargo.toml app/Cargo.lock app/rustfmt.toml ./app/
+COPY app/Cargo.toml app/Cargo.lock app/rustfmt.toml app/build.rs ./app/
 COPY app/src ./app/src
 COPY app/tests ./app/tests
 COPY app/migrations ./app/migrations

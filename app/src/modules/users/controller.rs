@@ -156,3 +156,32 @@ pub async fn delete(
   service::delete(&state, &identity, &headers, &id).await?;
   Ok(HttpResponse::done("USER_DELETED"))
 }
+
+/// Unlink a user's single sign-on
+///
+/// Remove the user's linked identity. A verified email links it again on
+/// their next single sign-on. Requires an administrator browser session with
+/// recent authentication and the CSRF header.
+#[utoipa::path(
+  delete,
+  path = crate::constants::api::users::SSO,
+  tag = "users",
+  security(("cookieAuth" = [])),
+  params(("id" = String, Path, description = "User ID with usr_ prefix")),
+  responses(
+    (status = 200, description = "Link removed", body = inline(HttpResponseFormat<UserResponse>)),
+    (status = 403, description = "Administrator browser session, CSRF, or recent authentication required", body = crate::http::ErrorBody),
+    (status = 404, description = "The user or the link was not found", body = crate::http::ErrorBody),
+  ),
+)]
+pub async fn unlink_sso(
+  State(state): State<AppState>,
+  headers: HeaderMap,
+  identity: AuthIdentity,
+  Path(id): Path<String>,
+) -> Result<HttpResponse<UserResponse>, crate::http::HttpError> {
+  Ok(HttpResponse::ok(
+    service::unlink_sso(&state, &identity, &headers, &id).await?,
+    "USER_SSO_UNLINKED",
+  ))
+}

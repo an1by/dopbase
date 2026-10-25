@@ -3,6 +3,8 @@ use clap::Args;
 pub(crate) const LOGIN_HELP: &str = "\
 Examples:
   dopbase login
+  dopbase login --browser
+  dopbase login --browser-open
   dopbase login --token
   printf '%s' \"$TOKEN\" | dopbase login --token
 ";
@@ -19,4 +21,21 @@ pub struct LoginArgs {
   /// standard input is piped, Dopbase reads the token from standard input.
   #[arg(long)]
   pub token: bool,
+
+  /// Approve the login in the Admin UI instead of typing a password here.
+  ///
+  /// Dopbase prints a link and a short code, then waits until you open the
+  /// link, sign in, and approve the code. Copy the link into any browser,
+  /// including one on another machine.
+  #[arg(long, conflicts_with_all = ["token", "password"])]
+  pub browser: bool,
+
+  /// Like --browser, and also open the link in this machine's browser.
+  #[arg(long, conflicts_with_all = ["token", "password"])]
+  pub browser_open: bool,
+
+  /// Sign in with email and password even when the server prefers the
+  /// browser.
+  #[arg(long, conflicts_with = "token")]
+  pub password: bool,
 }

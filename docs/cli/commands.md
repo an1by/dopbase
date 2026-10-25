@@ -130,6 +130,12 @@ The server resolution order is:
 3. The endpoint saved by `dopbase client connect`
 4. `http://localhost:8840`
 
+`dopbase login` asks for an email and password, or, when the server has single
+sign-on on, prints a link and a code to approve in the Admin UI. `--browser`
+always uses the Admin UI and prints the link for you to copy, `--browser-open`
+also opens it in this machine's browser, and `--password` always uses the
+prompt. See [browser login](/reference/identity#browser-login).
+
 Machine runners can save an encrypted credential with `dopbase login --token`.
 CI systems and deployment platforms should inject `DOPBASE_TOKEN` from their
 secret store. Authentication uses `DOPBASE_TOKEN`, then the encrypted credential
@@ -278,7 +284,8 @@ dopbase env edit payment-service/staging --editor nvim --dry-run
 that the environment exists and lists its secret metadata. If it is empty,
 Dopbase asks whether to add secrets; pressing Enter exits without password
 confirmation or opening an editor. Existing sessions always require password
-confirmation before export. A login completed by this command counts as
+confirmation before export, or approval in the Admin UI for an account that
+cannot use a password. A login completed by this command counts as
 confirmation, so it does not ask twice.
 
 Editor selection uses `--editor`, then `VISUAL`, then `EDITOR`. If none is set,

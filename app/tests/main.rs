@@ -907,7 +907,7 @@ async fn validation_uses_required_error_map() {
   assert_eq!(status, 422);
   assert_eq!(
     body,
-    json!({"success":false,"error":{"EMAIL_INVAILD":"Please use proper email"}})
+    json!({"success":false,"error":{"EMAIL_INVALID":"Please use proper email"}})
   );
   state.db.close().await;
 }
@@ -1387,10 +1387,20 @@ async fn disabled_web_ui_blocks_pages_and_assets_but_keeps_cli_api_and_optional_
   }
 }
 
+#[path = "modules/auth/cli_device.rs"]
+mod auth_cli_device;
 #[path = "modules/secrets/import.rs"]
 mod secrets_import;
 #[path = "modules/secrets/versions.rs"]
 mod secrets_versions;
+#[path = "modules/sso/attacks.rs"]
+mod sso_attacks;
+#[path = "modules/sso/login.rs"]
+mod sso_login;
+#[path = "modules/sso/passwords.rs"]
+mod sso_passwords;
+#[path = "modules/sso/presets.rs"]
+mod sso_presets;
 
 #[tokio::test]
 async fn audit_records_store_the_client_ip_through_trusted_proxies_only() {

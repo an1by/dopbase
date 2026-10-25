@@ -1,8 +1,12 @@
 use crate::state::AppState;
-use axum::{Router, routing::get};
+use axum::{
+  Router,
+  routing::{delete, get},
+};
 pub mod controller;
 pub mod doc;
 pub mod model;
+mod repository;
 pub mod service;
 pub fn routes() -> Router<AppState> {
   Router::new()
@@ -15,5 +19,9 @@ pub fn routes() -> Router<AppState> {
       get(controller::get)
         .patch(controller::update)
         .delete(controller::delete),
+    )
+    .route(
+      crate::constants::api::users::SSO,
+      delete(controller::unlink_sso),
     )
 }

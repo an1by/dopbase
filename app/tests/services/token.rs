@@ -1,4 +1,4 @@
-use app::services::token::expiry_duration;
+use app::services::token::{expiry_duration, hash, tab_csrf};
 
 #[test]
 fn token_expiry_accepts_only_bounded_hours_days_or_never() {
@@ -23,4 +23,16 @@ fn token_expiry_accepts_only_bounded_hours_days_or_never() {
   ] {
     assert!(expiry_duration(value).is_err(), "accepted {value:?}");
   }
+}
+
+#[test]
+fn tab_csrf_tokens_are_stable_per_session_and_never_the_stored_hash() {
+  let first = hash("csrf_first-sign-in");
+  let second = hash("csrf_second-sign-in");
+  let token = tab_csrf("csrf_", &first);
+  assert!(token.starts_with("csrf_"));
+  assert_eq!(token, tab_csrf("csrf_", &first));
+  assert_ne!(token, tab_csrf("csrf_", &second));
+  // Sending the token back must not reveal or match the stored hash.
+  assert_ne!(hash(&token), first);
 }

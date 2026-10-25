@@ -154,8 +154,18 @@ const config = defineConfig({
   markdown: {
     theme: { light: "github-light", dark: "github-dark" },
     config(md) {
+      const image = md.renderer.rules.image;
       const tableOpen = md.renderer.rules.table_open;
       const tableClose = md.renderer.rules.table_close;
+
+      if (image) {
+        md.renderer.rules.image = (tokens, idx, options, env, slf) => {
+          const alt = md.utils.escapeHtml(
+            slf.renderInlineAsText(tokens[idx].children ?? [], options, env),
+          );
+          return `<ImageViewer alt="${alt}">${image(tokens, idx, options, env, slf)}</ImageViewer>`;
+        };
+      }
 
       if (!tableOpen) return;
 
@@ -239,6 +249,9 @@ const config = defineConfig({
             { text: "Import a .env file", link: "/guide/import-env" },
             { text: "Run an application", link: "/guide/run-an-application" },
             { text: "AI agent access", link: "/guide/ai-agent-access" },
+            { text: "Single sign-on", link: "/guide/single-sign-on" },
+            { text: "Sign in with Google", link: "/guide/sso-google" },
+            { text: "Sign in with Keycloak", link: "/guide/sso-keycloak" },
             {
               text: "Backup and restore",
               link: "/guide/backups-and-restore",

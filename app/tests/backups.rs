@@ -571,7 +571,32 @@ async fn bootstrap_restore_lifecycle() {
 
 #[tokio::test]
 async fn bootstrap_restore_with_different_master_key() {
-  let (dir1, _state1, router1, token1) = admin_setup().await;
+  let (dir1, state1, router1, token1) = admin_setup().await;
+
+  // Single sign-on settings, whose client secret is encrypted with the
+  // master key, and root's linked identity.
+  let now = Utc::now().to_rfc3339();
+  let (sso_ciphertext, sso_nonce) = state1
+    .crypto
+    .encrypt_master(
+      b"sso-client-secret",
+      &app::services::crypto::sso_client_secret_aad("sso_backup"),
+    )
+    .unwrap();
+  sqlx::query("INSERT INTO sso_providers(id,preset,display_name,issuer,client_id,client_secret_ciphertext,client_secret_nonce,enabled,verified_at,created_at,updated_at) VALUES('sso_backup','generic','Acme SSO','https://idp.example.com','dopbase',?,?,1,?,?,?)")
+    .bind(sso_ciphertext)
+    .bind(sso_nonce)
+    .bind(&now)
+    .bind(&now)
+    .bind(&now)
+    .execute(state1.db.pool())
+    .await
+    .unwrap();
+  sqlx::query("INSERT INTO admin_identities(id,admin_id,provider_id,issuer,subject,linked_via,created_at) SELECT 'idn_backup',id,'sso_backup','https://idp.example.com','root-subject','manual',? FROM admins WHERE role='root'")
+    .bind(&now)
+    .execute(state1.db.pool())
+    .await
+    .unwrap();
 
   // 1. Create secret on Server 1
   let (status, project, _) = call(
@@ -726,6 +751,30 @@ async fn bootstrap_restore_with_different_master_key() {
   let server2_updated_key = std::fs::read(&server2_key_path).unwrap();
   assert_eq!(server2_updated_key, server2_original_key);
   assert_ne!(server2_updated_key, server1_key_bytes);
+
+  // The client secret was re-keyed with everything else, and the link kept.
+  let (sso_ciphertext, sso_nonce): (Vec<u8>, Vec<u8>) = sqlx::query_as(
+    "SELECT client_secret_ciphertext, client_secret_nonce FROM sso_providers WHERE id='sso_backup'",
+  )
+  .fetch_one(state2.db.pool())
+  .await
+  .unwrap();
+  assert_eq!(
+    state2
+      .crypto
+      .decrypt_master(
+        &sso_ciphertext,
+        &sso_nonce,
+        &app::services::crypto::sso_client_secret_aad("sso_backup"),
+      )
+      .unwrap(),
+    b"sso-client-secret"
+  );
+  let linked: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM admin_identities")
+    .fetch_one(state2.db.pool())
+    .await
+    .unwrap();
+  assert_eq!(linked, 1);
 
   // Sign in on server2 using restored admin account
   let (status, login, _) = call(
