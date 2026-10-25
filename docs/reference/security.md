@@ -56,6 +56,12 @@ Networked clients need an authenticated, encrypted connection to the server. Loc
 
 Authorized users may need to reveal or export a value. These operations should be explicit, permission-controlled, and audited. Secret names can also disclose information, so access to metadata still needs authorization.
 
+## Failed attempt limits
+
+Password sign-in allows 5 failed attempts per email in 15 minutes. The window starts at the first failure, and a correct password clears the count. Confirming your password for a sensitive action, changing it, and factory reset share one budget per account. The setup wizard has a budget of its own, and so do CLI login codes and single sign-on callbacks.
+
+The counts live in server memory, so restarting the server clears every lockout. The server tracks up to 10,000 keys before it starts dropping the ones with the fewest failures. It never drops a key that is locked out, so sending failed attempts for other emails cannot unlock an account. If locked keys reach 100,000, the server refuses new keys until some of them expire.
+
 ## Audit integrity
 
 Audit records form a hash chain: each record stores its position, the hash of the record before it, and the hash of its own contents. Editing a record, removing one, or inserting one out of order breaks the chain at that point, which `dopbase audit verify` and `GET /api/v1/audit-events/verify` report.

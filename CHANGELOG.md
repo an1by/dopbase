@@ -310,21 +310,29 @@ History dialog restores one when a change goes wrong.
 
 ### Security Update
 
-- Improved security to prevent secret value guessing.
-  CWE-306: Reported by kta1kri.
+- Improved security to prevent secret value guessing when importing secrets
+  in the Admin UI. The import also checks whether the session has expired.
+  Reported by kta1kri.
 
-### Security
+- Fixed an account lockout bypass where failed logins for fake emails could
+  reset the attempt budget. The limiter now keeps locked entries, evicts the
+  keys with the fewest failures first, and scans for evictions in batches.
+  Applies to password confirmation, setup, CLI login codes, and SSO callbacks.
+  Reported by onurcangnc.
 
 - A failed login now takes as long for an unknown email, or an account with
   no password, as for a wrong password: Dopbase verifies against a dummy hash.
   Before, an unknown email answered at once, which told an attacker which
   emails have accounts.
+
 - Turning on **Require single sign-on** signs out every account except root,
   so sessions started with a password, CLI ones included, do not outlive the
   policy.
+
 - One client can hold at most 20 pending single sign-on sign-ins and 20
   pending CLI login requests, so the anonymous endpoints cannot be used to
   fill the global caps and block everyone else.
+
 - Redirect targets after sign-in refuse backslashes and control characters,
   which browsers can turn into a path to another site.
 

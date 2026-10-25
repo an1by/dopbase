@@ -6,11 +6,17 @@ use std::{
 use tokio::sync::Mutex;
 
 const WINDOW: Duration = Duration::from_secs(15 * 60);
+const MAX_FAILURES: u32 = 5;
 const MAX_ENTRIES: usize = 10_000;
+// Only locked buckets can push the map past MAX_ENTRIES. Past this ceiling
+// keys without a bucket are refused, so a flood cannot grow the map forever.
+const HARD_MAX_ENTRIES: usize = 100_000;
 
-#[derive(Clone, Default)]
+#[derive(Clone)]
 pub struct RateLimiter {
   entries: Arc<Mutex<HashMap<String, Entry>>>,
+  max_entries: usize,
+  hard_max_entries: usize,
 }
 
 struct Entry {
@@ -18,20 +24,71 @@ struct Entry {
   started: Instant,
 }
 
+impl Entry {
+  fn expired(&self) -> bool {
+    self.started.elapsed() >= WINDOW
+  }
+
+  fn locked(&self) -> bool {
+    !self.expired() && self.failures >= MAX_FAILURES
+  }
+}
+
+impl Default for RateLimiter {
+  fn default() -> Self {
+    Self::with_capacity(MAX_ENTRIES, HARD_MAX_ENTRIES)
+  }
+}
+
 impl RateLimiter {
-  fn evict(
+  /// A limiter that starts evicting at `max_entries` buckets and refuses keys
+  /// it has no bucket for once `hard_max_entries` are held.
+  pub fn with_capacity(
+    max_entries: usize,
+    hard_max_entries: usize,
+  ) -> Self {
+    let max_entries = max_entries.max(1);
+    Self {
+      entries: Arc::default(),
+      max_entries,
+      hard_max_entries: hard_max_entries.max(max_entries),
+    }
+  }
+
+  /// Free space for a new bucket once the map is full. Callers pick the keys,
+  /// so eviction must not hand a budget back: locked buckets are never
+  /// evicted, and the rest go fewest failures first, then oldest. Resetting a
+  /// bucket with k failures means filling the map with buckets that each have
+  /// at least k. Eviction removes a tenth of the cap at a time, so the full
+  /// scan runs once per batch, not on every request.
+  fn make_room(
+    &self,
     entries: &mut HashMap<String, Entry>,
-    requested_key: &str,
   ) {
-    entries.retain(|_, entry| entry.started.elapsed() < WINDOW);
-    if !entries.contains_key(requested_key)
-      && entries.len() >= MAX_ENTRIES
-      && let Some(oldest) = entries
-        .iter()
-        .max_by_key(|(_, entry)| entry.started.elapsed())
-        .map(|(key, _)| key.clone())
-    {
-      entries.remove(&oldest);
+    if entries.len() < self.max_entries {
+      return;
+    }
+    entries.retain(|_, entry| !entry.expired());
+    if entries.len() < self.max_entries {
+      return;
+    }
+    let mut candidates: Vec<(u32, Instant, &String)> = entries
+      .iter()
+      .filter(|(_, entry)| !entry.locked())
+      .map(|(key, entry)| (entry.failures, entry.started, key))
+      .collect();
+    let batch = (self.max_entries / 10).max(1).min(candidates.len());
+    if batch == 0 {
+      return;
+    }
+    candidates
+      .select_nth_unstable_by_key(batch - 1, |(failures, started, _)| (*failures, *started));
+    let evicted: Vec<String> = candidates[..batch]
+      .iter()
+      .map(|(_, _, key)| (*key).clone())
+      .collect();
+    for key in evicted {
+      entries.remove(&key);
     }
   }
 
@@ -40,18 +97,13 @@ impl RateLimiter {
     key: &str,
   ) -> bool {
     let mut entries = self.entries.lock().await;
-    Self::evict(&mut entries, key);
-    let entry = entries.entry(key.to_owned()).or_insert(Entry {
-      failures: 0,
-      started: Instant::now(),
-    });
-    if entry.started.elapsed() >= WINDOW {
-      *entry = Entry {
-        failures: 0,
-        started: Instant::now(),
-      };
+    if let Some(entry) = entries.get(key) {
+      return !entry.locked();
     }
-    entry.failures < 5
+    if entries.len() >= self.hard_max_entries {
+      entries.retain(|_, entry| !entry.expired());
+    }
+    entries.len() < self.hard_max_entries
   }
 
   pub async fn failure(
@@ -59,11 +111,19 @@ impl RateLimiter {
     key: &str,
   ) {
     let mut entries = self.entries.lock().await;
-    Self::evict(&mut entries, key);
+    if !entries.contains_key(key) {
+      self.make_room(&mut entries);
+    }
     let entry = entries.entry(key.to_owned()).or_insert(Entry {
       failures: 0,
       started: Instant::now(),
     });
+    if entry.expired() {
+      *entry = Entry {
+        failures: 0,
+        started: Instant::now(),
+      };
+    }
     entry.failures += 1;
   }
 
