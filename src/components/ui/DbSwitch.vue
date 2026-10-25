@@ -9,6 +9,8 @@
 defineProps<{
   modelValue: boolean;
   label?: string;
+  /** Keep the label for screen readers only, when the row already shows it. */
+  hideLabel?: boolean;
   disabled?: boolean;
 }>();
 
@@ -29,7 +31,7 @@ function onChange(event: Event): void {
       class="peer sr-only"
       :checked="modelValue"
       :disabled="disabled"
-      :aria-label="label ? undefined : label"
+      :aria-label="hideLabel ? label : undefined"
       @change="onChange" />
     <!-- Track: 41×24px with a 7px radius. -->
     <span
@@ -41,7 +43,7 @@ function onChange(event: Event): void {
         class="absolute left-1 top-1 h-4 w-[19px] rounded-[5px] bg-white shadow-sm transition-transform duration-150"
         :class="modelValue ? 'translate-x-[14px]' : 'translate-x-0'" />
     </span>
-    <span v-if="label" class="text-sm text-ink">
+    <span v-if="label && !hideLabel" class="text-sm text-ink">
       {{ label }}
     </span>
   </label>
