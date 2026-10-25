@@ -1393,6 +1393,12 @@ mod auth_cli_device;
 mod secrets_import;
 #[path = "modules/secrets/versions.rs"]
 mod secrets_versions;
+#[path = "modules/sso/attacks.rs"]
+mod sso_attacks;
+#[path = "modules/sso/login.rs"]
+mod sso_login;
+#[path = "modules/sso/passwords.rs"]
+mod sso_passwords;
 
 #[tokio::test]
 async fn audit_records_store_the_client_ip_through_trusted_proxies_only() {
