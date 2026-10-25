@@ -214,7 +214,9 @@ Root manages the provider under `/api/v1/sso/provider` (`GET`, `PUT`,
 `DELETE`) and turns it on, requires it, or hides the password form with `PUT`
 on `/enabled`, `/required`, and `/password-form`. All of these need a root
 browser session; changes also need the CSRF header and a recent
-confirmation.
+confirmation. `GET` also returns `presets`, the providers the settings page
+lists, and `PUT` refuses a `preset` that is not one of them with
+`SSO_PRESET_INVALID`.
 
 The browser signs in with `GET /api/v1/auth/sso/start`, which redirects to the
 provider. The provider returns to `GET /api/v1/auth/sso/callback`, which sends

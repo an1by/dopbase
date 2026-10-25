@@ -1399,6 +1399,8 @@ mod sso_attacks;
 mod sso_login;
 #[path = "modules/sso/passwords.rs"]
 mod sso_passwords;
+#[path = "modules/sso/presets.rs"]
+mod sso_presets;
 
 #[tokio::test]
 async fn audit_records_store_the_client_ip_through_trusted_proxies_only() {

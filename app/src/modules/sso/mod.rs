@@ -7,6 +7,8 @@ pub mod controller;
 pub mod doc;
 pub mod error;
 pub mod model;
+pub mod presets;
+mod repository;
 pub mod service;
 pub fn routes() -> Router<AppState> {
   Router::new()

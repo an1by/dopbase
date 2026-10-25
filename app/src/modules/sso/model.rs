@@ -1,49 +1,29 @@
+use super::presets::Preset;
 use crate::modules::auth::model::LoginResponse;
 use serde::{Deserialize, Serialize};
 use utoipa::{IntoParams, ToSchema};
 
-/// Which provider the settings were filled in for. Presets only change the
-/// Admin UI hints and, for Microsoft, how an email counts as verified.
-#[derive(Clone, Copy, Debug, Deserialize, Serialize, ToSchema, PartialEq, Eq)]
-#[serde(rename_all = "lowercase")]
-pub enum SsoPreset {
-  Generic,
-  Google,
-  Microsoft,
-  Okta,
-  Keycloak,
-  Auth0,
-  Cognito,
-  Clerk,
-  Supabase,
+/// A provider preset from `presets.toml`, as the Admin UI shows it.
+#[derive(Serialize, ToSchema)]
+#[serde(rename_all = "camelCase")]
+pub struct PresetView {
+  pub id: String,
+  pub label: String,
+  /// The default sign-in button label.
+  pub button_label: String,
+  /// An example issuer URL.
+  pub issuer: String,
+  pub hint: String,
 }
 
-impl SsoPreset {
-  pub fn as_str(self) -> &'static str {
-    match self {
-      Self::Generic => "generic",
-      Self::Google => "google",
-      Self::Microsoft => "microsoft",
-      Self::Okta => "okta",
-      Self::Keycloak => "keycloak",
-      Self::Auth0 => "auth0",
-      Self::Cognito => "cognito",
-      Self::Clerk => "clerk",
-      Self::Supabase => "supabase",
-    }
-  }
-
-  pub fn parse(value: &str) -> Self {
-    match value {
-      "google" => Self::Google,
-      "microsoft" => Self::Microsoft,
-      "okta" => Self::Okta,
-      "keycloak" => Self::Keycloak,
-      "auth0" => Self::Auth0,
-      "cognito" => Self::Cognito,
-      "clerk" => Self::Clerk,
-      "supabase" => Self::Supabase,
-      _ => Self::Generic,
+impl From<&Preset> for PresetView {
+  fn from(preset: &Preset) -> Self {
+    Self {
+      id: preset.id.clone(),
+      label: preset.label.clone(),
+      button_label: preset.button_label.clone(),
+      issuer: preset.issuer.clone(),
+      hint: preset.hint.clone(),
     }
   }
 }
@@ -51,7 +31,8 @@ impl SsoPreset {
 #[derive(Deserialize, ToSchema)]
 #[serde(rename_all = "camelCase")]
 pub struct ProviderRequest {
-  pub preset: SsoPreset,
+  /// The ID of a preset from `presets`.
+  pub preset: String,
   pub display_name: String,
   pub issuer: String,
   pub client_id: String,
@@ -64,7 +45,7 @@ pub struct ProviderRequest {
 #[serde(rename_all = "camelCase")]
 pub struct ProviderView {
   pub id: String,
-  pub preset: SsoPreset,
+  pub preset: String,
   pub display_name: String,
   pub issuer: String,
   pub client_id: String,
@@ -93,6 +74,8 @@ pub struct ProviderSettingsResponse {
   /// Whether the public URL is HTTPS or loopback. Single sign-on cannot be
   /// configured or used otherwise.
   pub public_url_secure: bool,
+  /// The providers root can pick from, in display order.
+  pub presets: Vec<PresetView>,
 }
 
 #[derive(Deserialize, ToSchema)]

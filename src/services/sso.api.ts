@@ -1,19 +1,27 @@
 import { apiRequest } from "./http.client";
 
-export type SsoPreset =
-  | "generic"
-  | "google"
-  | "microsoft"
-  | "okta"
-  | "keycloak"
-  | "auth0"
-  | "cognito"
-  | "clerk"
-  | "supabase";
+/**
+ * A provider preset. The server reads them from
+ * `app/src/modules/sso/presets.toml`, so the list here is never hard-coded.
+ */
+export interface SsoPreset {
+  id: string;
+  /** The name in the provider list. */
+  label: string;
+  /** The default sign-in button label. */
+  buttonLabel: string;
+  /** An example issuer URL. */
+  issuer: string;
+  hint: string;
+}
+
+/** The preset every provider falls back to. */
+export const GENERIC_PRESET = "generic";
 
 export interface SsoProvider {
   id: string;
-  preset: SsoPreset;
+  /** The ID of an entry in `SsoSettings.presets`. */
+  preset: string;
   displayName: string;
   issuer: string;
   clientId: string;
@@ -38,10 +46,12 @@ export interface SsoSettings {
   publicUrl: string;
   /** Single sign-on cannot be set up or used unless this is true. */
   publicUrlSecure: boolean;
+  /** The providers to pick from, in display order. */
+  presets: SsoPreset[];
 }
 
 export interface SaveSsoProviderRequest {
-  preset: SsoPreset;
+  preset: string;
   displayName: string;
   issuer: string;
   clientId: string;

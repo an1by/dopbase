@@ -1,6 +1,5 @@
 <script setup lang="ts">
-import { presetOptions, useSsoController } from "./Sso.controller";
-import type { SsoPreset } from "~/services/sso.api";
+import { useSsoController } from "./Sso.controller";
 import { DashboardLayout } from "~/layouts";
 import {
   DbAlert,
@@ -35,6 +34,7 @@ const {
   fieldErrors,
   issuerPlaceholder,
   presetHint,
+  presetOptions,
   blocked,
   saving,
   toggling,
@@ -169,7 +169,7 @@ const statusLabel: Record<string, string> = {
                 label="Provider"
                 :options="presetOptions"
                 :disabled="blocked"
-                @update:model-value="choosePreset($event as SsoPreset)" />
+                @update:model-value="choosePreset" />
               <p class="text-xs text-ink-muted" data-testid="sso-preset-hint">
                 {{ presetHint }}
               </p>

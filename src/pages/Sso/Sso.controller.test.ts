@@ -18,11 +18,25 @@ vi.mock("vue-router", () => ({
 vi.mock("~/services/sso.api");
 vi.mock("~/services/auth.api");
 
+function preset(
+  id: string,
+  buttonLabel: string,
+  issuer: string,
+  hint = `Set up ${buttonLabel}.`,
+): ssoApi.SsoPreset {
+  return { id, label: buttonLabel, buttonLabel, issuer, hint };
+}
+
 const empty: ssoApi.SsoSettings = {
   provider: null,
   redirectUri: "https://dopbase.example.com/api/v1/auth/sso/callback",
   publicUrl: "https://dopbase.example.com",
   publicUrlSecure: true,
+  presets: [
+    preset("google", "Google", "https://accounts.google.com"),
+    preset("auth0", "Auth0", "https://<tenant>.<region>.auth0.com/"),
+    preset("generic", "SSO", "https://idp.example.com", "Use the issuer."),
+  ],
 };
 
 function configured(
@@ -205,13 +219,46 @@ describe("useSsoController", () => {
     expect(secure.blocked.value).toBe(false);
   });
 
-  it("shows setup notes for each provider", async () => {
+  it("lists the presets the server sends, in its order", async () => {
+    const c = await mounted({
+      ...empty,
+      presets: [
+        ...empty.presets,
+        preset(
+          "pocket-id",
+          "Pocket ID",
+          "https://id.example.com",
+          "Add a client.",
+        ),
+      ],
+    });
+    expect(c.presetOptions.value.map((option) => option.value)).toEqual([
+      "google",
+      "auth0",
+      "generic",
+      "pocket-id",
+    ]);
+    c.choosePreset("pocket-id");
+    expect(c.displayName.value).toBe("Pocket ID");
+    expect(c.presetHint.value).toBe("Add a client.");
+    expect(c.issuerPlaceholder.value).toBe("https://id.example.com");
+  });
+
+  it("replaces the button label only while it is a preset default", async () => {
     const c = await mounted(empty);
-    c.choosePreset("supabase");
-    expect(c.presetHint.value).toContain("HS256");
-    expect(c.issuerPlaceholder.value).toContain("/auth/v1");
     c.choosePreset("auth0");
     expect(c.displayName.value).toBe("Auth0");
-    expect(c.issuerPlaceholder.value.endsWith("/")).toBe(true);
+    c.choosePreset("google");
+    expect(c.displayName.value).toBe("Google");
+    c.displayName.value = "Company login";
+    c.choosePreset("auth0");
+    expect(c.displayName.value).toBe("Company login");
+  });
+
+  it("treats a stored preset that is no longer listed as generic", async () => {
+    const c = await mounted(configured({ preset: "retired" }));
+    expect(c.preset.value).toBe("retired");
+    expect(c.presetHint.value).toBe("Use the issuer.");
+    expect(c.issuerPlaceholder.value).toBe("https://idp.example.com");
   });
 });

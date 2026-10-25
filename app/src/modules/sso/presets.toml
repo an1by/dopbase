@@ -1,0 +1,102 @@
+# Single sign-on provider presets
+#
+# These are the providers root can pick from on the Single sign-on page. The
+# file is compiled into the binary, so rebuild after editing it.
+#
+# To add a provider, copy a [[preset]] block, give it a new id, and fill in
+# the fields. Nothing else changes: the database stores the id as plain text
+# and the Admin UI reads this list from the server. Run
+# `cargo test sso_presets` from app/ to check the file.
+#
+# Required fields:
+#   id            Stored with the saved provider. Lowercase letters, digits,
+#                 and dashes. Don't change it after a release.
+#   label         The name in the provider list.
+#   button_label  The default text of the "Sign in with ..." button.
+#   issuer        An example issuer URL, shown as the field's placeholder.
+#   hint          The setup note shown under the provider list.
+#
+# Optional fields, for provider quirks:
+#   email_verified_claim    The ID token claim that proves the email belongs
+#                           to the person signing in. Default:
+#                           "email_verified".
+#   prompt_login            Set to false for providers that reject
+#                           prompt=login when someone confirms a sensitive
+#                           action. max_age=0 is still sent. Default: true.
+#   reject_issuer_segments  Issuer path segments to refuse, such as
+#                           multi-tenant endpoints where anyone can get
+#                           tokens. Needs reject_issuer_message.
+#   reject_issuer_message   Tells root why the issuer was refused.
+#
+# The list follows the order of this file. Keep "generic" last: it is also
+# the fallback for a saved provider whose preset was removed.
+
+[[preset]]
+id = "google"
+label = "Google"
+button_label = "Google"
+issuer = "https://accounts.google.com"
+hint = "Create an OAuth client of type Web application in Google Cloud."
+# Google rejects prompt=login.
+prompt_login = false
+
+[[preset]]
+id = "microsoft"
+label = "Microsoft Entra ID"
+button_label = "Microsoft"
+issuer = "https://login.microsoftonline.com/<tenant-id>/v2.0"
+hint = "Use the issuer with your tenant ID. Accounts link by email only when Entra confirms your tenant owns the email domain (the xms_edov claim)."
+# Entra doesn't send email_verified, and other tenants can put any address
+# in email. xms_edov says the tenant owns the email's domain.
+email_verified_claim = "xms_edov"
+reject_issuer_segments = ["/common/", "/organizations/", "/consumers/"]
+reject_issuer_message = "Use your tenant's issuer URL, which contains the tenant ID, not /common or /organizations."
+
+[[preset]]
+id = "okta"
+label = "Okta"
+button_label = "Okta"
+issuer = "https://<your-org>.okta.com"
+hint = "Create an OIDC Web Application app integration."
+
+[[preset]]
+id = "auth0"
+label = "Auth0"
+button_label = "Auth0"
+issuer = "https://<tenant>.<region>.auth0.com/"
+hint = "Create a Regular Web Application. Auth0's issuer ends with a slash; Dopbase adds it if you leave it out."
+
+[[preset]]
+id = "cognito"
+label = "Amazon Cognito"
+button_label = "Amazon Cognito"
+issuer = "https://cognito-idp.<region>.amazonaws.com/<user-pool-id>"
+hint = "Create an app client with a client secret and allow the openid, email, and profile scopes."
+
+[[preset]]
+id = "clerk"
+label = "Clerk"
+button_label = "Clerk"
+issuer = "https://clerk.<your-domain>.com"
+hint = "Add an OAuth application in the Clerk dashboard. The issuer is your Frontend API URL."
+
+[[preset]]
+id = "supabase"
+label = "Supabase"
+button_label = "Supabase"
+issuer = "https://<project-ref>.supabase.co/auth/v1"
+hint = "Turn on the OAuth 2.1 server and switch to asymmetric JWT signing keys (RS256 or ES256). Dopbase refuses HS256."
+
+[[preset]]
+id = "keycloak"
+label = "Keycloak"
+button_label = "Keycloak"
+issuer = "https://<host>/realms/<realm>"
+hint = "Create a confidential OpenID Connect client with standard flow turned on."
+
+[[preset]]
+id = "generic"
+label = "Other OpenID Connect provider (Authentik, Zitadel, Rauthy, …)"
+button_label = "SSO"
+issuer = "https://idp.example.com"
+hint = "Use the issuer value from the provider's /.well-known/openid-configuration."

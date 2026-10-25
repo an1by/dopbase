@@ -123,6 +123,9 @@ async fn build_instance_state(
   let admin_count: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM admins")
     .fetch_one(db.pool())
     .await?;
+  // The presets are compiled in; a broken file fails here, not at the first
+  // sign-in.
+  modules::sso::presets::all();
   let setup_token = if setup_enabled && admin_count == 0 {
     Some(token::generate("setup_")?)
   } else {

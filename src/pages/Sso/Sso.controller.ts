@@ -11,75 +11,9 @@ import {
   setSsoPasswordFormHidden,
   setSsoRequired,
 } from "~/services/sso.api";
+import { GENERIC_PRESET } from "~/services/sso.api";
 import type { SsoPreset, SsoSettings } from "~/services/sso.api";
 import { ssoErrorMessage } from "~/utils/sso";
-
-export const presetOptions: Array<{ value: SsoPreset; label: string }> = [
-  { value: "google", label: "Google" },
-  { value: "microsoft", label: "Microsoft Entra ID" },
-  { value: "okta", label: "Okta" },
-  { value: "auth0", label: "Auth0" },
-  { value: "cognito", label: "Amazon Cognito" },
-  { value: "clerk", label: "Clerk" },
-  { value: "supabase", label: "Supabase" },
-  { value: "keycloak", label: "Keycloak" },
-  {
-    value: "generic",
-    label: "Other OpenID Connect provider (Authentik, Zitadel, Rauthy, …)",
-  },
-];
-
-/** The button label, issuer format, and setup note for each provider. */
-export const presetDefaults: Record<
-  SsoPreset,
-  { name: string; issuer: string; hint: string }
-> = {
-  google: {
-    name: "Google",
-    issuer: "https://accounts.google.com",
-    hint: "Create an OAuth client of type Web application in Google Cloud.",
-  },
-  microsoft: {
-    name: "Microsoft",
-    issuer: "https://login.microsoftonline.com/<tenant-id>/v2.0",
-    hint: "Use the issuer with your tenant ID. Accounts link by email only when Entra confirms your tenant owns the email domain (the xms_edov claim).",
-  },
-  okta: {
-    name: "Okta",
-    issuer: "https://<your-org>.okta.com",
-    hint: "Create an OIDC Web Application app integration.",
-  },
-  auth0: {
-    name: "Auth0",
-    issuer: "https://<tenant>.<region>.auth0.com/",
-    hint: "Create a Regular Web Application. Auth0's issuer ends with a slash; Dopbase adds it if you leave it out.",
-  },
-  cognito: {
-    name: "Amazon Cognito",
-    issuer: "https://cognito-idp.<region>.amazonaws.com/<user-pool-id>",
-    hint: "Create an app client with a client secret and allow the openid, email, and profile scopes.",
-  },
-  clerk: {
-    name: "Clerk",
-    issuer: "https://clerk.<your-domain>.com",
-    hint: "Add an OAuth application in the Clerk dashboard. The issuer is your Frontend API URL.",
-  },
-  supabase: {
-    name: "Supabase",
-    issuer: "https://<project-ref>.supabase.co/auth/v1",
-    hint: "Turn on the OAuth 2.1 server and switch to asymmetric JWT signing keys (RS256 or ES256). Dopbase refuses HS256.",
-  },
-  keycloak: {
-    name: "Keycloak",
-    issuer: "https://<host>/realms/<realm>",
-    hint: "Create a confidential OpenID Connect client with standard flow turned on.",
-  },
-  generic: {
-    name: "SSO",
-    issuer: "https://idp.example.com",
-    hint: "Use the issuer value from the provider's /.well-known/openid-configuration.",
-  },
-};
 
 export type SsoStatus = "none" | "unverified" | "ready" | "enabled";
 
@@ -108,7 +42,7 @@ export function useSsoController() {
   const loading = ref(true);
   const loadError = ref<string | null>(null);
 
-  const preset = ref<SsoPreset>("generic");
+  const preset = ref(GENERIC_PRESET);
   const displayName = ref("");
   const issuer = ref("");
   const clientId = ref("");
@@ -134,8 +68,24 @@ export function useSsoController() {
     if (provider.value.enabled) return "enabled";
     return provider.value.verifiedAt ? "ready" : "unverified";
   });
-  const issuerPlaceholder = computed(() => presetDefaults[preset.value].issuer);
-  const presetHint = computed(() => presetDefaults[preset.value].hint);
+  /** The server's preset list, which comes from its presets.toml. */
+  const presets = computed<SsoPreset[]>(() => settings.value?.presets ?? []);
+  const presetOptions = computed(() =>
+    presets.value.map((entry) => ({ value: entry.id, label: entry.label })),
+  );
+
+  /** A stored ID no longer in the list behaves like the generic preset. */
+  function findPreset(id: string): SsoPreset | undefined {
+    return (
+      presets.value.find((entry) => entry.id === id) ??
+      presets.value.find((entry) => entry.id === GENERIC_PRESET)
+    );
+  }
+
+  const issuerPlaceholder = computed(
+    () => findPreset(preset.value)?.issuer ?? "",
+  );
+  const presetHint = computed(() => findPreset(preset.value)?.hint ?? "");
   /** Without an HTTPS public URL nothing here can be set up. */
   const blocked = computed(
     () => settings.value !== null && !settings.value.publicUrlSecure,
@@ -144,18 +94,18 @@ export function useSsoController() {
   function fill(next: SsoSettings): void {
     settings.value = next;
     const current = next.provider;
-    preset.value = current?.preset ?? "generic";
+    preset.value = current?.preset ?? GENERIC_PRESET;
     displayName.value = current?.displayName ?? "";
     issuer.value = current?.issuer ?? "";
     clientId.value = current?.clientId ?? "";
     clientSecret.value = "";
   }
 
-  function choosePreset(value: SsoPreset): void {
-    const previousDefault = presetDefaults[preset.value].name;
+  function choosePreset(value: string): void {
+    const previousDefault = findPreset(preset.value)?.buttonLabel;
     preset.value = value;
     if (displayName.value === "" || displayName.value === previousDefault) {
-      displayName.value = presetDefaults[value].name;
+      displayName.value = findPreset(value)?.buttonLabel ?? "";
     }
   }
 
@@ -404,6 +354,7 @@ export function useSsoController() {
     clientSecret,
     fieldErrors,
     issuerPlaceholder,
+    presetOptions,
     saving,
     toggling,
     requiring,

@@ -72,6 +72,11 @@ until root runs another test sign-in.
 Issuers must match exactly. If the discovery document only works with or
 without a trailing slash, Dopbase stores the form the provider publishes.
 
+If your provider isn't in the list, choose **Other OpenID Connect provider**.
+It works with any provider that publishes a discovery document. The list
+itself comes from a file in the Dopbase source, and `CONTRIBUTING.md` explains
+how to add an entry.
+
 A few providers need one setting first:
 
 - Auth0: create a Regular Web Application.

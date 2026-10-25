@@ -7,7 +7,11 @@
 //! verified. Root is never linked by email, and unknown emails are refused:
 //! accounts are still created by administrators.
 
-use super::model::*;
+use super::{
+  model::*,
+  presets,
+  repository::{self, FlowRow, NewFlow, NewIdentity, ProviderFields, ProviderRow},
+};
 use crate::{
   constants::{
     api::{
@@ -17,7 +21,8 @@ use crate::{
     errors::{
       AUTHORIZATION_DENIED, PASSWORD_NOT_SET, RATE_LIMITED, SSO_CLIENT_INVALID,
       SSO_DISCOVERY_FAILED, SSO_HANDOFF_INVALID, SSO_ISSUER_INVALID, SSO_NAME_INVALID,
-      SSO_NOT_CONFIGURED, SSO_NOT_LINKED, SSO_NOT_VERIFIED, SSO_PUBLIC_URL_INSECURE,
+      SSO_NOT_CONFIGURED, SSO_NOT_LINKED, SSO_NOT_VERIFIED, SSO_PRESET_INVALID,
+      SSO_PUBLIC_URL_INSECURE,
     },
     limits::{
       MAX_PENDING_SSO_FLOWS, MAX_PENDING_SSO_FLOWS_PER_CLIENT, SSO_FLOW_MINUTES,
@@ -52,30 +57,8 @@ const MAX_REDIRECT_LENGTH: usize = 512;
 /// Slack between this server's clock and the provider's for `auth_time`.
 const REAUTH_CLOCK_SKEW_SECONDS: i64 = 60;
 
-#[derive(sqlx::FromRow)]
-struct ProviderRow {
-  id: String,
-  preset: String,
-  display_name: String,
-  issuer: String,
-  client_id: String,
-  client_secret_ciphertext: Vec<u8>,
-  client_secret_nonce: Vec<u8>,
-  enabled: bool,
-  require_sso: bool,
-  hide_password_form: bool,
-  verified_at: Option<String>,
-  updated_at: String,
-}
-
-const PROVIDER_COLUMNS: &str = "id,preset,display_name,issuer,client_id,client_secret_ciphertext,client_secret_nonce,enabled,require_sso,hide_password_form,verified_at,updated_at";
-
 async fn provider_row(state: &AppState) -> Result<Option<ProviderRow>, sqlx::Error> {
-  sqlx::query_as(&format!(
-    "SELECT {PROVIDER_COLUMNS} FROM sso_providers ORDER BY created_at LIMIT 1"
-  ))
-  .fetch_optional(state.db.pool())
-  .await
+  repository::provider(state.db.pool()).await
 }
 
 /// What single sign-on currently allows, for the parts of sign-in that do
@@ -91,12 +74,7 @@ pub struct SsoPolicy {
 }
 
 pub async fn policy(state: &AppState) -> Result<SsoPolicy, sqlx::Error> {
-  let row: Option<(String, bool, bool)> = sqlx::query_as(
-    "SELECT display_name,require_sso,hide_password_form FROM sso_providers WHERE enabled=1 LIMIT 1",
-  )
-  .fetch_optional(state.db.pool())
-  .await?;
-  Ok(match row {
+  Ok(match repository::enabled_policy(state.db.pool()).await? {
     Some((name, require_sso, hide_password_form)) => SsoPolicy {
       enabled_name: Some(name),
       require_sso,
@@ -112,12 +90,7 @@ pub async fn confirmation_name(
   state: &AppState,
   admin_id: &str,
 ) -> Result<Option<String>, sqlx::Error> {
-  sqlx::query_scalar(
-    "SELECT p.display_name FROM sso_providers p JOIN admin_identities i ON i.provider_id=p.id WHERE p.enabled=1 AND i.admin_id=? LIMIT 1",
-  )
-  .bind(admin_id)
-  .fetch_optional(state.db.pool())
-  .await
+  repository::confirmation_name(state.db.pool(), admin_id).await
 }
 
 fn provider_settings(
@@ -215,7 +188,7 @@ fn view(
 ) -> ProviderView {
   ProviderView {
     id: row.id,
-    preset: SsoPreset::parse(&row.preset),
+    preset: row.preset,
     display_name: row.display_name,
     issuer: row.issuer,
     client_id: row.client_id,
@@ -236,17 +209,8 @@ pub async fn get_provider(
   require_root_browser(identity)?;
   let provider = match provider_row(state).await? {
     Some(row) => {
-      let linked: i64 =
-        sqlx::query_scalar("SELECT COUNT(*) FROM admin_identities WHERE provider_id=?")
-          .bind(&row.id)
-          .fetch_one(state.db.pool())
-          .await?;
-      let passwordless: i64 = sqlx::query_scalar(
-        "SELECT COUNT(*) FROM admins WHERE password_hash=? AND role IN ('admin','member')",
-      )
-      .bind(common::NO_PASSWORD_HASH)
-      .fetch_one(state.db.pool())
-      .await?;
+      let linked = repository::linked_count(state.db.pool(), &row.id).await?;
+      let passwordless = repository::passwordless_count(state.db.pool()).await?;
       Some(view(row, linked, passwordless))
     }
     None => None,
@@ -256,6 +220,7 @@ pub async fn get_provider(
     redirect_uri: redirect_uri(state),
     public_url: state.config.public_url.clone(),
     public_url_secure: is_secure_url(&state.config.public_url),
+    presets: presets::all().iter().map(PresetView::from).collect(),
   })
 }
 
@@ -266,6 +231,8 @@ pub async fn put_provider(
 ) -> Result<ProviderSettingsResponse, HttpError> {
   let (admin_id, email) = require_root_change(identity)?;
   require_secure_public_url(state)?;
+  let preset = presets::find(&request.preset)
+    .ok_or_else(|| invalid(SSO_PRESET_INVALID, "Choose a provider from the list."))?;
   let display_name = request.display_name.trim();
   if display_name.is_empty() || display_name.chars().count() > MAX_DISPLAY_NAME_LENGTH {
     return Err(invalid(
@@ -280,14 +247,13 @@ pub async fn put_provider(
       "Enter the provider's HTTPS issuer URL.",
     ));
   }
-  if request.preset == SsoPreset::Microsoft
-    && ["/common/", "/organizations/", "/consumers/"]
-      .iter()
-      .any(|segment| format!("{issuer}/").contains(segment))
-  {
+  if preset.rejects_issuer(issuer) {
     return Err(invalid(
       SSO_ISSUER_INVALID,
-      "Use your tenant's issuer URL, which contains the tenant ID, not /common or /organizations.",
+      preset
+        .reject_issuer_message
+        .as_deref()
+        .unwrap_or("This issuer URL cannot be used with this provider."),
     ));
   }
   let client_id = request.client_id.trim();
@@ -334,60 +300,42 @@ pub async fn put_provider(
     })
     .transpose()?;
 
+  // New client settings have not been proven by a test sign-in yet, so an
+  // existing provider goes back to disabled until root signs in again.
+  let reverify = existing
+    .as_ref()
+    .is_some_and(|row| row.issuer != issuer || row.client_id != client_id || encrypted.is_some());
+  let (ciphertext, nonce) = match (encrypted, &existing) {
+    (Some(encrypted), _) => encrypted,
+    (None, Some(row)) => (
+      row.client_secret_ciphertext.clone(),
+      row.client_secret_nonce.clone(),
+    ),
+    (None, None) => unreachable!("a new provider has a secret, checked above"),
+  };
+  let fields = ProviderFields {
+    id: &provider_id,
+    preset: &preset.id,
+    display_name,
+    issuer,
+    client_id,
+    client_secret_ciphertext: &ciphertext,
+    client_secret_nonce: &nonce,
+    now: &now,
+  };
+
   let mut tx = state.db.pool().begin().await?;
   let mut identities_removed = 0;
-  let action = match &existing {
-    None => {
-      let (ciphertext, nonce) = encrypted.expect("checked above");
-      sqlx::query("INSERT INTO sso_providers(id,preset,display_name,issuer,client_id,client_secret_ciphertext,client_secret_nonce,enabled,verified_at,created_at,updated_at) VALUES(?,?,?,?,?,?,?,0,NULL,?,?)")
-        .bind(&provider_id)
-        .bind(request.preset.as_str())
-        .bind(display_name)
-        .bind(issuer)
-        .bind(client_id)
-        .bind(ciphertext)
-        .bind(nonce)
-        .bind(&now)
-        .bind(&now)
-        .execute(&mut *tx)
-        .await?;
-      "sso_provider.created"
-    }
-    Some(row) => {
-      // New client settings have not been proven by a test sign-in yet, so
-      // the provider goes back to disabled until root signs in again.
-      let reverify = row.issuer != issuer || row.client_id != client_id || encrypted.is_some();
-      let (ciphertext, nonce) = encrypted.unwrap_or_else(|| {
-        (
-          row.client_secret_ciphertext.clone(),
-          row.client_secret_nonce.clone(),
-        )
-      });
-      sqlx::query("UPDATE sso_providers SET preset=?,display_name=?,issuer=?,client_id=?,client_secret_ciphertext=?,client_secret_nonce=?,enabled=CASE WHEN ? THEN 0 ELSE enabled END,require_sso=CASE WHEN ? THEN 0 ELSE require_sso END,verified_at=CASE WHEN ? THEN NULL ELSE verified_at END,updated_at=? WHERE id=?")
-        .bind(request.preset.as_str())
-        .bind(display_name)
-        .bind(issuer)
-        .bind(client_id)
-        .bind(ciphertext)
-        .bind(nonce)
-        .bind(reverify)
-        .bind(reverify)
-        .bind(reverify)
-        .bind(&now)
-        .bind(&provider_id)
-        .execute(&mut *tx)
-        .await?;
-      // Identities from another issuer can never match a sign-in again.
-      // People link again by verified email on their next sign-in.
-      identities_removed =
-        sqlx::query("DELETE FROM admin_identities WHERE provider_id=? AND issuer<>?")
-          .bind(&provider_id)
-          .bind(issuer)
-          .execute(&mut *tx)
-          .await?
-          .rows_affected();
-      "sso_provider.updated"
-    }
+  let action = if existing.is_none() {
+    repository::insert_provider(&mut tx, fields).await?;
+    "sso_provider.created"
+  } else {
+    repository::update_provider(&mut tx, fields, reverify).await?;
+    // Identities from another issuer can never match a sign-in again.
+    // People link again by verified email on their next sign-in.
+    identities_removed =
+      repository::delete_identities_from_other_issuers(&mut tx, &provider_id, issuer).await?;
+    "sso_provider.updated"
   };
   common::audit(
     &mut tx,
@@ -399,7 +347,7 @@ pub async fn put_provider(
     None,
     Some("sso_provider"),
     Some(&provider_id),
-    serde_json::json!({"issuer":issuer,"preset":request.preset.as_str(),"secretChanged":client_secret.is_some(),"identitiesRemoved":identities_removed}),
+    serde_json::json!({"issuer":issuer,"preset":preset.id,"secretChanged":client_secret.is_some(),"identitiesRemoved":identities_removed}),
   )
   .await?;
   tx.commit().await?;
@@ -427,15 +375,7 @@ pub async fn set_enabled(
   }
   let mut tx = state.db.pool().begin().await?;
   // Requiring single sign-on only makes sense while it is on.
-  sqlx::query(
-    "UPDATE sso_providers SET enabled=?,require_sso=require_sso AND ?,updated_at=? WHERE id=?",
-  )
-  .bind(enabled)
-  .bind(enabled)
-  .bind(Utc::now().to_rfc3339())
-  .bind(&row.id)
-  .execute(&mut *tx)
-  .await?;
+  repository::set_enabled(&mut tx, &row.id, enabled, &Utc::now().to_rfc3339()).await?;
   common::audit(
     &mut tx,
     identity.audit_actor_type(),
@@ -474,20 +414,11 @@ pub async fn set_required(
     })?;
   let now = Utc::now().to_rfc3339();
   let mut tx = state.db.pool().begin().await?;
-  sqlx::query("UPDATE sso_providers SET require_sso=?,updated_at=? WHERE id=?")
-    .bind(required)
-    .bind(&now)
-    .bind(&row.id)
-    .execute(&mut *tx)
-    .await?;
+  repository::set_required(&mut tx, &row.id, required, &now).await?;
   // Sessions started with a password would otherwise outlive the policy,
   // CLI ones by up to 90 days. Everyone but root signs in again.
   let revoked = if required && !row.require_sso {
-    sqlx::query("UPDATE sessions SET revoked_at=? WHERE revoked_at IS NULL AND admin_id IN (SELECT id FROM admins WHERE role<>'root')")
-      .bind(&now)
-      .execute(&mut *tx)
-      .await?
-      .rows_affected()
+    repository::revoke_non_root_sessions(&mut tx, &now).await?
   } else {
     0
   };
@@ -520,12 +451,7 @@ pub async fn set_password_form_hidden(
     .await?
     .ok_or_else(|| HttpError::not_found(SSO_NOT_CONFIGURED, "Single sign-on is not configured."))?;
   let mut tx = state.db.pool().begin().await?;
-  sqlx::query("UPDATE sso_providers SET hide_password_form=?,updated_at=? WHERE id=?")
-    .bind(hidden)
-    .bind(Utc::now().to_rfc3339())
-    .bind(&row.id)
-    .execute(&mut *tx)
-    .await?;
+  repository::set_password_form_hidden(&mut tx, &row.id, hidden, &Utc::now().to_rfc3339()).await?;
   common::audit(
     &mut tx,
     identity.audit_actor_type(),
@@ -553,10 +479,7 @@ pub async fn delete_provider(
     .ok_or_else(|| HttpError::not_found(SSO_NOT_CONFIGURED, "Single sign-on is not configured."))?;
   let mut tx = state.db.pool().begin().await?;
   // Linked identities and pending sign-ins go with it.
-  sqlx::query("DELETE FROM sso_providers WHERE id=?")
-    .bind(&row.id)
-    .execute(&mut *tx)
-    .await?;
+  repository::delete_provider(&mut tx, &row.id).await?;
   common::audit(
     &mut tx,
     identity.audit_actor_type(),
@@ -605,9 +528,10 @@ async fn create_flow(
   require_secure_public_url(state)?;
   let settings = provider_settings(state, row)?;
   let freshness = if purpose == "reauth" {
-    // Google rejects `prompt=login`; `max_age=0` alone asks it to sign in again.
+    // Some providers (Google) reject `prompt=login`; `max_age=0` alone asks
+    // them to sign in again.
     Freshness::Required {
-      prompt_login: SsoPreset::parse(&row.preset) != SsoPreset::Google,
+      prompt_login: presets::resolve(&row.preset).prompt_login,
     }
   } else {
     Freshness::Any
@@ -624,18 +548,11 @@ async fn create_flow(
       })?;
   let binding = token::generate(SSO_BINDING_PREFIX).map_err(|_| HttpError::internal())?;
   let now = Utc::now();
+  let now_text = now.to_rfc3339();
   let mut tx = state.db.pool().begin().await?;
-  // Finished and abandoned flows are cleared on this recurring path.
-  sqlx::query("DELETE FROM sso_flows WHERE expires_at < ?")
-    .bind(now.to_rfc3339())
-    .execute(&mut *tx)
-    .await?;
+  repository::delete_expired_flows(&mut tx, &now_text).await?;
   let client = client_ip::current().map(|address| address.to_string());
-  let (pending, pending_here): (i64, i64) =
-    sqlx::query_as("SELECT COUNT(*), COALESCE(SUM(client_ip IS ?), 0) FROM sso_flows")
-      .bind(&client)
-      .fetch_one(&mut *tx)
-      .await?;
+  let (pending, pending_here) = repository::pending_flows(&mut tx, client.as_deref()).await?;
   if pending >= MAX_PENDING_SSO_FLOWS || pending_here >= MAX_PENDING_SSO_FLOWS_PER_CLIENT {
     return Err(HttpError::new(
       StatusCode::TOO_MANY_REQUESTS,
@@ -643,22 +560,25 @@ async fn create_flow(
       "Too many sign-ins in progress. Try again later.",
     ));
   }
-  sqlx::query("INSERT INTO sso_flows(id,state_hash,provider_id,purpose,nonce,pkce_verifier,binding_hash,session_id,admin_id,redirect_to,client_ip,created_at,expires_at) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?)")
-    .bind(token::public_id(SSO_FLOW_ID_PREFIX))
-    .bind(token::hash(&request.state))
-    .bind(&row.id)
-    .bind(purpose)
-    .bind(&request.nonce)
-    .bind(&request.pkce_verifier)
-    .bind(token::hash(&binding))
-    .bind(session.map(|(session_id, _)| session_id))
-    .bind(session.map(|(_, admin_id)| admin_id))
-    .bind(redirect_to)
-    .bind(&client)
-    .bind(now.to_rfc3339())
-    .bind((now + Duration::minutes(SSO_FLOW_MINUTES)).to_rfc3339())
-    .execute(&mut *tx)
-    .await?;
+  repository::insert_flow(
+    &mut tx,
+    NewFlow {
+      id: &token::public_id(SSO_FLOW_ID_PREFIX),
+      state_hash: &token::hash(&request.state),
+      provider_id: &row.id,
+      purpose,
+      nonce: &request.nonce,
+      pkce_verifier: &request.pkce_verifier,
+      binding_hash: &token::hash(&binding),
+      session_id: session.map(|(session_id, _)| session_id),
+      admin_id: session.map(|(_, admin_id)| admin_id),
+      redirect_to: redirect_to.as_deref(),
+      client_ip: client.as_deref(),
+      now: &now_text,
+      expires_at: &(now + Duration::minutes(SSO_FLOW_MINUTES)).to_rfc3339(),
+    },
+  )
+  .await?;
   tx.commit().await?;
   Ok(StartedFlow {
     authorize_url: request.url,
@@ -760,18 +680,6 @@ fn error_location(
   format!("{page}?sso_error={reason}")
 }
 
-#[derive(sqlx::FromRow)]
-struct FlowRow {
-  id: String,
-  provider_id: String,
-  purpose: String,
-  nonce: String,
-  pkce_verifier: String,
-  session_id: Option<String>,
-  admin_id: Option<String>,
-  created_at: String,
-}
-
 /// Why a callback failed. `reason` goes into the redirect and the audit
 /// record, never provider output.
 struct Failure {
@@ -828,14 +736,12 @@ pub async fn callback(
     return error_location(Target::Login, "expired");
   };
   let now = Utc::now().to_rfc3339();
-  let flow: Result<Option<FlowRow>, sqlx::Error> = sqlx::query_as(
-    "UPDATE sso_flows SET consumed_at=? WHERE state_hash=? AND binding_hash=? AND consumed_at IS NULL AND expires_at > ? RETURNING id,provider_id,purpose,nonce,pkce_verifier,session_id,admin_id,created_at",
+  let flow: Result<Option<FlowRow>, sqlx::Error> = repository::consume_flow(
+    state.db.pool(),
+    &token::hash(state_param),
+    &token::hash(binding),
+    &now,
   )
-  .bind(&now)
-  .bind(token::hash(state_param))
-  .bind(token::hash(binding))
-  .bind(&now)
-  .fetch_optional(state.db.pool())
   .await;
   // Early returns stay in let-else. Inside a match that binds `flow`, CodeQL
   // reads the returned error page as the flow itself and reports it reaching
@@ -852,10 +758,9 @@ pub async fn callback(
     Ok(location) => location,
     Err(failure) => {
       state.rate_limiter.failure(&limit_key).await;
-      let _ = sqlx::query("DELETE FROM sso_flows WHERE id=?")
-        .bind(&flow.id)
-        .execute(state.db.pool())
-        .await;
+      if let Ok(mut conn) = state.db.pool().acquire().await {
+        let _ = repository::delete_flow(&mut conn, &flow.id).await;
+      }
       let _ = common::audit_standalone(
         state.db.pool(),
         "anonymous",
@@ -881,11 +786,14 @@ async fn finish_callback(
 ) -> Result<String, Failure> {
   let target = match flow.purpose.as_str() {
     "link" => {
-      let role: Option<String> = sqlx::query_scalar("SELECT role FROM admins WHERE id=?")
-        .bind(&flow.admin_id)
-        .fetch_optional(state.db.pool())
-        .await?;
-      if role.as_deref() == Some("root") {
+      let mut conn = state.db.pool().acquire().await?;
+      let account = match flow.admin_id.as_deref() {
+        Some(admin_id) => repository::account(&mut conn, admin_id).await?,
+        None => None,
+      };
+      // TODO(rbac): root's test sign-in returns to the settings page. Pick
+      // the page by permission once roles are configurable.
+      if account.is_some_and(|(_, role)| role == AdminRole::Root.as_str()) {
         Target::Settings
       } else {
         Target::Account
@@ -901,13 +809,9 @@ async fn finish_callback(
     .code
     .as_deref()
     .ok_or_else(|| Failure::new(target, "failed"))?;
-  let row: ProviderRow = sqlx::query_as(&format!(
-    "SELECT {PROVIDER_COLUMNS} FROM sso_providers WHERE id=?"
-  ))
-  .bind(&flow.provider_id)
-  .fetch_optional(state.db.pool())
-  .await?
-  .ok_or_else(|| Failure::new(target, "disabled"))?;
+  let row = repository::provider_by_id(state.db.pool(), &flow.provider_id)
+    .await?
+    .ok_or_else(|| Failure::new(target, "disabled"))?;
   if flow.purpose != "link" && !row.enabled {
     return Err(Failure::new(target, "disabled"));
   }
@@ -942,25 +846,21 @@ async fn confirm_identity(
     .admin_id
     .as_deref()
     .ok_or_else(|| Failure::new(target, "failed"))?;
-  let owner: Option<String> =
-    sqlx::query_scalar("SELECT admin_id FROM admin_identities WHERE issuer=? AND subject=?")
-      .bind(&verified.issuer)
-      .bind(&verified.subject)
-      .fetch_optional(state.db.pool())
-      .await?;
+  let mut conn = state.db.pool().acquire().await?;
+  let owner = repository::identity_owner(&mut conn, &verified.issuer, &verified.subject).await?;
   if owner.as_deref() != Some(admin_id) {
     // Name the account whose confirmation was attempted, so the record
     // shows who someone tried to act as.
-    let email: Option<String> = sqlx::query_scalar("SELECT email FROM admins WHERE id=?")
-      .bind(admin_id)
-      .fetch_optional(state.db.pool())
-      .await?;
+    let email = repository::account(&mut conn, admin_id)
+      .await?
+      .map(|(email, _)| email);
     return Err(Failure {
       target,
       reason: "identity_mismatch",
       email,
     });
   }
+  drop(conn);
   // `auth_time` before the request started means the provider reused an
   // older sign-in instead of asking again.
   let started = chrono::DateTime::parse_from_rfc3339(&flow.created_at)
@@ -974,24 +874,13 @@ async fn confirm_identity(
   }
   let now = Utc::now().to_rfc3339();
   let mut tx = state.db.pool().begin().await?;
-  let account: Option<(String, String)> = sqlx::query_as(
-    "SELECT a.email,a.role FROM sessions s JOIN admins a ON a.id=s.admin_id WHERE s.id=? AND s.admin_id=? AND s.revoked_at IS NULL AND s.idle_expires_at > ? AND s.absolute_expires_at > ?",
-  )
-  .bind(&flow.session_id)
-  .bind(admin_id)
-  .bind(&now)
-  .bind(&now)
-  .fetch_optional(&mut *tx)
-  .await?;
+  let account =
+    repository::live_session_account(&mut tx, flow.session_id.as_deref(), admin_id, &now).await?;
   let (email, role) = account.ok_or_else(|| Failure::new(target, "expired"))?;
-  sqlx::query("UPDATE sessions SET recent_auth_at=? WHERE id=?")
-    .bind(&now)
-    .bind(&flow.session_id)
-    .execute(&mut *tx)
-    .await?;
+  repository::mark_recent_auth(&mut tx, flow.session_id.as_deref(), &now).await?;
   common::audit(
     &mut tx,
-    if role == "root" { "root" } else { "admin" },
+    audit_actor(&role),
     Some(admin_id),
     Some(&email),
     "admin.reauthenticated",
@@ -1002,12 +891,14 @@ async fn confirm_identity(
     serde_json::json!({"method":"sso"}),
   )
   .await?;
-  sqlx::query("DELETE FROM sso_flows WHERE id=?")
-    .bind(&flow.id)
-    .execute(&mut *tx)
-    .await?;
+  repository::delete_flow(&mut tx, &flow.id).await?;
   tx.commit().await?;
   Ok(CONFIRMED_PAGE.to_owned())
+}
+
+/// The audit actor type for a stored role.
+fn audit_actor(role: &str) -> &'static str {
+  AdminRole::parse_human(role).map_or("admin", AdminRole::audit_actor_type)
 }
 
 fn is_unique_violation(error: &sqlx::Error) -> bool {
@@ -1023,26 +914,17 @@ async fn login_identity(
   verified: &VerifiedIdentity,
 ) -> Result<String, Failure> {
   let now = Utc::now();
+  let now_text = now.to_rfc3339();
   let mut tx = state.db.pool().begin().await?;
-  let linked: Option<(String, String)> = sqlx::query_as(
-    "SELECT a.id,a.role FROM admin_identities i JOIN admins a ON a.id=i.admin_id WHERE i.issuer=? AND i.subject=?",
-  )
-  .bind(&verified.issuer)
-  .bind(&verified.subject)
-  .fetch_optional(&mut *tx)
-  .await?;
+  let linked = repository::linked_account(&mut tx, &verified.issuer, &verified.subject).await?;
 
   let admin_id = match linked {
     Some((admin_id, role)) => {
-      if !matches!(role.as_str(), "root" | "admin" | "member") {
+      // An AI agent has no human session, even with a stale link.
+      if AdminRole::parse_human(&role).is_none() {
         return Err(Failure::new(Target::Login, "account_not_found"));
       }
-      sqlx::query("UPDATE admin_identities SET last_login_at=? WHERE issuer=? AND subject=?")
-        .bind(now.to_rfc3339())
-        .bind(&verified.issuer)
-        .bind(&verified.subject)
-        .execute(&mut *tx)
-        .await?;
+      repository::touch_identity(&mut tx, &verified.issuer, &verified.subject, &now_text).await?;
       admin_id
     }
     None => {
@@ -1056,38 +938,35 @@ async fn login_identity(
         reason,
         email: Some(email.clone()),
       };
-      // Entra does not send `email_verified`; its domain-ownership claim is
-      // the only evidence that the email belongs to the signer.
-      let email_trusted = if SsoPreset::parse(&row.preset) == SsoPreset::Microsoft {
-        verified.email_domain_verified
-      } else {
-        verified.email_verified
-      };
-      if !email_trusted {
+      // The preset names the claim that proves the email belongs to the
+      // signer. Entra, for one, has no `email_verified` and uses `xms_edov`.
+      if !verified.claim_is_true(&presets::resolve(&row.preset).email_verified_claim) {
         return Err(failure("email_unverified"));
       }
-      let account: Option<(String, String)> =
-        sqlx::query_as("SELECT id,role FROM admins WHERE email=? COLLATE NOCASE")
-          .bind(&email)
-          .fetch_optional(&mut *tx)
-          .await?;
+      let account = repository::account_by_email(&mut tx, &email).await?;
       let (admin_id, role) = account.ok_or_else(|| failure("account_not_found"))?;
-      match role.as_str() {
-        "admin" | "member" => {}
-        "root" => return Err(failure("root_not_linked")),
+      // TODO(rbac): only the fixed admin and member roles link by email.
+      // Decide by permission once roles are configurable.
+      match AdminRole::parse_human(&role) {
+        Some(AdminRole::Admin | AdminRole::Member) => {}
+        Some(AdminRole::Root) => return Err(failure("root_not_linked")),
         _ => return Err(failure("account_not_found")),
       }
-      let inserted = sqlx::query("INSERT INTO admin_identities(id,admin_id,provider_id,issuer,subject,email_at_link,linked_via,created_at,last_login_at) VALUES(?,?,?,?,?,?,'auto',?,?)")
-        .bind(token::public_id(SSO_IDENTITY_ID_PREFIX))
-        .bind(&admin_id)
-        .bind(&row.id)
-        .bind(&verified.issuer)
-        .bind(&verified.subject)
-        .bind(&email)
-        .bind(now.to_rfc3339())
-        .bind(now.to_rfc3339())
-        .execute(&mut *tx)
-        .await;
+      let inserted = repository::insert_identity(
+        &mut tx,
+        NewIdentity {
+          id: &token::public_id(SSO_IDENTITY_ID_PREFIX),
+          admin_id: &admin_id,
+          provider_id: &row.id,
+          issuer: &verified.issuer,
+          subject: &verified.subject,
+          email_at_link: Some(&email),
+          linked_via: "auto",
+          now: &now_text,
+          last_login_at: Some(&now_text),
+        },
+      )
+      .await;
       match inserted {
         Ok(_) => {}
         // The account already has another identity from this provider.
@@ -1113,13 +992,14 @@ async fn login_identity(
 
   let handoff =
     token::generate(SSO_HANDOFF_PREFIX).map_err(|_| Failure::new(Target::Login, "failed"))?;
-  sqlx::query("UPDATE sso_flows SET handoff_hash=?,handoff_expires_at=?,admin_id=? WHERE id=?")
-    .bind(token::hash(&handoff))
-    .bind((now + Duration::seconds(SSO_HANDOFF_SECONDS)).to_rfc3339())
-    .bind(&admin_id)
-    .bind(&flow.id)
-    .execute(&mut *tx)
-    .await?;
+  repository::set_handoff(
+    &mut tx,
+    &flow.id,
+    &token::hash(&handoff),
+    &(now + Duration::seconds(SSO_HANDOFF_SECONDS)).to_rfc3339(),
+    &admin_id,
+  )
+  .await?;
   tx.commit().await?;
   // The fragment never reaches a server log; the Admin UI posts it back.
   Ok(format!("{HANDOFF_PAGE}#code={handoff}"))
@@ -1140,23 +1020,11 @@ async fn link_identity(
   let mut tx = state.db.pool().begin().await?;
   // The session that asked for the link must still be live: a sign-out in
   // the meantime cancels it.
-  let account: Option<(String, String)> = sqlx::query_as(
-    "SELECT a.email,a.role FROM sessions s JOIN admins a ON a.id=s.admin_id WHERE s.id=? AND s.admin_id=? AND s.revoked_at IS NULL AND s.idle_expires_at > ? AND s.absolute_expires_at > ?",
-  )
-  .bind(&flow.session_id)
-  .bind(admin_id)
-  .bind(&now)
-  .bind(&now)
-  .fetch_optional(&mut *tx)
-  .await?;
+  let account =
+    repository::live_session_account(&mut tx, flow.session_id.as_deref(), admin_id, &now).await?;
   let (email, role) = account.ok_or_else(|| Failure::new(target, "expired"))?;
 
-  let owner: Option<String> =
-    sqlx::query_scalar("SELECT admin_id FROM admin_identities WHERE issuer=? AND subject=?")
-      .bind(&verified.issuer)
-      .bind(&verified.subject)
-      .fetch_optional(&mut *tx)
-      .await?;
+  let owner = repository::identity_owner(&mut tx, &verified.issuer, &verified.subject).await?;
   match owner.as_deref() {
     Some(owner) if owner != admin_id => {
       return Err(Failure {
@@ -1167,16 +1035,21 @@ async fn link_identity(
     }
     Some(_) => {}
     None => {
-      let inserted = sqlx::query("INSERT INTO admin_identities(id,admin_id,provider_id,issuer,subject,email_at_link,linked_via,created_at,last_login_at) VALUES(?,?,?,?,?,?,'manual',?,NULL)")
-        .bind(token::public_id(SSO_IDENTITY_ID_PREFIX))
-        .bind(admin_id)
-        .bind(&row.id)
-        .bind(&verified.issuer)
-        .bind(&verified.subject)
-        .bind(verified.email.as_deref())
-        .bind(&now)
-        .execute(&mut *tx)
-        .await;
+      let inserted = repository::insert_identity(
+        &mut tx,
+        NewIdentity {
+          id: &token::public_id(SSO_IDENTITY_ID_PREFIX),
+          admin_id,
+          provider_id: &row.id,
+          issuer: &verified.issuer,
+          subject: &verified.subject,
+          email_at_link: verified.email.as_deref(),
+          linked_via: "manual",
+          now: &now,
+          last_login_at: None,
+        },
+      )
+      .await;
       match inserted {
         Ok(_) => {}
         Err(error) if is_unique_violation(&error) => {
@@ -1188,10 +1061,9 @@ async fn link_identity(
         }
         Err(error) => return Err(error.into()),
       }
-      let actor = if role == "root" { "root" } else { "admin" };
       common::audit(
         &mut tx,
-        actor,
+        audit_actor(&role),
         Some(admin_id),
         Some(&email),
         "sso_identity.linked",
@@ -1204,34 +1076,25 @@ async fn link_identity(
       .await?;
     }
   }
-  if role == "root" {
-    let verified_now =
-      sqlx::query("UPDATE sso_providers SET verified_at=? WHERE id=? AND verified_at IS NULL")
-        .bind(&now)
-        .bind(&row.id)
-        .execute(&mut *tx)
-        .await?
-        .rows_affected();
-    if verified_now == 1 {
-      common::audit(
-        &mut tx,
-        "root",
-        Some(admin_id),
-        Some(&email),
-        "sso_provider.verified",
-        None,
-        None,
-        Some("sso_provider"),
-        Some(&row.id),
-        serde_json::json!({}),
-      )
-      .await?;
-    }
-  }
-  sqlx::query("DELETE FROM sso_flows WHERE id=?")
-    .bind(&flow.id)
-    .execute(&mut *tx)
+  // TODO(rbac): root's link is the test sign-in that verifies the provider.
+  // Check for the permission to manage single sign-on once roles are
+  // configurable.
+  if role == AdminRole::Root.as_str() && repository::mark_verified(&mut tx, &row.id, &now).await? {
+    common::audit(
+      &mut tx,
+      "root",
+      Some(admin_id),
+      Some(&email),
+      "sso_provider.verified",
+      None,
+      None,
+      Some("sso_provider"),
+      Some(&row.id),
+      serde_json::json!({}),
+    )
     .await?;
+  }
+  repository::delete_flow(&mut tx, &flow.id).await?;
   tx.commit().await?;
   Ok(match target {
     Target::Settings => format!("{SETTINGS_PAGE}?linked=1"),
@@ -1261,28 +1124,19 @@ pub async fn exchange(
   let binding = binding.ok_or_else(invalid)?;
   let now = Utc::now();
   let mut tx = state.db.pool().begin().await?;
-  let flow: Option<(Option<String>, Option<String>)> = sqlx::query_as(
-    "DELETE FROM sso_flows WHERE handoff_hash=? AND binding_hash=? AND handoff_expires_at > ? AND purpose='login' RETURNING admin_id,redirect_to",
+  let flow = repository::take_handoff(
+    &mut tx,
+    &token::hash(code),
+    &token::hash(binding),
+    &now.to_rfc3339(),
   )
-  .bind(token::hash(code))
-  .bind(token::hash(binding))
-  .bind(now.to_rfc3339())
-  .fetch_optional(&mut *tx)
   .await?;
   let (admin_id, redirect_to) = flow.ok_or_else(invalid)?;
   let admin_id = admin_id.ok_or_else(invalid)?;
-  let (email, role_value): (String, String) =
-    sqlx::query_as("SELECT email,role FROM admins WHERE id=?")
-      .bind(&admin_id)
-      .fetch_optional(&mut *tx)
-      .await?
-      .ok_or_else(invalid)?;
-  let role = match role_value.as_str() {
-    "root" => AdminRole::Root,
-    "admin" => AdminRole::Admin,
-    "member" => AdminRole::Member,
-    _ => return Err(invalid()),
-  };
+  let (email, role_value) = repository::account(&mut tx, &admin_id)
+    .await?
+    .ok_or_else(invalid)?;
+  let role = AdminRole::parse_human(&role_value).ok_or_else(invalid)?;
   let session = issue_session(&mut tx, &admin_id, SessionKind::Browser).await?;
   common::audit(
     &mut tx,
@@ -1321,17 +1175,10 @@ pub async fn identity_status(
 ) -> Result<IdentityResponse, HttpError> {
   let (admin_id, _) = require_project_manager(identity)?;
   let provider = provider_row(state).await?;
-  let linked: Option<(Option<String>, String)> =
-    match &provider {
-      Some(row) => sqlx::query_as(
-        "SELECT email_at_link,created_at FROM admin_identities WHERE admin_id=? AND provider_id=?",
-      )
-      .bind(admin_id)
-      .bind(&row.id)
-      .fetch_optional(state.db.pool())
-      .await?,
-      None => None,
-    };
+  let linked = match &provider {
+    Some(row) => repository::identity_of(state.db.pool(), admin_id, &row.id).await?,
+    None => None,
+  };
   Ok(IdentityResponse {
     available: provider.as_ref().is_some_and(|row| row.enabled),
     provider_name: provider.map(|row| row.display_name),
@@ -1361,10 +1208,9 @@ pub async fn unlink_self(
     ));
   }
   require_recent_browser_auth(identity)?;
-  let hash: String = sqlx::query_scalar("SELECT password_hash FROM admins WHERE id=?")
-    .bind(admin_id)
-    .fetch_one(state.db.pool())
-    .await?;
+  let hash = repository::password_hash(state.db.pool(), admin_id)
+    .await?
+    .unwrap_or_default();
   if !common::has_password(&hash) {
     return Err(HttpError::conflict(
       PASSWORD_NOT_SET,
@@ -1383,11 +1229,7 @@ pub async fn unlink(
 ) -> Result<(), HttpError> {
   let (actor_id, actor_email) = require_project_manager(identity)?;
   let mut tx = state.db.pool().begin().await?;
-  let removed = sqlx::query("DELETE FROM admin_identities WHERE admin_id=?")
-    .bind(admin_id)
-    .execute(&mut *tx)
-    .await?
-    .rows_affected();
+  let removed = repository::delete_identities_of(&mut tx, admin_id).await?;
   if removed == 0 {
     return Err(HttpError::not_found(
       SSO_NOT_LINKED,

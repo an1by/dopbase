@@ -123,6 +123,47 @@ applied migrations and refuses to start when one changes. Databases created by
 0.1.9 or earlier are moved onto the timestamped versions automatically at
 startup; see [`app/migrations/README.md`](./app/migrations/README.md).
 
+### Add a single sign-on preset
+
+The providers listed on the Single sign-on page come from
+[`app/src/modules/sso/presets.toml`](./app/src/modules/sso/presets.toml). To
+add a provider, add a `[[preset]]` block to that file. The database stores the
+preset ID as plain text and the Admin UI reads the list from the server, so no
+other file changes.
+
+```toml
+[[preset]]
+id = "pocket-id"
+label = "Pocket ID"
+button_label = "Pocket ID"
+issuer = "https://<your-domain>"
+hint = "Create an OIDC client and paste the redirect URI shown above."
+```
+
+`id` uses lowercase letters, digits, and dashes. Saved providers refer to it,
+so don't change it after a release. `label` names the provider in the list,
+`button_label` is the default text of the sign-in button, `issuer` is an
+example issuer URL, and `hint` is the setup note under the list. The list
+follows the file order, with `generic` last.
+
+Three optional fields handle provider quirks:
+
+- `email_verified_claim` names the ID token claim that proves the email
+  belongs to the person signing in. The default is `email_verified`; Microsoft
+  Entra uses `xms_edov`.
+- `prompt_login = false` stops Dopbase from sending `prompt=login` when
+  someone confirms a sensitive action, for providers that reject it, such as
+  Google. `max_age=0` is still sent.
+- `reject_issuer_segments` lists issuer path segments to refuse, and
+  `reject_issuer_message` tells root why. Microsoft refuses `/common/`, where
+  any tenant can get tokens.
+
+The comment at the top of the file repeats these rules. A misspelled key fails
+the build's tests instead of being ignored, and a saved provider whose preset
+was removed from the file keeps working and behaves like `generic`. Run
+`cargo test sso_presets` from `app/` to check the file, then rebuild: the file
+is compiled into the binary.
+
 ## Check your work
 
 Run the complete repository checks when your change crosses several targets:

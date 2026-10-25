@@ -105,11 +105,28 @@ pub struct VerifiedIdentity {
   pub subject: String,
   pub email: Option<String>,
   pub email_verified: bool,
-  /// Microsoft Entra's `xms_edov` claim: the tenant owns the email's
-  /// domain. Entra does not send `email_verified`, so this stands in for it.
-  pub email_domain_verified: bool,
   /// When the user last signed in at the provider (`auth_time`).
   pub authenticated_at: Option<chrono::DateTime<chrono::Utc>>,
+  /// The verified token's raw claims, for provider-specific ones the
+  /// standard claim set does not model.
+  claims: serde_json::Value,
+}
+
+impl VerifiedIdentity {
+  /// Whether the boolean claim `name` is true. `email_verified` uses the
+  /// standard claim; others, such as Microsoft Entra's `xms_edov`, are read
+  /// from the raw claims.
+  pub fn claim_is_true(
+    &self,
+    name: &str,
+  ) -> bool {
+    if name == "email_verified" {
+      return self.email_verified;
+    }
+    self.claims.get(name).is_some_and(|value| {
+      *value == serde_json::Value::Bool(true) || value == "1" || value == "true"
+    })
+  }
 }
 
 struct CachedMetadata {
@@ -275,22 +292,18 @@ pub async fn exchange(
     subject: claims.subject().as_str().to_owned(),
     email: claims.email().map(|email| email.as_str().to_owned()),
     email_verified: claims.email_verified() == Some(true),
-    email_domain_verified: extra_claim_is_true(&id_token.to_string(), "xms_edov"),
     authenticated_at: claims.auth_time(),
+    claims: raw_claims(&id_token.to_string()),
   })
 }
 
-/// Read a boolean claim the standard claim set does not model. Only called
-/// after the token's signature has been verified.
-fn extra_claim_is_true(
-  token: &str,
-  name: &str,
-) -> bool {
+/// Decode the token's payload. Only called after its signature has been
+/// verified.
+fn raw_claims(token: &str) -> serde_json::Value {
   token
     .split('.')
     .nth(1)
     .and_then(|payload| URL_SAFE_NO_PAD.decode(payload).ok())
-    .and_then(|bytes| serde_json::from_slice::<serde_json::Value>(&bytes).ok())
-    .and_then(|claims| claims.get(name).cloned())
-    .is_some_and(|value| value == serde_json::Value::Bool(true) || value == "1" || value == "true")
+    .and_then(|bytes| serde_json::from_slice(&bytes).ok())
+    .unwrap_or_default()
 }
