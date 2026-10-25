@@ -1,5 +1,6 @@
 use base64::{Engine, engine::general_purpose::URL_SAFE_NO_PAD};
 use chrono::Duration;
+use hkdf::Hkdf;
 use sha2::{Digest, Sha256};
 use subtle::ConstantTimeEq;
 
@@ -45,6 +46,21 @@ pub fn generate(prefix: &str) -> anyhow::Result<String> {
 
 pub fn hash(value: &str) -> Vec<u8> {
   Sha256::digest(value.as_bytes()).to_vec()
+}
+
+/// The CSRF token a browser session hands to its other tabs. It is derived
+/// from the stored hash of the token issued at sign-in, which never leaves
+/// the database, so only the server can compute it, and the sign-in tab's
+/// own token keeps working.
+pub fn tab_csrf(
+  prefix: &str,
+  csrf_hash: &[u8],
+) -> String {
+  let mut derived = [0_u8; 32];
+  Hkdf::<Sha256>::new(None, csrf_hash)
+    .expand(b"dopbase tab csrf v1", &mut derived)
+    .expect("32 bytes is a valid HKDF output length");
+  format!("{prefix}{}", URL_SAFE_NO_PAD.encode(derived))
 }
 
 pub fn constant_time_eq(
