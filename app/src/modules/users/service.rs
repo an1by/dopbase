@@ -1,5 +1,6 @@
 use super::model::*;
 use crate::{
+  constants::errors::PASSWORD_REQUIRED,
   extractors::{require_admin_browser, require_mutation, require_recent_browser_auth},
   http::HttpError,
   models::{AdminRole, AuthIdentity},
@@ -42,26 +43,47 @@ fn parse_role(value: &str) -> Result<AdminRole, HttpError> {
   }
 }
 
+const USER_COLUMNS: &str = "a.id,a.email,a.role,a.created_at,a.updated_at,a.password_hash<>'' AS has_password,EXISTS(SELECT 1 FROM admin_identities i WHERE i.admin_id=a.id) AS sso_linked";
+
+type UserRow = (String, String, String, String, String, bool, bool);
+
+fn user(row: UserRow) -> Result<UserResponse, HttpError> {
+  let (id, email, role, created_at, updated_at, has_password, sso_linked) = row;
+  Ok(UserResponse {
+    id,
+    email,
+    role: parse_role(&role)?,
+    created_at,
+    updated_at,
+    has_password,
+    sso_linked,
+  })
+}
+
+async fn fetch_user(
+  state: &AppState,
+  id: &str,
+) -> Result<UserResponse, HttpError> {
+  sqlx::query_as::<_, UserRow>(&format!("SELECT {USER_COLUMNS} FROM admins a WHERE a.id=?"))
+    .bind(id)
+    .fetch_optional(state.db.pool())
+    .await?
+    .map(user)
+    .transpose()?
+    .ok_or_else(|| HttpError::not_found("USER_NOT_FOUND", "The user was not found."))
+}
+
 pub async fn list(
   state: &AppState,
   identity: &AuthIdentity,
 ) -> Result<Vec<UserResponse>, HttpError> {
   require_admin_browser(identity)?;
-  let rows: Vec<(String, String, String, String, String)> = sqlx::query_as(
-    "SELECT id,email,role,created_at,updated_at FROM admins ORDER BY CASE role WHEN 'root' THEN 0 WHEN 'admin' THEN 1 ELSE 2 END, email",
-  ).fetch_all(state.db.pool()).await?;
-  rows
-    .into_iter()
-    .map(|(id, email, r, created_at, updated_at)| {
-      Ok(UserResponse {
-        id,
-        email,
-        role: parse_role(&r)?,
-        created_at,
-        updated_at,
-      })
-    })
-    .collect()
+  let rows: Vec<UserRow> = sqlx::query_as(&format!(
+    "SELECT {USER_COLUMNS} FROM admins a ORDER BY CASE a.role WHEN 'root' THEN 0 WHEN 'admin' THEN 1 ELSE 2 END, a.email"
+  ))
+  .fetch_all(state.db.pool())
+  .await?;
+  rows.into_iter().map(user).collect()
 }
 
 pub async fn get(
@@ -70,23 +92,7 @@ pub async fn get(
   id: &str,
 ) -> Result<UserResponse, HttpError> {
   require_admin_browser(identity)?;
-  sqlx::query_as::<_, (String, String, String, String, String)>(
-    "SELECT id,email,role,created_at,updated_at FROM admins WHERE id=?",
-  )
-  .bind(id)
-  .fetch_optional(state.db.pool())
-  .await?
-  .map(|(id, email, r, created_at, updated_at)| {
-    Ok::<UserResponse, HttpError>(UserResponse {
-      id,
-      email,
-      role: parse_role(&r)?,
-      created_at,
-      updated_at,
-    })
-  })
-  .transpose()?
-  .ok_or_else(|| HttpError::not_found("USER_NOT_FOUND", "The user was not found."))
+  fetch_user(state, id).await
 }
 
 pub async fn create(
@@ -99,11 +105,32 @@ pub async fn create(
   require_recent_browser_auth(identity)?;
   require_admin_browser(identity)?;
   let email = common::validate_email(&request.email)?;
-  common::validate_password(&request.password)?;
   let requested_role = human_role(request.role)?;
+  let password = request.password.filter(|password| !password.is_empty());
+  let has_password = password.is_some();
+  let hash = match password {
+    Some(password) => {
+      common::validate_password(&password)?;
+      common::hash_password_async(password).await?
+    }
+    // Without a password the only way in is single sign-on, so it must be on.
+    None
+      if crate::modules::sso::service::policy(state)
+        .await?
+        .enabled_name
+        .is_some() =>
+    {
+      common::NO_PASSWORD_HASH.to_owned()
+    }
+    None => {
+      return Err(HttpError::validation(std::collections::BTreeMap::from([(
+        PASSWORD_REQUIRED.into(),
+        "Enter a password. Accounts without one need single sign-on turned on.".into(),
+      )])));
+    }
+  };
   let id = token::public_id("usr_");
   let now = Utc::now().to_rfc3339();
-  let hash = common::hash_password_async(request.password).await?;
   let mut tx = state.db.pool().begin().await?;
   let inserted = sqlx::query(
     "INSERT INTO admins(id,email,password_hash,role,created_at,updated_at) VALUES(?,?,?,?,?,?)",
@@ -136,17 +163,11 @@ pub async fn create(
     None,
     Some("admin"),
     Some(&id),
-    serde_json::json!({"email":email,"role":requested_role.as_str()}),
+    serde_json::json!({"email":email,"role":requested_role.as_str(),"password":has_password}),
   )
   .await?;
   tx.commit().await?;
-  Ok(UserResponse {
-    id,
-    email,
-    role: requested_role,
-    created_at: now.clone(),
-    updated_at: now,
-  })
+  fetch_user(state, &id).await
 }
 
 pub async fn update(
@@ -159,8 +180,8 @@ pub async fn update(
   require_mutation(identity, headers)?;
   require_recent_browser_auth(identity)?;
   require_admin_browser(identity)?;
-  let (old_email, old_role, created_at): (String, String, String) =
-    sqlx::query_as("SELECT email,role,created_at FROM admins WHERE id=?")
+  let (old_email, old_role): (String, String) =
+    sqlx::query_as("SELECT email,role FROM admins WHERE id=?")
       .bind(id)
       .fetch_optional(state.db.pool())
       .await?
@@ -253,13 +274,7 @@ pub async fn update(
   )
   .await?;
   tx.commit().await?;
-  Ok(UserResponse {
-    id: id.into(),
-    email,
-    role: new_role,
-    created_at,
-    updated_at: now,
-  })
+  fetch_user(state, id).await
 }
 
 pub async fn delete(
@@ -318,4 +333,28 @@ pub async fn delete(
   .await?;
   tx.commit().await?;
   Ok(())
+}
+
+/// Remove a user's single sign-on link, for example after their identity
+/// was recreated at the provider. A verified email links them again on the
+/// next sign-in. Root's link can only be removed by root.
+pub async fn unlink_sso(
+  state: &AppState,
+  identity: &AuthIdentity,
+  headers: &HeaderMap,
+  id: &str,
+) -> Result<UserResponse, HttpError> {
+  require_mutation(identity, headers)?;
+  require_recent_browser_auth(identity)?;
+  require_admin_browser(identity)?;
+  let target = fetch_user(state, id).await?;
+  let (actor_id, _) = actor(identity);
+  if target.role == AdminRole::Root && id != actor_id {
+    return Err(HttpError::forbidden(
+      "ROOT_PROTECTED",
+      "The root administrator cannot be modified.",
+    ));
+  }
+  crate::modules::sso::service::unlink(state, identity, id, &target.email).await?;
+  fetch_user(state, id).await
 }

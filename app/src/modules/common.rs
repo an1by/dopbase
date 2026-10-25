@@ -65,6 +65,40 @@ pub fn validate_password(value: &str) -> Result<(), HttpError> {
   }
 }
 
+/// Stored as the password hash of an account that signs in only through
+/// single sign-on. It is not a valid hash, so it matches no password. The
+/// column stays NOT NULL because SQLite relaxes that only by rebuilding the
+/// table, and inside the transaction sqlx wraps every migration in, the
+/// rebuild would cascade-delete sessions.
+pub const NO_PASSWORD_HASH: &str = "";
+
+pub fn has_password(encoded: &str) -> bool {
+  !encoded.is_empty()
+}
+
+/// A real hash to verify against when an account is missing or has no
+/// password, so a failed login takes as long either way and its timing
+/// does not reveal which emails have accounts or passwords.
+fn dummy_hash() -> &'static str {
+  static HASH: OnceLock<String> = OnceLock::new();
+  HASH.get_or_init(|| hash_password("dopbase-timing-equalizer").unwrap_or_default())
+}
+
+/// Verify `value` against `encoded`, or against a dummy hash when there is
+/// nothing to verify, which always fails.
+pub async fn verify_password_or_dummy(
+  value: String,
+  encoded: Option<String>,
+) -> Result<bool, HttpError> {
+  match encoded.filter(|encoded| has_password(encoded)) {
+    Some(encoded) => verify_password_async(value, encoded).await,
+    None => {
+      let _ = verify_password_async(value, dummy_hash().to_owned()).await?;
+      Ok(false)
+    }
+  }
+}
+
 pub fn hash_password(value: &str) -> Result<String, HttpError> {
   let params = Params::new(19_456, 2, 1, None).map_err(|_| HttpError::internal())?;
   let argon = Argon2::new(Algorithm::Argon2id, Version::V0x13, params);
