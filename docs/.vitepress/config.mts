@@ -239,6 +239,7 @@ const config = defineConfig({
             { text: "Import a .env file", link: "/guide/import-env" },
             { text: "Run an application", link: "/guide/run-an-application" },
             { text: "AI agent access", link: "/guide/ai-agent-access" },
+            { text: "Single sign-on", link: "/guide/single-sign-on" },
             {
               text: "Backup and restore",
               link: "/guide/backups-and-restore",
