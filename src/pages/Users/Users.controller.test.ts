@@ -30,6 +30,8 @@ beforeEach(() => {
       role: "root",
       createdAt: "2026-08-01T00:00:00Z",
       updatedAt: "2026-08-01T00:00:00Z",
+      hasPassword: true,
+      ssoLinked: false,
     },
   ]);
   vi.mocked(serviceAccountsApi.fetchServiceAccounts).mockResolvedValue([]);
@@ -116,6 +118,8 @@ describe("useUsersController", () => {
       role: "member",
       createdAt: "",
       updatedAt: "",
+      hasPassword: true,
+      ssoLinked: false,
     });
     expect(c.state.canSave).toBe(true);
 
@@ -219,6 +223,8 @@ describe("useUsersController", () => {
       role: "member",
       createdAt: "2026-08-01T00:00:00Z",
       updatedAt: "2026-08-01T00:00:00Z",
+      hasPassword: true,
+      ssoLinked: false,
     };
 
     // Prompt sets target
@@ -249,6 +255,8 @@ describe("useUsersController", () => {
       role: "member",
       createdAt: "",
       updatedAt: "",
+      hasPassword: true,
+      ssoLinked: false,
     };
 
     c.actions.promptDelete(targetUser);
