@@ -2,14 +2,15 @@
 
 All notable changes to Dopbase are documented in this file.
 
-## Unreleased
+## 0.1.10 - 2026-10-26
 
-[Dopbase](https://dopbase.com) Unreleased. The audit log
-becomes tamper-evident: every record joins a hash chain that `dopbase audit
-verify` checks, `dopbase audit export` ships the log as JSON lines, and a
-configurable retention archives expired records before deleting them.
-Secrets now keep their earlier versions, and `dopbase secret rollback` or the
-History dialog restores one when a change goes wrong.
+[Dopbase](https://dopbase.com) 0.1.10 adds single sign-on for the Admin UI
+through OpenID Connect, browser approval for `dopbase login`, and secret
+version history with rollback. The audit log becomes a hash chain that
+`dopbase audit verify` checks, and it can be listed, exported, and pruned on a
+schedule. The Admin UI works on phones. Migrations now use timestamp versions,
+so a database cannot go back to 0.1.9, and the invalid email error code is
+now `EMAIL_INVALID`.
 
 ### Added
 
@@ -36,7 +37,8 @@ History dialog restores one when a change goes wrong.
 
 - Single sign-on for the Admin UI through one OpenID Connect provider, with
   presets for Google, Microsoft Entra ID, Okta, Auth0, Amazon Cognito, Clerk,
-  Supabase, and Keycloak. The presets live in one file,
+  Supabase, and Keycloak, plus an option for any other OpenID Connect
+  provider, such as Authentik or Zitadel. The presets live in one file,
   `app/src/modules/sso/presets.toml`, so adding a provider takes one new entry
   and no database or Admin UI change; `CONTRIBUTING.md` lists the fields.
   `GET /api/v1/sso/provider` returns the list as `presets`, and saving an
@@ -133,8 +135,9 @@ History dialog restores one when a change goes wrong.
   each secret keep their value (2 to 1000, default 20). New instances start
   with `secret_history_versions = 20` in the generated `server.toml`. Older
   versions keep their metadata and show as `expired`. Pruning happens when a secret is
-  saved, so a lower count applies to each secret on its next save. Migration
-  0018 adds the `secret_versions` table and records every existing secret as
+  saved, so a lower count applies to each secret on its next save. The
+  `20261024010048_secret_versions` migration adds the `secret_versions` table
+  and records every existing secret as
   its first version. Backups, restores, and master key rekeying carry the
   retained versions.
 
@@ -209,7 +212,7 @@ History dialog restores one when a change goes wrong.
 - Screenshots in the documentation open full size when clicked. Escape, the
   Close button, or a click on the image closes the view.
 
-### Changed
+### Improvement
 
 - The SQL for single sign-on, sign-in, CLI login, and users now lives in each
   module's `repository.rs`, with the services calling it, as in the other
@@ -220,42 +223,10 @@ History dialog restores one when a change goes wrong.
   control work can find every place with `rg "TODO\(rbac\)"`.
   `CONTRIBUTING.md` and `CONTEXT.md` explain the marker.
 
-- `GET /api/v1/auth/session` returns a `csrfToken` for browser sessions. Before,
-  only the tab that signed in had a token, so an Admin UI tab opened from a
-  link or in a new window could read but not change anything. The new token is
-  derived from the session's own on the server, and both stay valid.
-
-- The error code for an invalid email is now `EMAIL_INVALID`. It was spelled
-  `EMAIL_INVAILD`; API clients that match on it need the new spelling.
-
 - Adding a migration file now rebuilds the binary. `sqlx::migrate!` embeds the
   migrations at compile time, and without a build script a new file was only
   picked up after some Rust source changed, so local builds and tests could run
   a stale set.
-
-- Database migrations use UTC timestamp versions
-  (`YYYYMMDDHHMMSS_<name>.up.sql` and `.down.sql`), the format
-  `sqlx migrate add -r` generates, so two branches no longer pick the same
-  four-digit number. The existing migrations kept their names and only gained
-  the timestamp; 0.1.9 databases move onto the new versions automatically at
-  startup, and downgrading to 0.1.9 after this release is not supported.
-  Contributed by meulatea in #140. Issue #139.
-
-- `dopbase run` no longer injects reserved names from stored secrets, and
-  prints the skipped names to standard error. The list covers the Dopbase
-  control variables (`DOPBASE_TOKEN`, `DOPBASE_URL`, `DOPBASE_ENV`,
-  `DOPBASE_DATA_DIR`, `DOPBASE_SECRETS_PATH`) and the shell variables Doppler
-  and Infisical also skip: `PATH`, `HOME`, `PS1`, `PS2`, and names that start
-  with `XDG_` or `LC_`. Before, a stored `DOPBASE_TOKEN` was injected even
-  though the inherited one was removed.
-  Names that load code into the child (`LD_PRELOAD`, `LD_LIBRARY_PATH`,
-  `DYLD_INSERT_LIBRARIES`, `DYLD_LIBRARY_PATH`, `NODE_OPTIONS`, `PERL5OPT`,
-  `PYTHONWARNINGS`, `BASH_ENV`, `PROMPT_COMMAND`, `JAVA_TOOL_OPTIONS`,
-  `PHPRC`) are skipped too unless `--only` names them; then they are
-  injected with a warning. If you store `NODE_OPTIONS` or another of these on
-  purpose, add it to `--only`. `NODE_VERSION`, `BROWSER`, `HOSTNAME`,
-  `WINDIR`, and `USERPROFILE` are still injected, with a warning. The summary
-  line counts injected keys, as `N of M key(s)` when some were left out.
 
 - Pull request descriptions have a Demo section. Features and improvements
   need a screenshot or video, and other changes write `Not needed:` with a
@@ -265,20 +236,6 @@ History dialog restores one when a change goes wrong.
 - The update dialog in the web UI shows the key as a read-only field with
   the current version, and says which version the save creates.
 
-- Dialogs in the web UI stack in a fixed order: page dialogs, then the
-  password confirmation, then "Session expired". Before, a dialog could
-  open behind the one that was already up. When the session expires, every
-  other dialog closes, so saving with an expired session leaves only
-  "Session expired" and its sign-in button on screen, without an error
-  banner behind it.
-
-- Deleting a secret, an environment, or a project also deletes the version
-  history of the secrets involved, and so does a replace import for the keys
-  it removes. Restoring deleted secrets is tracked in #135.
-
-- The unused `user_agent` column is removed from `audit_events`; nothing
-  ever recorded a value in it.
-
 - Audit records store the client's IP address, which was always empty
   before. Behind a reverse proxy, list it in `trusted_proxies` in
   `server.toml` or `DOPBASE_TRUSTED_PROXIES`, and the address comes from
@@ -286,10 +243,6 @@ History dialog restores one when a change goes wrong.
   choose the address it is recorded under. The audit list API returns
   `ipAddress`, and the Audit page shows it with the actor type when an
   event is expanded.
-
-- Audit records name the root user's actions with the actor type `root`
-  instead of `admin`, so they stand apart from other administrators. Other
-  administrators keep `admin`.
 
 - Restoring a backup archives the current audit log to
   `audit-archive/pre-restore-<TIME>.jsonl` before replacing it, so records
@@ -308,7 +261,7 @@ History dialog restores one when a change goes wrong.
   buttons are always visible on touch screens, and form fields use
   16px text on phones so iOS no longer zooms in when a field is focused.
 
-### Security Update
+### Security
 
 - Improved security to prevent secret value guessing when importing secrets
   in the Admin UI. The import also checks whether the session has expired.
@@ -336,7 +289,60 @@ History dialog restores one when a change goes wrong.
 - Redirect targets after sign-in refuse backslashes and control characters,
   which browsers can turn into a path to another site.
 
+### Note
+
+- **Breaking:** The error code for an invalid email is now `EMAIL_INVALID`. It
+  was spelled `EMAIL_INVAILD`; API clients that match on it need the new
+  spelling.
+
+- **Breaking:** Database migrations use UTC timestamp versions
+  (`YYYYMMDDHHMMSS_<name>.up.sql` and `.down.sql`), the format
+  `sqlx migrate add -r` generates, so two branches no longer pick the same
+  four-digit number. The existing migrations kept their names and only gained
+  the timestamp; 0.1.9 databases move onto the new versions automatically at
+  startup, and downgrading to 0.1.9 after this release is not supported.
+  Contributed by meulatea in #140. Issue #139.
+
+- **Breaking:** `dopbase run` no longer injects reserved names from stored
+  secrets, and prints the skipped names to standard error. The list covers the Dopbase
+  control variables (`DOPBASE_TOKEN`, `DOPBASE_URL`, `DOPBASE_ENV`,
+  `DOPBASE_DATA_DIR`, `DOPBASE_SECRETS_PATH`) and the shell variables skip:
+  `PATH`, `HOME`, `PS1`, `PS2`, and names that start
+  with `XDG_` or `LC_`. Before, a stored `DOPBASE_TOKEN` was injected even
+  though the inherited one was removed.
+  Names that load code into the child (`LD_PRELOAD`, `LD_LIBRARY_PATH`,
+  `DYLD_INSERT_LIBRARIES`, `DYLD_LIBRARY_PATH`, `NODE_OPTIONS`, `PERL5OPT`,
+  `PYTHONWARNINGS`, `BASH_ENV`, `PROMPT_COMMAND`, `JAVA_TOOL_OPTIONS`,
+  `PHPRC`) are skipped too unless `--only` names them; then they are
+  injected with a warning. If you store `NODE_OPTIONS` or another of these on
+  purpose, add it to `--only`. `NODE_VERSION`, `BROWSER`, `HOSTNAME`,
+  `WINDIR`, and `USERPROFILE` are still injected, with a warning. The summary
+  line counts injected keys, as `N of M key(s)` when some were left out.
+
+- Deleting a secret, an environment, or a project also deletes the version
+  history of the secrets involved, and so does a replace import for the keys
+  it removes. Restoring deleted secrets is tracked in #135.
+
+- The unused `user_agent` column is removed from `audit_events`; nothing
+  ever recorded a value in it.
+
+- Audit records name the root user's actions with the actor type `root`
+  instead of `admin`, so they stand apart from other administrators. Other
+  administrators keep `admin`.
+
 ### Fixed
+
+- `GET /api/v1/auth/session` returns a `csrfToken` for browser sessions. Before,
+  only the tab that signed in had a token, so an Admin UI tab opened from a
+  link or in a new window could read but not change anything. The new token is
+  derived from the session's own on the server, and both stay valid.
+
+- Dialogs in the web UI stack in a fixed order: page dialogs, then the
+  password confirmation, then "Session expired". Before, a dialog could
+  open behind the one that was already up. When the session expires, every
+  other dialog closes, so saving with an expired session leaves only
+  "Session expired" and its sign-in button on screen, without an error
+  banner behind it.
 
 - The "confirm your password" dialog clears the password field whenever it
   closes. Before, a password typed and then cancelled was still filled in the
