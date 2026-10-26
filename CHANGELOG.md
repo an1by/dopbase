@@ -306,8 +306,8 @@ now `EMAIL_INVALID`.
 - **Breaking:** `dopbase run` no longer injects reserved names from stored
   secrets, and prints the skipped names to standard error. The list covers the Dopbase
   control variables (`DOPBASE_TOKEN`, `DOPBASE_URL`, `DOPBASE_ENV`,
-  `DOPBASE_DATA_DIR`, `DOPBASE_SECRETS_PATH`) and the shell variables Doppler
-  and Infisical also skip: `PATH`, `HOME`, `PS1`, `PS2`, and names that start
+  `DOPBASE_DATA_DIR`, `DOPBASE_SECRETS_PATH`) and the shell variables skip:
+  `PATH`, `HOME`, `PS1`, `PS2`, and names that start
   with `XDG_` or `LC_`. Before, a stored `DOPBASE_TOKEN` was injected even
   though the inherited one was removed.
   Names that load code into the child (`LD_PRELOAD`, `LD_LIBRARY_PATH`,
