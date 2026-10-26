@@ -1,5 +1,5 @@
 ---
-title: "Sign in with Keycloak"
+title: "Keycloak single sign-on setup"
 description: "Try Dopbase single sign-on on your own machine with Keycloak in Docker, then take the same steps to production."
 ---
 

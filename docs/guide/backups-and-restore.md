@@ -1,5 +1,5 @@
 ---
-title: "Backup and restore"
+title: "Back up and restore secrets"
 description: "Complete guide to Dopbase full-system encrypted snapshots (.dop), dual-input cross-server restoration, master encryption keys, and disaster recovery."
 ---
 

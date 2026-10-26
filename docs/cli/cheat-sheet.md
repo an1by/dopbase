@@ -1,6 +1,6 @@
 ---
-title: "CLI cheat sheet"
-description: "Every Dopbase CLI command and option, with short examples."
+title: "CLI cheat sheet: commands and options"
+description: "Every Dopbase CLI command and option on one page, with short examples for servers, projects, environments, secrets, tokens, and backups."
 pageClass: cli-cheat-sheet
 ---
 

@@ -1,5 +1,5 @@
 ---
-title: "Environment variables"
+title: "CLI environment variables"
 description: "Environment variables supported by the Dopbase CLI and self-hosted server, with sample values and precedence rules."
 ---
 

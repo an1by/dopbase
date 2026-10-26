@@ -1,5 +1,5 @@
 ---
-title: "Client configuration"
+title: "CLI client configuration (config.toml)"
 description: "How the Dopbase CLI stores machine-global connection state and resolves the effective server for client commands."
 ---
 

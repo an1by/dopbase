@@ -1,6 +1,6 @@
 ---
-title: "Identity and tokens"
-description: "Root, admin, member, and AI-agent access, human sessions, and environment-scoped runner tokens."
+title: "Identity, roles, and tokens"
+description: "How Dopbase handles identity: root, admin, and member roles, AI agent accounts, human sessions, and environment-scoped runner tokens."
 ---
 
 # Identity and tokens

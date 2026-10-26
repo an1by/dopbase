@@ -1,5 +1,5 @@
 ---
-title: "REST API"
+title: "REST API reference"
 description: "Dopbase exposes a versioned REST API with a generated OpenAPI 3 specification and Swagger UI from a running server."
 ---
 

@@ -1,5 +1,5 @@
 ---
-title: "Sign in with Google"
+title: "Google single sign-on setup"
 description:
   "Set up Google as the single sign-on provider for the Dopbase Admin UI, from
   the Google Cloud client to the first sign-in."

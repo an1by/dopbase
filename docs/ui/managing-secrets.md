@@ -1,5 +1,5 @@
 ---
-title: "Managing secrets"
+title: "Admin UI: manage secrets"
 description: "Set, reveal, replace, and delete secrets in the Dopbase Admin UI. Values stay hidden until you explicitly reveal one."
 ---
 

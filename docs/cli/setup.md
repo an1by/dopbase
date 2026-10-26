@@ -1,6 +1,6 @@
 ---
-title: "Server setup"
-description: "Initialize a local Dopbase instance from the terminal or use the existing web setup flow."
+title: "Set up a self-hosted secrets server"
+description: "Initialize a self-hosted Dopbase server from the terminal or the browser. Setup creates the SQLite database, master key, and protected root account."
 ---
 
 # Server setup

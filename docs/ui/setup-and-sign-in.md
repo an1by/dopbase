@@ -1,6 +1,6 @@
 ---
-title: "Setup and sign in"
-description: "Initialize Dopbase through the CLI or existing web flow, then sign in to the Admin UI."
+title: "Admin UI: setup and sign in"
+description: "Set up a fresh Dopbase instance in the browser, create the protected root account, then sign in to the Admin UI and manage your sessions."
 ---
 
 # Setup and sign in

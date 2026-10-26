@@ -1,5 +1,5 @@
 ---
-title: "Run an application"
+title: "Inject secrets into an app with dopbase run"
 description: "Start a child process with secrets injected from one explicit Dopbase environment using dopbase run."
 ---
 

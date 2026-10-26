@@ -1,6 +1,6 @@
 ---
-title: "Roadmap"
-description: "The Dopbase roadmap: what ships and what is planned next."
+title: "Roadmap: Upcoming Features and Planned Releases"
+description: "Explore the Dopbase product roadmap, including upcoming features, planned releases, and future updates for managing environment variables and secrets securely"
 ---
 
 # Roadmap

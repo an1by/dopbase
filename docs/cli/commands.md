@@ -1,5 +1,5 @@
 ---
-title: "Command reference"
+title: "CLI command reference"
 description: "Reference for every Dopbase CLI command: connections, authentication, projects, environments, and secret operations."
 ---
 

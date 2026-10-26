@@ -1,5 +1,5 @@
 ---
-title: "Frontend architecture"
+title: "Admin UI frontend architecture"
 description: "The internal architecture and conventions of the Dopbase Admin UI: controllers, services, stores, and HTTP communication."
 ---
 

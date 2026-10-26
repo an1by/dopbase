@@ -1,6 +1,6 @@
 ---
-title: "Import and export secret files"
-description: "Import dotenv, JSON, YAML, or TOML files, and export secrets for files or Docker."
+title: "Import and export .env, JSON, YAML, and TOML"
+description: "Import dotenv, JSON, YAML, or TOML files into Dopbase as individual secrets, then export them back to files or a Docker env file."
 ---
 
 # Import and export secret files

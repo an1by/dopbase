@@ -1,5 +1,5 @@
 ---
-title: "AI agent access"
+title: "Give AI agents scoped access to secrets"
 description: "Give an AI coding agent access to Dopbase project structure and secret metadata without exposing secret values."
 ---
 

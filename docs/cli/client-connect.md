@@ -1,5 +1,5 @@
 ---
-title: "dopbase client connect"
+title: "Connect the CLI to a server"
 description: "Select the Dopbase server used by later client commands with dopbase client connect, including the localhost default."
 ---
 
