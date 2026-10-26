@@ -1,6 +1,6 @@
 ---
-title: "Roadmap and planned releases"
-description: "Planned Dopbase work by release, from v0.2.0 team features to integrations, key management, compliance, and the stable 1.0 release."
+title: "Roadmap: Upcoming Features and Planned Releases"
+description: "Explore the Dopbase product roadmap, including upcoming features, planned releases, and future updates for managing environment variables and secrets securely"
 ---
 
 # Roadmap
