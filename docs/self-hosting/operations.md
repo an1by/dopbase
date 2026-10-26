@@ -47,7 +47,9 @@ Application logs may include timestamps, operation names, request identifiers, s
 
 ## Upgrades
 
-Back up the database and master key before an upgrade. Review the release notes for migration and compatibility information before replacing the executable.
+Back up the database and master key before an upgrade. Review the [release notes](https://github.com/dopbase/dopbase/releases) for migration and compatibility information before replacing the executable.
+
+The server runs database migrations when it starts, and there is no automatic downgrade. A database opened by 0.1.10 cannot be used by 0.1.9, so to go back you restore the backup you made before the upgrade.
 
 ## Incident response
 

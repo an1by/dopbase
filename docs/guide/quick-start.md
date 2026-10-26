@@ -8,10 +8,12 @@ description: "Install Dopbase, start a local secrets server, import an existing 
 This walkthrough installs Dopbase {{version}}, starts a local server, imports an
 existing `.env` file, and runs an application with its secrets.
 
-::: warning Backup compatibility
-Databases and backups from unsupported earlier releases cannot be used. Keep the
-matching `master.key` with every backup. This command change requires no database
-migration; already initialized instances do not need setup again.
+::: warning Upgrading from 0.1.9
+Dopbase {{version}} migrates an existing database when the server starts, and a
+migrated database cannot go back to 0.1.9. Back up the database and
+`master.key` before you upgrade. Instances that are already set up do not need
+setup again. Databases and backups from unsupported earlier releases cannot be
+used.
 :::
 
 ## 1. Install Dopbase
