@@ -1,5 +1,5 @@
 ---
-title: "Account settings"
+title: "Admin UI: account settings"
 description: "Manage your profile, update passwords, view session status, and understand offline password recovery in the Dopbase Admin UI."
 ---
 

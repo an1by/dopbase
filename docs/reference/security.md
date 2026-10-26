@@ -1,5 +1,5 @@
 ---
-title: "Security model"
+title: "Security model and encryption"
 description: "The Dopbase security model: encryption of secret values, separation of master key material, audit records, and access control."
 ---
 

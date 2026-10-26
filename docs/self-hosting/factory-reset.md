@@ -1,5 +1,5 @@
 ---
-title: "Factory reset"
+title: "Factory reset a server"
 description: "Understand what factory reset removes and how root confirms this destructive action in the Danger Zone."
 ---
 

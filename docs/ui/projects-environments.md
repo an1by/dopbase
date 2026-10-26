@@ -1,6 +1,6 @@
 ---
-title: "Projects and environments"
-description: "How the Admin UI organizes projects, environments, and secrets, and how to navigate between them."
+title: "Admin UI: projects and environments"
+description: "Browse projects and environments in the Dopbase Admin UI, share direct links to an environment, and manage its runner tokens."
 ---
 
 # Projects and environments

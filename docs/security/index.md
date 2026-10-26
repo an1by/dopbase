@@ -1,6 +1,6 @@
 ---
 title: "Public security updates"
-description: "Monthly public summaries of Dopbase security reviews, improvements, and scanner results."
+description: "Monthly public summaries of Dopbase security work: review findings, hardening changes, and automated scanner results, without sensitive details."
 ---
 
 # Public security updates

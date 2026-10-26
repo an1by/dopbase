@@ -1,5 +1,5 @@
 ---
-title: "Troubleshooting"
+title: "Troubleshooting the server and CLI"
 description: "Fix common Dopbase problems: client connection failures, authentication errors, and server or storage issues."
 ---
 

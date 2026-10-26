@@ -1,5 +1,5 @@
 ---
-title: "Audit events"
+title: "Audit event reference"
 description: "See which sensitive actions Dopbase records, who performed them, where they happened, and which secret data is excluded."
 ---
 

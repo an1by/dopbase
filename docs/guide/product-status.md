@@ -1,6 +1,6 @@
 ---
-title: "Product status"
-description: "What ships in Dopbase: the Rust server, CLI, Admin UI, REST API, and SQLite storage in one executable, plus current operational boundaries."
+title: "Product status: what ships in latest version"
+description: "What ships in Dopbase latest version: the Rust server, CLI, Admin UI, REST API, and SQLite storage in one executable, plus current operational boundaries."
 ---
 
 # Product status

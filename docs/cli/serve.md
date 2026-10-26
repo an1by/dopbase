@@ -1,6 +1,6 @@
 ---
-title: "Server lifecycle"
-description: "Start, stop, restart, inspect, and read logs from a local Dopbase server."
+title: "Server lifecycle: start, stop, status, and logs"
+description: "Start, stop, restart, and check a self-hosted Dopbase server from the CLI, run it in the foreground or background, and read its logs."
 ---
 
 # Server lifecycle

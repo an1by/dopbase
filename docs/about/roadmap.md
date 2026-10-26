@@ -1,5 +1,5 @@
 ---
-title: "Roadmap"
+title: "Roadmap and planned releases"
 description: "The Dopbase roadmap: what ships and what is planned next."
 ---
 

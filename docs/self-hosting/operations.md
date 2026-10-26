@@ -1,5 +1,5 @@
 ---
-title: "Operations"
+title: "Production operations: TLS, monitoring, upgrades"
 description: "Operate a Dopbase server safely: network and TLS setup, monitoring, upgrades, backups, and recovery for a secrets manager."
 ---
 

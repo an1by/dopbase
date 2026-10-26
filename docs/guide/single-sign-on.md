@@ -1,5 +1,5 @@
 ---
-title: "Single sign-on"
+title: "Single sign-on (OIDC) for the Admin UI"
 description: "Let people sign in to the Admin UI with Google, Microsoft Entra ID, Okta, Keycloak, or another OpenID Connect provider."
 ---
 

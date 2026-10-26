@@ -1,5 +1,5 @@
 ---
-title: "Reference"
+title: "Reference: security, API, and identity"
 description: "Technical specifications, API documentation, security architecture, and operational details for Dopbase."
 ---
 

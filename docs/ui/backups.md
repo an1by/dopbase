@@ -1,5 +1,5 @@
 ---
-title: "Backups and restoration"
+title: "Admin UI: backups and restore"
 description: "Manage system-wide encrypted backups, download and upload .dop archives, and restore server snapshots from the Admin UI."
 ---
 

@@ -1,5 +1,5 @@
 ---
-title: "Quick start"
+title: "Quick start: install and run your first app"
 description: "Install Dopbase, start a local secrets server, import an existing .env file, and run an application with its secrets."
 ---
 

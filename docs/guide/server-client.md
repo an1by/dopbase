@@ -1,5 +1,5 @@
 ---
-title: "Server and client"
+title: "Server and client architecture"
 description: "One executable, two roles: how the Dopbase server protects and serves secrets while the client tells it what to do over the REST API."
 ---
 

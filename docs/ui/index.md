@@ -1,5 +1,5 @@
 ---
-title: "Admin UI"
+title: "Admin UI overview"
 description: "The Dopbase Admin UI is the browser interface for a self-hosted server, embedded in the same executable with nothing extra to install."
 ---
 
