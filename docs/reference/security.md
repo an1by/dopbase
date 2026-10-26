@@ -137,3 +137,5 @@ always fails closed.
 Dopbase accepts private vulnerability reports through [GitHub's private vulnerability reporting form](https://github.com/dopbase/dopbase/security/advisories/new).
 
 Do not publish an undisclosed vulnerability in an issue, discussion, or pull request. Reports must not contain live credentials, customer data, private service URLs, or secrets from a system the reporter does not own. Read the repository's [security policy](https://github.com/dopbase/dopbase/security/policy) for the complete reporting and disclosure process.
+
+Monthly summaries of security reviews and scanner results are published under [public security updates](/security/).

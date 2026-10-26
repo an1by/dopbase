@@ -102,7 +102,9 @@ dopbase client connect <dopbase-cloud-url>
 ```
 
 Dopbase Cloud is planned as a managed server endpoint. It will not control or
-depend on an independent self-hosted installation.
+depend on an independent self-hosted installation. See [Dopbase Cloud](/cloud/)
+for its status, and [`dopbase client connect`](/cli/client-connect) for how the
+client validates and saves a server.
 
 ## Connection failures
 

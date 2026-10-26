@@ -113,8 +113,8 @@ Environment:     none (set with `dopbase env default <ENVIRONMENT_REF>`)
 ```
 
 No repository or global config file is required for the implicit local server.
-Use `dopbase client connect <server-url>` when targeting another local or
-self-hosted instance.
+Use [`dopbase client connect <server-url>`](/cli/client-connect) when targeting
+another local or self-hosted instance.
 
 ## 5. Sign in
 
@@ -138,6 +138,9 @@ Dopbase shows the variable count and asks for a new target such as
 `my-project/development`. It then creates the project and environment in one
 transaction and stores every `.env` entry as an encrypted secret. After the
 import, it asks whether to delete `.env`, with Yes selected by default.
+
+To load JSON, YAML, or TOML files, or to update an environment that already
+exists, see [import and export secret files](/guide/import-env).
 
 ## 7. Run the application
 
