@@ -8,6 +8,7 @@ import config from "../docs/.vitepress/config.mts";
 import {
   documentationVersion,
   documentationVersionPlugin,
+  replaceVersionPlaceholder,
 } from "../docs/.vitepress/version.ts";
 
 const docsDirectory = new URL("../docs", import.meta.url).pathname;
@@ -130,7 +131,101 @@ Version {{version}}
   console.log(`Documentation placeholders resolve to ${pkg.version}.`);
 }
 
+async function testPageMetadata() {
+  const markdown = await createMarkdownRenderer("docs", config.markdown);
+  const files = await collectMarkdownFiles(docsDirectory);
+  const titles = new Map();
+  const descriptions = new Map();
+
+  for (const file of files) {
+    const page = relative(docsDirectory, file);
+    const env = {};
+    await markdown.render(
+      replaceVersionPlaceholder(await readFile(file, "utf8")),
+      env,
+    );
+    const { title, description, titleTemplate } = env.frontmatter ?? {};
+
+    assert(title, `${page} must set a title in its frontmatter`);
+    const fullTitle = titleTemplate === false ? title : `${title} · Dopbase`;
+    assert(
+      fullTitle.length <= 60,
+      `${page} title is ${fullTitle.length} characters; keep it within 60`,
+    );
+    assert(
+      description?.length >= 100 && description.length <= 160,
+      `${page} description is ${description?.length ?? 0} characters; use 100 to 160`,
+    );
+    assert(
+      !titles.has(title),
+      `${page} repeats the title of ${titles.get(title)}`,
+    );
+    assert(
+      !descriptions.has(description),
+      `${page} repeats the description of ${descriptions.get(description)}`,
+    );
+    titles.set(title, page);
+    descriptions.set(description, page);
+  }
+
+  console.log(`Checked titles and descriptions of ${files.length} pages.`);
+}
+
+async function testHeadTags() {
+  const transform = (pageData, title) =>
+    config.transformHead({ pageData, title, head: [] });
+  const meta = (head, key) =>
+    head.find(
+      ([tag, attrs]) =>
+        tag === "meta" && (attrs.property === key || attrs.name === key),
+    )?.[1].content;
+
+  const head = await transform(
+    {
+      relativePath: "guide/quick-start.md",
+      title: "Quick start",
+      frontmatter: { description: "Install Dopbase." },
+      lastUpdated: Date.UTC(2026, 9, 26),
+    },
+    "Quick start · Dopbase",
+  );
+  assert.equal(meta(head, "og:locale"), "en_US");
+  assert.equal(meta(head, "og:title"), "Quick start · Dopbase");
+  assert.equal(meta(head, "twitter:title"), "Quick start · Dopbase");
+  assert.equal(meta(head, "article:modified_time"), "2026-10-26T00:00:00.000Z");
+
+  const jsonLd = JSON.parse(
+    head.find(([, attrs]) => attrs.type === "application/ld+json")[2],
+  );
+  const [article, breadcrumbs] = jsonLd["@graph"];
+  assert.equal(article.dateModified, "2026-10-26T00:00:00.000Z");
+  assert.deepEqual(
+    breadcrumbs.itemListElement.map((item) => item.name),
+    ["Docs", "Guide", "Quick start"],
+  );
+
+  const home = await transform(
+    { relativePath: "index.md", title: "Dopbase", frontmatter: {} },
+    "Dopbase",
+  );
+  const homeJsonLd = JSON.parse(
+    home.find(([, attrs]) => attrs.type === "application/ld+json")[2],
+  );
+  assert.equal(homeJsonLd["@graph"][1].softwareVersion, pkg.version);
+
+  const notFound = await transform(
+    { relativePath: "404.md", isNotFound: true, title: "404", frontmatter: {} },
+    "404 · Dopbase",
+  );
+  assert.deepEqual(notFound, [
+    ["meta", { name: "robots", content: "noindex" }],
+  ]);
+  console.log("Head tags carry branded titles, dates, and breadcrumbs.");
+}
+
 await testMermaidDiagrams();
 await testMermaidViewer();
 await testImageViewer();
 await testDocumentationVersion();
+await testPageMetadata();
+await testHeadTags();
