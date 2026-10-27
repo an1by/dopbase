@@ -25,6 +25,7 @@ const sectionNames: Record<string, string> = {
   cloud: "Cloud",
   reference: "Reference",
   about: "About",
+  adr: "Architecture decisions",
   security: "Security",
 };
 
@@ -472,6 +473,19 @@ const config = defineConfig({
             { text: "Open source", link: "/about/open-source" },
             { text: "Roadmap", link: "/about/roadmap" },
             { text: "Product boundaries", link: "/about/product-boundaries" },
+            { text: "Architecture decisions (fork)", link: "/adr/" },
+          ],
+        },
+      ],
+      "/adr/": [
+        {
+          text: "Architecture decisions",
+          items: [
+            { text: "Overview", link: "/adr/" },
+            {
+              text: "ADR 0001 — an1by fork",
+              link: "/adr/0001-an1by-fork",
+            },
           ],
         },
       ],
