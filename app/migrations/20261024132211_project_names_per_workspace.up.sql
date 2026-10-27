@@ -1,3 +1,4 @@
+-- Project names are unique per workspace instead of globally.
 PRAGMA foreign_keys = OFF;
 
 CREATE TABLE projects__names_per_workspace (

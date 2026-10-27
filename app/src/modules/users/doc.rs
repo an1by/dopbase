@@ -12,7 +12,8 @@ use utoipa::OpenApi;
     controller::get,
     controller::create,
     controller::update,
-    controller::delete
+    controller::delete,
+    controller::unlink_sso
   ),
   components(schemas(
     UserResponse,

@@ -157,11 +157,12 @@ Commands:
   status   Alias for `dopbase client status`
   init     Create a project, its first environment, and import secrets
   project  Manage projects (create, list, show, rename, delete)
-  env      Manage environments inside a project (create, clone, list, rename, delete)
-  secret   Manage secrets in an environment (list, set, get, delete)
+  env      Manage environments inside a project (create, clone, edit, list, rename, delete)
+  secret   Manage secrets in an environment (list, set, get, delete, history, rollback)
   import   Bulk-import secrets into an environment from a dotenv, JSON, YAML, or TOML source
   export   Export secrets as dotenv, JSON, YAML, TOML, or a Docker env file
   token    Manage CI/runner access tokens for an environment
+  audit    Verify the integrity of the audit log (administrator only)
   run      Run a command with an environment's secrets injected as env vars
   cache    Inspect and clean the encrypted runtime cache for the active server
   admin    Offline server administration
@@ -201,8 +202,12 @@ Environment variables:
   DOPBASE_WEB_UI                  Enable or disable the web UI (default: true)
   DOPBASE_MASTER_KEY_PATH         Path to the server master key file `./path/to/your.key`
   DOPBASE_SHUTDOWN_GRACE_SECONDS  Seconds allowed for graceful shutdown
+  DOPBASE_AUDIT_RETENTION_DAYS    Days to keep audit records (unset keeps the whole log)
+  DOPBASE_SECRET_HISTORY_VERSIONS Versions per secret that can be rolled back to (default: 20)
+  DOPBASE_TRUSTED_PROXIES         Proxies allowed to report the client IP, comma-separated
 
 Quickstart:
+  dopbase server setup                     # initialize the local instance once
   dopbase server start                     # start on http://localhost:8840; fresh instances enter setup
   dopbase server start --background        # run the server in the background (also -b)
   dopbase server stop                      # stop the background server
@@ -258,11 +263,12 @@ SQLite database, lock files, configuration, and local master key live under
 
 Read the [public documentation](./docs/) for the product model, CLI, self-hosting guidance, security design, and roadmap.
 
-Dopbase 0.1.9 adds guided server setup, automatic first-run initialization,
-optional web UI, and background server restart. It includes environment cloning,
-configurable token expiry, guided `.env` setup, four roles, user management,
-read-only AI accounts, an instance overview, encrypted backups, and crash-safe
-factory reset.
+Dopbase 0.1.10 adds single sign-on for the Admin UI through OpenID Connect,
+browser approval for `dopbase login`, and secret version history with rollback.
+The audit log is a hash chain that `dopbase audit verify` checks, and it can be
+listed, exported, and pruned on a schedule. It also includes guided server
+setup, an optional web UI, environment cloning, four roles, user management,
+read-only AI accounts, encrypted backups, and crash-safe factory reset.
 
 See [users and AI agents](./docs/ui/users.md) and [role permissions](./docs/reference/identity.md) for how access works.
 Version 0.1.0 starts with a fresh data directory. Databases and backups from
@@ -292,12 +298,12 @@ See [server and client](./docs/guide/server-client.md) for the full walkthrough.
 
 ## Repository layout
 
-| Path         | Purpose                                         | Current state                 |
-| ------------ | ----------------------------------------------- | ----------------------------- |
-| `app/`       | Rust service and command-line application       | v0.1.9 backend implementation |
-| `app/tests/` | Rust integration tests                          | Backend and CLI test suite    |
-| `src/`       | Vue administration interface and frontend tests | Embedded Admin UI             |
-| `docs/`      | VitePress product documentation                 | Active public specification   |
+| Path         | Purpose                                         | Current state                  |
+| ------------ | ----------------------------------------------- | ------------------------------ |
+| `app/`       | Rust service and command-line application       | v0.1.10 backend implementation |
+| `app/tests/` | Rust integration tests                          | Backend and CLI test suite     |
+| `src/`       | Vue administration interface and frontend tests | Embedded Admin UI              |
+| `docs/`      | VitePress product documentation                 | Active public specification    |
 
 ## Development
 

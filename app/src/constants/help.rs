@@ -13,6 +13,9 @@ Environment variables:
   DOPBASE_MASTER_KEY_PATH         Path to the server master key file `./path/to/your.key`
   DOPBASE_SHUTDOWN_GRACE_SECONDS  Seconds allowed for graceful shutdown
   DOPBASE_CONTAINER               Docker container name for --container and dopbase docker exec (default: dopbase)
+  DOPBASE_AUDIT_RETENTION_DAYS    Days to keep audit records (unset keeps the whole log)
+  DOPBASE_SECRET_HISTORY_VERSIONS Versions per secret that can be rolled back to (default: 20)
+  DOPBASE_TRUSTED_PROXIES         Proxies allowed to report the client IP, comma-separated
 
 Quickstart:
   dopbase server setup                     # initialize the local instance once

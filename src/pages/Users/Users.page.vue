@@ -24,8 +24,8 @@ const { state, actions } = useUsersController();
 
 <template>
   <DashboardLayout>
-    <div class="mx-auto max-w-5xl p-8">
-      <header class="mb-6 flex items-center justify-between">
+    <div class="mx-auto max-w-5xl px-4 py-6 sm:px-6 lg:p-8">
+      <header class="mb-6 flex flex-wrap items-start justify-between gap-4">
         <div>
           <h1 class="text-lg font-semibold text-ink-strong">Users</h1>
           <p class="mt-1 text-sm text-ink-muted">
@@ -66,23 +66,43 @@ const { state, actions } = useUsersController();
         <div
           v-for="user in state.users"
           :key="user.id"
-          class="flex items-center gap-3 border-b border-line-soft px-4 py-3 last:border-0">
-          <div class="min-w-0 flex-1">
+          class="flex flex-wrap items-center gap-x-3 gap-y-2 border-b border-line-soft px-4 py-3 last:border-0">
+          <div class="min-w-0 flex-1 basis-full sm:basis-0">
             <p class="truncate font-mono text-sm text-ink-strong">
               {{ user.email }}
             </p>
-            <DbBadge :tone="user.role === 'root' ? 'accent' : 'neutral'">
-              {{
-                user.role === "root"
-                  ? "Super admin (root)"
-                  : user.role === "member"
-                    ? "Member"
-                    : "Admin"
-              }}
-            </DbBadge>
+            <div class="flex flex-wrap items-center gap-1.5">
+              <!-- TODO(rbac): badge labels for the fixed roles. Show each
+                   role's own name from the server once roles are
+                   configurable. -->
+              <DbBadge :tone="user.role === 'root' ? 'accent' : 'neutral'">
+                {{
+                  user.role === "root"
+                    ? "Super admin (root)"
+                    : user.role === "member"
+                      ? "Member"
+                      : "Admin"
+                }}
+              </DbBadge>
+              <DbBadge v-if="!user.hasPassword" tone="warn">
+                No password
+              </DbBadge>
+              <DbBadge v-if="user.ssoLinked" tone="ok">SSO linked</DbBadge>
+            </div>
           </div>
           <DbButton
+            v-if="user.ssoLinked && user.role !== 'root'"
+            class="ml-auto sm:ml-0"
+            size="sm"
+            variant="ghost"
+            :loading="state.unlinkingUser === user.id"
+            data-testid="unlink-sso"
+            @click="actions.unlinkSso(user)">
+            Unlink SSO
+          </DbButton>
+          <DbButton
             v-if="user.role !== 'root'"
+            :class="user.ssoLinked ? '' : 'ml-auto sm:ml-0'"
             size="sm"
             variant="secondary"
             @click="actions.openEdit(user)">
@@ -100,11 +120,11 @@ const { state, actions } = useUsersController();
 
       <!-- AI Agents section -->
       <section class="mt-8">
-        <header class="mb-3 flex items-center justify-between">
+        <header class="mb-3 flex flex-wrap items-start justify-between gap-3">
           <div>
             <h2 class="text-sm font-semibold text-ink-strong">AI agents</h2>
             <p class="text-xs text-ink-muted">
-              Generate agent tokens with password confirmation.
+              Generating an agent token asks you to confirm it's you.
             </p>
           </div>
           <DbButton
@@ -140,9 +160,9 @@ const { state, actions } = useUsersController();
           <div
             v-for="account in state.serviceAccounts"
             :key="account.id"
-            class="flex items-center gap-3 border-b border-line-soft px-4 py-3 last:border-0">
-            <div class="min-w-0 flex-1">
-              <p class="font-mono text-sm text-ink-strong">
+            class="flex flex-wrap items-center gap-x-3 gap-y-2 border-b border-line-soft px-4 py-3 last:border-0">
+            <div class="min-w-0 flex-1 basis-full sm:basis-0">
+              <p class="truncate font-mono text-sm text-ink-strong">
                 {{ account.name }}
               </p>
               <DbBadge tone="neutral">AI agent</DbBadge>
@@ -165,7 +185,7 @@ const { state, actions } = useUsersController();
                 </p>
               </div>
             </div>
-            <div class="flex items-center gap-2">
+            <div class="ml-auto flex items-center gap-2">
               <DbButton
                 size="sm"
                 variant="secondary"
@@ -211,15 +231,21 @@ const { state, actions } = useUsersController();
             @input="state.fieldErrors.email = undefined" />
           <DbInput
             v-model="state.password"
-            :label="state.editing ? 'New password (optional)' : 'Password'"
+            :label="
+              state.editing || state.ssoEnabled
+                ? 'Password (optional)'
+                : 'Password'
+            "
             type="password"
             autocomplete="new-password"
             :error="state.fieldErrors.password"
-            :required="!state.editing"
+            :required="!state.editing && !state.ssoEnabled"
             :hint="
               state.editing
-                ? 'Leave blank to keep existing password.'
-                : 'At least 12 characters.'
+                ? 'Leave blank to keep the current password.'
+                : state.ssoEnabled
+                  ? 'At least 12 characters. Leave blank if they will sign in only with single sign-on.'
+                  : 'At least 12 characters.'
             "
             @input="state.fieldErrors.password = undefined" />
         </div>
@@ -311,7 +337,11 @@ const { state, actions } = useUsersController();
               <LockIcon class="h-4 w-4" />
             </div>
             <p class="text-sm text-ink">
-              Enter your password to generate a new token for
+              {{
+                state.tokenNeedsPassword
+                  ? "Enter your password to generate a new token for"
+                  : "Generate a new token for"
+              }}
               <span class="font-semibold text-ink-strong">{{
                 state.agentForToken?.name
               }}</span
@@ -346,6 +376,7 @@ const { state, actions } = useUsersController();
           </div>
 
           <DbInput
+            v-if="state.tokenNeedsPassword"
             v-model="state.tokenPassword"
             label="Password"
             type="password"
@@ -372,7 +403,9 @@ const { state, actions } = useUsersController();
               type="submit"
               :loading="state.generatingToken"
               :disabled="
-                state.tokenPassword.length === 0 || state.generatingToken
+                (state.tokenNeedsPassword &&
+                  state.tokenPassword.length === 0) ||
+                state.generatingToken
               ">
               Generate token
             </DbButton>

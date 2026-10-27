@@ -1,5 +1,5 @@
 ---
-title: "Security model"
+title: "Security model and encryption"
 description: "The Dopbase security model: encryption of secret values, separation of master key material, audit records, and access control."
 ---
 
@@ -55,6 +55,18 @@ Networked clients need an authenticated, encrypted connection to the server. Loc
 ## Data exposure
 
 Authorized users may need to reveal or export a value. These operations should be explicit, permission-controlled, and audited. Secret names can also disclose information, so access to metadata still needs authorization.
+
+## Failed attempt limits
+
+Password sign-in allows 5 failed attempts per email in 15 minutes. The window starts at the first failure, and a correct password clears the count. Confirming your password for a sensitive action, changing it, and factory reset share one budget per account. The setup wizard has a budget of its own, and so do CLI login codes and single sign-on callbacks.
+
+The counts live in server memory, so restarting the server clears every lockout. The server tracks up to 10,000 keys before it starts dropping the ones with the fewest failures. It never drops a key that is locked out, so sending failed attempts for other emails cannot unlock an account. If locked keys reach 100,000, the server refuses new keys until some of them expire.
+
+## Audit integrity
+
+Audit records form a hash chain: each record stores its position, the hash of the record before it, and the hash of its own contents. Editing a record, removing one, or inserting one out of order breaks the chain at that point, which `dopbase audit verify` and `GET /api/v1/audit-events/verify` report.
+
+The chain is tamper evidence, not access control. Someone who can write the database file can rewrite every hash or delete the newest records, and the chain alone still verifies. That is detected only against a copy of the head kept outside the server: verify with `--anchor SEQ:HASH`, ship the `audit checkpoint` lines the server logs, or stream `dopbase audit export` to write-once storage. Records written before the chain existed are reported as legacy and are not protected. A restore archives the current log before replacing it. See [audit events](/reference/audit-events#integrity-and-verification) for the full threat model and what to do when verification fails.
 
 ## Terminal editor sessions
 
@@ -125,3 +137,5 @@ always fails closed.
 Dopbase accepts private vulnerability reports through [GitHub's private vulnerability reporting form](https://github.com/dopbase/dopbase/security/advisories/new).
 
 Do not publish an undisclosed vulnerability in an issue, discussion, or pull request. Reports must not contain live credentials, customer data, private service URLs, or secrets from a system the reporter does not own. Read the repository's [security policy](https://github.com/dopbase/dopbase/security/policy) for the complete reporting and disclosure process.
+
+Monthly summaries of security reviews and scanner results are published under [public security updates](/security/).

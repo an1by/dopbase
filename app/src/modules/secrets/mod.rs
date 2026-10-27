@@ -7,7 +7,7 @@ pub mod controller;
 pub mod doc;
 pub mod error;
 pub mod model;
-mod repository;
+pub(crate) mod repository;
 pub mod service;
 pub fn routes() -> Router<AppState> {
   Router::new()
@@ -40,5 +40,17 @@ pub fn routes() -> Router<AppState> {
     .route(
       crate::constants::api::secrets::REVEAL,
       post(controller::reveal),
+    )
+    .route(
+      crate::constants::api::secrets::VERSIONS,
+      get(controller::versions),
+    )
+    .route(
+      crate::constants::api::secrets::VERSION_REVEAL,
+      post(controller::reveal_version),
+    )
+    .route(
+      crate::constants::api::secrets::ROLLBACK,
+      post(controller::rollback),
     )
 }

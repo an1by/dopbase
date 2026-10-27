@@ -1,5 +1,6 @@
 use app::cli::args::{
-  AdminCommand, Cli, Command, ExportArgs, ImportArgs, InitArgs, RunArgs, ServerCommand,
+  AdminCommand, AuditCommand, AuditFilters, Cli, Command, ExportArgs, ImportArgs, InitArgs,
+  RunArgs, SecretCommand, ServerCommand,
 };
 use app::cli::secret_format::{ExportFormat, SecretFormat};
 use app::constants::config::executable_environment_names;
@@ -65,6 +66,59 @@ fn run_preserves_child_token_flags_after_the_separator() {
     panic!("expected run command");
   };
   assert_eq!(command, ["printenv", "--token", "child-value", "-t"]);
+}
+
+#[test]
+fn run_selection_flags_repeat_and_split_on_commas() {
+  let cli = Cli::try_parse_from([
+    "dopbase",
+    "run",
+    "env_482731",
+    "--only",
+    "API_KEY,DATABASE_URL",
+    "--only",
+    "OPTIONAL_KEY",
+    "--allow-missing",
+    "--preserve-env",
+    "PORT",
+    "--preserve-env",
+    "LOG_LEVEL,TZ",
+    "--",
+    "printenv",
+    "--only",
+    "child-value",
+  ])
+  .unwrap();
+  let Command::Run(RunArgs {
+    only,
+    allow_missing,
+    preserve_env,
+    command,
+    ..
+  }) = cli.command
+  else {
+    panic!("expected run command");
+  };
+  assert_eq!(only, ["API_KEY", "DATABASE_URL", "OPTIONAL_KEY"]);
+  assert!(allow_missing);
+  assert_eq!(preserve_env, ["PORT", "LOG_LEVEL", "TZ"]);
+  assert_eq!(command, ["printenv", "--only", "child-value"]);
+}
+
+#[test]
+fn run_selection_flags_reject_empty_or_invalid_keys() {
+  for arguments in [
+    &["--only", ""][..],
+    &["--only", "API_KEY,,DATABASE_URL"],
+    &["--only", "1KEY"],
+    &["--preserve-env", "PORT="],
+    &["--allow-missing"],
+  ] {
+    let mut argv = vec!["dopbase", "run", "env_482731"];
+    argv.extend_from_slice(arguments);
+    argv.extend_from_slice(&["--", "true"]);
+    assert!(Cli::try_parse_from(&argv).is_err(), "{arguments:?}");
+  }
 }
 
 #[test]
@@ -595,6 +649,280 @@ fn token_create_expiry_flag_accepts_hours_days_and_never() {
 }
 
 #[test]
+fn audit_verify_anchor_takes_a_sequence_and_a_full_hash() {
+  let hash = "9F86D081884C7D659A2FEAA0C55AD015A3BF4F1B2B0B822CD15D6C15B0F00A08";
+  let cli = Cli::try_parse_from([
+    "dopbase",
+    "audit",
+    "verify",
+    "--anchor",
+    &format!("42:{hash}"),
+  ])
+  .unwrap();
+  let Command::Audit {
+    command: AuditCommand::Verify {
+      anchor: Some((seq, parsed)),
+    },
+  } = cli.command
+  else {
+    panic!("expected audit verify with an anchor");
+  };
+  assert_eq!(seq, 42);
+  assert_eq!(parsed, hash.to_ascii_lowercase());
+  for value in [
+    "42",
+    "0:9f86d081884c7d659a2feaa0c55ad015a3bf4f1b2b0b822cd15d6c15b0f00a08",
+    "-1:9f86d081884c7d659a2feaa0c55ad015a3bf4f1b2b0b822cd15d6c15b0f00a08",
+    "42:9f86d0",
+    "42:zz86d081884c7d659a2feaa0c55ad015a3bf4f1b2b0b822cd15d6c15b0f00a08",
+  ] {
+    assert!(
+      Cli::try_parse_from(["dopbase", "audit", "verify", "--anchor", value]).is_err(),
+      "accepted {value}"
+    );
+  }
+}
+
+#[test]
+fn audit_verify_parses_with_the_global_json_flag() {
+  let cli = Cli::try_parse_from(["dopbase", "audit", "verify"]).unwrap();
+  assert!(matches!(
+    cli.command,
+    Command::Audit {
+      command: AuditCommand::Verify { anchor: None }
+    }
+  ));
+  let cli = Cli::try_parse_from(["dopbase", "--json", "audit", "verify"]).unwrap();
+  assert!(cli.json);
+  assert!(matches!(
+    cli.command,
+    Command::Audit {
+      command: AuditCommand::Verify { anchor: None }
+    }
+  ));
+}
+
+#[test]
+fn audit_list_parses_filters_limit_and_cursor() {
+  let cli = Cli::try_parse_from(["dopbase", "audit", "list"]).unwrap();
+  let Command::Audit {
+    command: AuditCommand::List {
+      filters,
+      limit,
+      cursor,
+    },
+  } = cli.command
+  else {
+    panic!("expected audit list");
+  };
+  assert_eq!(limit, 50);
+  assert!(cursor.is_none());
+  assert!(filters.action.is_none() && filters.project.is_none());
+
+  let cli = Cli::try_parse_from([
+    "dopbase",
+    "--json",
+    "audit",
+    "list",
+    "--action",
+    "secret.updated",
+    "--project",
+    "storefront",
+    "--environment",
+    "storefront/production",
+    "--actor",
+    "admin@example.com",
+    "--limit",
+    "200",
+    "--cursor",
+    "MjAyNi0xMC0yM3xhdWRfMQ",
+  ])
+  .unwrap();
+  assert!(cli.json);
+  let Command::Audit {
+    command: AuditCommand::List {
+      filters,
+      limit,
+      cursor,
+    },
+  } = cli.command
+  else {
+    panic!("expected audit list");
+  };
+  assert_eq!(filters.action.as_deref(), Some("secret.updated"));
+  assert_eq!(filters.project.as_deref(), Some("storefront"));
+  assert_eq!(
+    filters.environment.as_deref(),
+    Some("storefront/production")
+  );
+  assert_eq!(filters.actor.as_deref(), Some("admin@example.com"));
+  assert_eq!(limit, 200);
+  assert_eq!(cursor.as_deref(), Some("MjAyNi0xMC0yM3xhdWRfMQ"));
+
+  for limit in ["0", "201", "-1"] {
+    assert!(
+      Cli::try_parse_from(["dopbase", "audit", "list", "--limit", limit]).is_err(),
+      "--limit {limit} should be rejected"
+    );
+  }
+}
+
+#[test]
+fn secret_history_and_rollback_parse_versions_and_limits() {
+  let cli = Cli::try_parse_from(["dopbase", "secret", "history", "app/prod", "API_KEY"]).unwrap();
+  let Command::Secret {
+    command: SecretCommand::History {
+      environment,
+      key,
+      limit,
+      before,
+    },
+  } = cli.command
+  else {
+    panic!("expected secret history");
+  };
+  assert_eq!(
+    (environment.as_str(), key.as_str()),
+    ("app/prod", "API_KEY")
+  );
+  assert_eq!(limit, 50);
+  assert!(before.is_none());
+
+  let cli = Cli::try_parse_from([
+    "dopbase", "secret", "history", "app/prod", "API_KEY", "--limit", "200", "--before", "7",
+  ])
+  .unwrap();
+  let Command::Secret {
+    command: SecretCommand::History { limit, before, .. },
+  } = cli.command
+  else {
+    panic!("expected secret history");
+  };
+  assert_eq!((limit, before), (200, Some(7)));
+
+  let cli = Cli::try_parse_from(["dopbase", "secret", "rollback", "app/prod", "API_KEY"]).unwrap();
+  let Command::Secret {
+    command: SecretCommand::Rollback { version, yes, .. },
+  } = cli.command
+  else {
+    panic!("expected secret rollback");
+  };
+  assert_eq!((version, yes), (None, false));
+  let cli = Cli::try_parse_from([
+    "dopbase", "secret", "rollback", "app/prod", "API_KEY", "3", "--yes",
+  ])
+  .unwrap();
+  let Command::Secret {
+    command: SecretCommand::Rollback { version, yes, .. },
+  } = cli.command
+  else {
+    panic!("expected secret rollback");
+  };
+  assert_eq!((version, yes), (Some(3), true));
+
+  let cli = Cli::try_parse_from([
+    "dopbase",
+    "secret",
+    "get",
+    "app/prod",
+    "API_KEY",
+    "--version",
+    "2",
+    "--reveal",
+  ])
+  .unwrap();
+  let Command::Secret {
+    command: SecretCommand::Get {
+      version, reveal, ..
+    },
+  } = cli.command
+  else {
+    panic!("expected secret get");
+  };
+  assert_eq!((version, reveal), (Some(2), true));
+
+  for arguments in [
+    &["dopbase", "secret", "history", "e", "K", "--limit", "0"][..],
+    &["dopbase", "secret", "history", "e", "K", "--limit", "201"],
+    &["dopbase", "secret", "history", "e", "K", "--before", "0"],
+    &["dopbase", "secret", "rollback", "e", "K", "0"],
+    &["dopbase", "secret", "rollback", "e", "K", "latest"],
+    &["dopbase", "secret", "get", "e", "K", "--version", "0"],
+  ] {
+    assert!(
+      Cli::try_parse_from(arguments).is_err(),
+      "{arguments:?} should be rejected"
+    );
+  }
+}
+
+#[test]
+fn audit_export_parses_its_filters_and_output() {
+  let cli = Cli::try_parse_from(["dopbase", "audit", "export"]).unwrap();
+  assert!(matches!(
+    cli.command,
+    Command::Audit {
+      command: AuditCommand::Export {
+        output: None,
+        force: false,
+        limit: None,
+        ..
+      }
+    }
+  ));
+  let cli = Cli::try_parse_from([
+    "dopbase",
+    "--json",
+    "audit",
+    "export",
+    "--output",
+    "audit.jsonl",
+    "--force",
+    "--action",
+    "secret.updated",
+    "--project",
+    "fixture",
+    "--environment",
+    "fixture/local",
+    "--actor",
+    "admin@example.com",
+    "--limit",
+    "10",
+  ])
+  .unwrap();
+  assert!(cli.json);
+  match cli.command {
+    Command::Audit {
+      command:
+        AuditCommand::Export {
+          output,
+          force,
+          filters:
+            AuditFilters {
+              action,
+              project,
+              environment,
+              actor,
+            },
+          limit,
+        },
+    } => {
+      assert_eq!(output.unwrap().to_str().unwrap(), "audit.jsonl");
+      assert!(force);
+      assert_eq!(action.unwrap(), "secret.updated");
+      assert_eq!(project.unwrap(), "fixture");
+      assert_eq!(environment.unwrap(), "fixture/local");
+      assert_eq!(actor.unwrap(), "admin@example.com");
+      assert_eq!(limit, Some(10));
+    }
+    unexpected => {
+      let _ = unexpected;
+      panic!("expected audit export");
+    }
+  }
+}
+
+#[test]
 fn incomplete_secret_commands_show_examples_and_environment_help() {
   let cases: &[(&[&str], &[&str])] = &[
     (
@@ -633,6 +961,20 @@ fn incomplete_secret_commands_show_examples_and_environment_help() {
       &[
         "Usage: dopbase secret delete",
         "dopbase secret delete payment-service/production API_KEY --yes",
+      ],
+    ),
+    (
+      &["dopbase", "secret", "history"],
+      &[
+        "Usage: dopbase secret history",
+        "dopbase secret history payment-service/production API_KEY --before 41",
+      ],
+    ),
+    (
+      &["dopbase", "secret", "rollback"],
+      &[
+        "Usage: dopbase secret rollback",
+        "dopbase secret rollback payment-service/production API_KEY 3 --yes",
       ],
     ),
   ];
@@ -902,6 +1244,8 @@ fn parses_each_public_command_and_detects_missing_cases() {
     &["dopbase", "secret", "set", "billing/local", "API_KEY"],
     &["dopbase", "secret", "get", "billing/local", "API_KEY"],
     &["dopbase", "secret", "delete", "billing/local", "API_KEY"],
+    &["dopbase", "secret", "history", "billing/local", "API_KEY"],
+    &["dopbase", "secret", "rollback", "billing/local", "API_KEY"],
     &["dopbase", "import", "billing/local", ".env"],
     &["dopbase", "export", "billing/local", "--stdout"],
     &[
@@ -945,6 +1289,9 @@ fn parses_each_public_command_and_detects_missing_cases() {
       "reset-password",
       "admin@example.com",
     ],
+    &["dopbase", "audit", "list"],
+    &["dopbase", "audit", "verify"],
+    &["dopbase", "audit", "export"],
     &["dopbase", "run", "--", "true"],
     &["dopbase", "cache", "list"],
     &["dopbase", "cache", "clean"],

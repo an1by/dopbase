@@ -1,5 +1,5 @@
 ---
-title: "Audit and instance status"
+title: "Admin UI: audit log and instance status"
 description: "Review what happened on your Dopbase server with the audit log and monitor instance status in the Admin UI."
 ---
 

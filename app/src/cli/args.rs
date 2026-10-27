@@ -7,13 +7,14 @@ use std::{
 
 use crate::{
   cli::commands::{
-    admin, auth, backup, cache, client, docker, environment, export, import, init, project,
+    admin, audit, auth, backup, cache, client, docker, environment, export, import, init, project,
     restore, run, secret, server, token, update, workspace,
   },
   constants::help::*,
 };
 
 pub use admin::AdminCommand;
+pub use audit::{AuditCommand, AuditFilters};
 pub use auth::LoginArgs;
 pub use backup::BackupArgs;
 pub use cache::CacheCommand;
@@ -177,7 +178,7 @@ pub enum Command {
     #[command(subcommand)]
     command: EnvCommand,
   },
-  /// Manage secrets in an environment (list, set, get, delete).
+  /// Manage secrets in an environment (list, set, get, delete, history, rollback).
   #[command(after_help = secret::HELP)]
   Secret {
     #[command(subcommand)]
@@ -201,6 +202,16 @@ pub enum Command {
   Token {
     #[command(subcommand)]
     command: TokenCommand,
+  },
+  /// Verify the integrity of the audit log (administrator only).
+  ///
+  /// The audit log is a hash chain: each record stores the hash of the one
+  /// before it. Verification recomputes every hash in order and reports the
+  /// first record that was modified, removed, or inserted after the fact.
+  #[command(after_help = audit::HELP)]
+  Audit {
+    #[command(subcommand)]
+    command: AuditCommand,
   },
   /// Run a command with an environment's secrets injected as env vars.
   ///

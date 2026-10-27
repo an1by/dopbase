@@ -1,5 +1,5 @@
 ---
-title: "Command reference"
+title: "CLI command reference"
 description: "Reference for every Dopbase CLI command: connections, authentication, projects, environments, and secret operations."
 ---
 
@@ -129,6 +129,12 @@ The server resolution order is:
 2. `DOPBASE_URL`
 3. The endpoint saved by `dopbase client connect`
 4. `http://localhost:8840`
+
+`dopbase login` asks for an email and password, or, when the server has single
+sign-on on, prints a link and a code to approve in the Admin UI. `--browser`
+always uses the Admin UI and prints the link for you to copy, `--browser-open`
+also opens it in this machine's browser, and `--password` always uses the
+prompt. See [browser login](/reference/identity#browser-login).
 
 Machine runners can save an encrypted credential with `dopbase login --token`.
 CI systems and deployment platforms should inject `DOPBASE_TOKEN` from their
@@ -283,7 +289,8 @@ dopbase env edit payment-service/staging --editor nvim --dry-run
 that the environment exists and lists its secret metadata. If it is empty,
 Dopbase asks whether to add secrets; pressing Enter exits without password
 confirmation or opening an editor. Existing sessions always require password
-confirmation before export. A login completed by this command counts as
+confirmation before export, or approval in the Admin UI for an account that
+cannot use a password. A login completed by this command counts as
 confirmation, so it does not ask twice.
 
 Editor selection uses `--editor`, then `VISUAL`, then `EDITOR`. If none is set,
@@ -342,13 +349,16 @@ deletion does not guarantee forensic erasure. Read the
 
 ## Secret commands
 
-| Command                                               | Purpose                     |
-| ----------------------------------------------------- | --------------------------- |
-| `dopbase secret list <ENVIRONMENT_REF>`               | List keys and safe metadata |
-| `dopbase secret set <ENVIRONMENT_REF> <KEY>`          | Create or update a value    |
-| `dopbase secret get <ENVIRONMENT_REF> <KEY>`          | Read safe metadata          |
-| `dopbase secret get <ENVIRONMENT_REF> <KEY> --reveal` | Explicitly reveal a value   |
-| `dopbase secret delete <ENVIRONMENT_REF> <KEY>`       | Delete one secret           |
+| Command                                                     | Purpose                                                   |
+| ----------------------------------------------------------- | --------------------------------------------------------- |
+| `dopbase secret list <ENVIRONMENT_REF>`                     | List keys and safe metadata                               |
+| `dopbase secret set <ENVIRONMENT_REF> <KEY>`                | Create or update a value                                  |
+| `dopbase secret get <ENVIRONMENT_REF> <KEY>`                | Read safe metadata                                        |
+| `dopbase secret get <ENVIRONMENT_REF> <KEY> --reveal`       | Explicitly reveal a value                                 |
+| `dopbase secret delete <ENVIRONMENT_REF> <KEY>`             | Delete one secret                                         |
+| `dopbase secret history <ENVIRONMENT_REF> <KEY>`            | List the stored versions of a secret                      |
+| `dopbase secret get <ENVIRONMENT_REF> <KEY> --version <N>`  | Read one version's metadata, or its value with `--reveal` |
+| `dopbase secret rollback <ENVIRONMENT_REF> <KEY> [VERSION]` | Restore an earlier value as a new version                 |
 
 `secret set` securely prompts for a value when attached to a terminal. Use
 `--stdin` for automation:
@@ -363,6 +373,53 @@ interactive password confirmation on every invocation and cannot be bypassed
 with `--json`, stdin, or a confirmation flag. Reveal and deletion operations
 are explicit, permission-controlled, and audited. Normal human and JSON output
 never contains a value.
+
+### History and rollback
+
+Every change to a secret is kept as a numbered version. `secret history` lists
+them newest first with the change, who made it, when, and a status:
+
+```text
+$ dopbase secret history payment-service/production DATABASE_URL
+VERSION   CHANGE                BY                SAVED                  STATUS
+v4        rolled back from v2   ana@example.com   2026-10-23 10:02 UTC   current
+v3        updated               bob@example.com   2026-10-22 18:40 UTC   available
+v2        imported              bob@example.com   2026-10-21 09:15 UTC   available
+v1        created               ana@example.com   2026-09-01 08:00 UTC   available
+
+4 version(s)
+```
+
+`available` versions can be restored. `expired` versions are past the
+[retention limit](/guide/projects-environments-secrets#versions-and-rollback):
+Dopbase still shows who changed them and when, but no longer stores the value.
+`--limit` sets the page size (1 to 200, default 50). When more versions exist,
+the command for the next page, with `--before`, is printed to standard error.
+`--json` prints the API page unchanged. History never contains values, and AI
+agent tokens can read it the same way they read `secret list`.
+
+`secret rollback` saves the value of an earlier version as a new version. It
+never edits history, so a rollback can be rolled back too. Leave out VERSION
+in a terminal to pick from the versions you can restore:
+
+```bash
+dopbase secret rollback payment-service/production DATABASE_URL     # pick a version
+dopbase secret rollback payment-service/production DATABASE_URL 2   # roll back to v2
+dopbase secret rollback payment-service/production DATABASE_URL 2 --yes
+```
+
+Before asking for confirmation, the command shows the current version, the
+version being restored, and the version number the result gets. It sends the
+current version with the request, so if someone changes the secret in the
+meantime the server refuses the rollback instead of overwriting their change.
+Without a terminal, pass both VERSION and `--yes`.
+
+Apps read the new value the next time they fetch secrets. Processes already
+started by `dopbase run` keep the old value until they restart.
+
+To check an old value before restoring it, use
+`dopbase secret get <ENVIRONMENT_REF> <KEY> --version <N> --reveal`. Like
+`--reveal` on the current value, it asks for your password and is audited.
 
 ## Import and export
 
@@ -539,6 +596,108 @@ read values for any environment in linked projects; the CLI still requires an
 explicit environment reference on each command (for example
 `blipsu/api/staging`). Neither token type can modify secrets.
 
+## Audit commands
+
+The audit log answers who performed a sensitive action, where it happened, and
+when. Administrators review it on the Audit page in the Admin UI or with
+`dopbase audit list`, verify its integrity from the terminal, and export it as
+JSON lines for external, write-once storage:
+
+```bash
+dopbase audit list --action secret.updated
+dopbase audit verify
+dopbase audit verify --anchor 42:<HEAD_HASH>
+dopbase audit export --output audit-2026-10-17.jsonl
+dopbase --json audit verify
+```
+
+| Command                | Purpose                               |
+| ---------------------- | ------------------------------------- |
+| `dopbase audit list`   | Show one page of events, newest first |
+| `dopbase audit verify` | Recompute the audit log's hash chain  |
+| `dopbase audit export` | Stream matching records as JSON lines |
+
+`dopbase audit list` prints a table of the newest events: time, chain
+sequence, actor, action, resource, project ID, and environment ID. It takes
+the same `--action`, `--project`, `--environment`, and `--actor` filters as
+export, and project and environment names are resolved to IDs before the
+request. `--limit` sets the page size from 1 to 200 (default 50):
+
+```bash
+dopbase audit list
+dopbase audit list --project storefront --environment storefront/production
+dopbase audit list --action secret.updated --actor admin@example.com --limit 100
+dopbase --json audit list --cursor <CURSOR>
+```
+
+When more events match, the command for the next page is printed to standard
+error with the same filters and a `--cursor` value. Copy it as is: the cursor
+is opaque, and the server does not check that it was issued for the same
+filters. Standard output holds only the table, so it can be piped to `grep` or
+`less`.
+
+`--json` prints the API page unchanged, `{"items": [...], "nextCursor": ...}`,
+with nothing on standard error. `nextCursor` is `null` on the last page. To
+read every matching record in a script, use `dopbase audit export` instead of
+paging by hand.
+
+The table leaves out each event's metadata; `--json` includes it. The command
+requires an administrator sign-in. A member gets the server's authorization
+error, and runner or agent tokens are refused before any audit request. Audit
+events never contain secret values, and the CLI does not fetch any. Control
+characters and bidirectional text markers stored in an event are shown as `?`,
+so a planted record cannot rewrite the lines around it in your terminal.
+
+Every audit record stores the hash of the record before it, so a record that
+was modified, removed, or inserted after the fact stands out at that point in
+the log. Verification walks the records in sequence order, stops at the first
+break, and reports how many records were checked before it. It reads no secret
+values.
+
+The command requires an administrator account. It exits with code `0` when the
+chain is intact and `2` when it is broken, so monitoring can alert on the
+result. When the chain is intact it prints the head sequence and hash, which
+you can save for external anchoring, and `--json` prints the full report. Records written before the chain existed are
+listed as legacy records; they carry no hashes but do not fail verification.
+
+The chain alone cannot tell a fully rewritten log, or one whose newest records
+were deleted, from an honest one. Save the head sequence and hash somewhere
+outside the server and pass them back with `--anchor SEQ:HASH`: the check fails
+when that record changed (`MISMATCH`) or no longer exists (`MISSING`). When
+[retention](/reference/audit-events#retention) has removed records,
+verification continues from the pruning anchor and reports
+`Pruned through: sequence N` instead of a gap. See
+[audit events](/reference/audit-events#integrity-and-verification) for what the
+chain does and does not prove.
+
+`dopbase audit export` writes one JSON object per line to standard output, or
+to a file with `--output <FILE>` (mode `0600`, never replacing an existing
+file without `--force`). Each line is the record exactly as the audit list API
+returns it, chain fields `seq`, `prevHash` and `recordHash` included, so any
+exported record can later serve as an `--anchor`:
+
+```bash
+dopbase audit export > audit.jsonl
+dopbase audit export --action secret.updated --limit 500
+dopbase audit export --project production --environment production/main
+```
+
+| Option                            | Purpose                                                     |
+| --------------------------------- | ----------------------------------------------------------- |
+| `--action <ACTION>`               | Only records with this action, for example `secret.updated` |
+| `--project <PROJECT_REF>`         | Only records for this project (name or ID)                  |
+| `--environment <ENVIRONMENT_REF>` | Only records for this environment (`PROJECT/NAME` or ID)    |
+| `--actor <ACTOR>`                 | Only records for this actor (email or actor ID)             |
+| `--limit <N>`                     | Stop after `N` records                                      |
+| `--output <FILE>`                 | Write to a file instead of standard output                  |
+| `--force`                         | Replace an existing output file                             |
+
+Without filters the whole log is exported by following pagination to the end.
+Export requires an administrator account, reads no secret values, and leaves
+standard output as raw JSON lines in every mode so it can be piped directly;
+with `--output` and `--json` the summary is printed as
+`{"exported":N,"path":"FILE"}` instead.
+
 ## Run a process
 
 Pass the environment directly:
@@ -579,12 +738,32 @@ how to set the default. Use `dopbase env default --clear` to remove it. An empty
 `DOPBASE_ENV` is an error and does not fall back.
 
 Before starting the child, Dopbase writes the resolved project, environment,
-immutable ID, loaded key count, and whether values came from the live server or
+immutable ID, injected key count, and whether values came from the live server or
 encrypted cache to standard error. It does not print values.
 
-Managed values override same-named variables inherited from the parent process.
-Dopbase authentication variables are removed from the child environment so the
-child application does not receive the credential used to contact Dopbase.
+Choose which secrets reach the child and which inherited values win:
+
+```bash
+dopbase run payment-service/production --only API_KEY,DATABASE_URL -- npm start
+dopbase run payment-service/development --preserve-env PORT,LOG_LEVEL -- npm run dev
+```
+
+| Flag                   | Effect                                                                                         |
+| ---------------------- | ---------------------------------------------------------------------------------------------- |
+| `--only <KEY>`         | Inject only these keys. Repeatable and comma-separated. A key that is not stored stops the run |
+| `--allow-missing`      | With `--only`, warn about keys that are not stored and start the child anyway                  |
+| `--preserve-env <KEY>` | Keep the inherited value for these keys. Repeatable and comma-separated                        |
+
+Without `--preserve-env`, stored values replace same-named variables inherited
+from the parent process. Dopbase never injects its control variables
+(`DOPBASE_TOKEN`, `DOPBASE_URL`, `DOPBASE_ENV`, `DOPBASE_DATA_DIR`,
+`DOPBASE_SECRETS_PATH`) or the shell variables `PATH`, `HOME`, `PS1`, `PS2`,
+`XDG_*`, and `LC_*` from stored secrets. Names that load code, such as
+`LD_PRELOAD` and `NODE_OPTIONS`, are skipped unless `--only` names them, and
+are then injected with a warning. `DOPBASE_TOKEN` is also removed from
+the inherited environment, so the child never receives the credential used to
+contact Dopbase. See [choose which secrets reach the application](/guide/run-an-application#choose-which-secrets-reach-the-application)
+for the full lists.
 
 Every successful live retrieval refreshes the credential-bound encrypted cache.
 Connection failures, timeouts, and 5xx responses fall back to the latest

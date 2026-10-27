@@ -1,5 +1,5 @@
 ---
-title: "Quick start"
+title: "Quick start: install and run your first app"
 description: "Install Dopbase, start a local secrets server, import an existing .env file, and run an application with its secrets."
 ---
 
@@ -8,10 +8,12 @@ description: "Install Dopbase, start a local secrets server, import an existing 
 This walkthrough installs Dopbase {{version}}, starts a local server, imports an
 existing `.env` file, and runs an application with its secrets.
 
-::: warning Backup compatibility
-Databases and backups from unsupported earlier releases cannot be used. Keep the
-matching `master.key` with every backup. This command change requires no database
-migration; already initialized instances do not need setup again.
+::: warning Upgrading from 0.1.9
+Dopbase {{version}} migrates an existing database when the server starts, and a
+migrated database cannot go back to 0.1.9. Back up the database and
+`master.key` before you upgrade. Instances that are already set up do not need
+setup again. Databases and backups from unsupported earlier releases cannot be
+used.
 :::
 
 ## 1. Install Dopbase
@@ -127,8 +129,8 @@ Environment:     none (set with `dopbase env default <ENVIRONMENT_REF>`)
 ```
 
 No repository or global config file is required for the implicit local server.
-Use `dopbase client connect <server-url>` when targeting another local or
-self-hosted instance.
+Use [`dopbase client connect <server-url>`](/cli/client-connect) when targeting
+another local or self-hosted instance.
 
 ## 5. Sign in
 
@@ -152,6 +154,9 @@ Dopbase shows the variable count and asks for a new target such as
 `my-project/development`. It then creates the project and environment in one
 transaction and stores every `.env` entry as an encrypted secret. After the
 import, it asks whether to delete `.env`, with Yes selected by default.
+
+To load JSON, YAML, or TOML files, or to update an environment that already
+exists, see [import and export secret files](/guide/import-env).
 
 ## 7. Run the application
 

@@ -104,7 +104,7 @@ async fn admin_setup() -> (TempDir, app::state::AppState, Router, String) {
 
 #[tokio::test]
 async fn backup_and_restore_lifecycle() {
-  let (_dir, state, router, token) = admin_setup().await;
+  let (dir, state, router, token) = admin_setup().await;
 
   // 1. Create a project and environment with secrets
   let (status, project, _) = call(
@@ -129,15 +129,17 @@ async fn backup_and_restore_lifecycle() {
   assert_eq!(status, 201);
   let env_id = env["data"]["id"].as_str().unwrap();
 
-  let (status, _, _) = call(
-    &router,
-    "PUT",
-    &format!("/api/v1/environments/{env_id}/secrets/API_KEY"),
-    Some(&token),
-    Some(json!({"value": "super-secret-key-123"})),
-  )
-  .await;
-  assert_eq!(status, 200);
+  for value in ["first-key-000", "super-secret-key-123"] {
+    let (status, _, _) = call(
+      &router,
+      "PUT",
+      &format!("/api/v1/environments/{env_id}/secrets/API_KEY"),
+      Some(&token),
+      Some(json!({ "value": value })),
+    )
+    .await;
+    assert_eq!(status, 200);
+  }
 
   // 2. Initialize new backup with custom name
   let (status, create_res, _) = call(
@@ -223,6 +225,44 @@ async fn backup_and_restore_lifecycle() {
       .unwrap();
   assert!(restored_audit_history > 0);
 
+  // The audit log written after the snapshot is archived, not lost, and the
+  // restore record names where the replaced chain ended.
+  let archives = std::fs::read_dir(dir.path().join("audit-archive"))
+    .unwrap()
+    .map(|entry| entry.unwrap().file_name().into_string().unwrap())
+    .filter(|name| name.starts_with("pre-restore-"))
+    .collect::<Vec<_>>();
+  assert_eq!(archives.len(), 1, "{archives:?}");
+  let archived =
+    std::fs::read_to_string(dir.path().join("audit-archive").join(&archives[0])).unwrap();
+  assert!(
+    archived.contains("NEW_SECRET"),
+    "post-snapshot events must be archived"
+  );
+  let restored: String = sqlx::query_scalar(
+    "SELECT metadata FROM audit_events WHERE action='backup.restored' ORDER BY seq DESC LIMIT 1",
+  )
+  .fetch_one(state.db.pool())
+  .await
+  .unwrap();
+  let restored: Value = serde_json::from_str(&restored).unwrap();
+  assert_eq!(restored["archive"], archives[0].as_str());
+  assert_eq!(
+    restored["archivedRecords"].as_u64(),
+    Some(archived.lines().count() as u64)
+  );
+  assert!(restored["previousHead"]["seq"].as_i64().unwrap() > 0);
+  let (status, verified, _) = call(
+    &router,
+    "GET",
+    "/api/v1/audit-events/verify",
+    Some(&token),
+    None,
+  )
+  .await;
+  assert_eq!(status, 200);
+  assert_eq!(verified["data"]["ok"], true, "{verified}");
+
   // 8. Verify secrets are restored to their original snapshot state!
   let (status, reveal_res, _) = call(
     &router,
@@ -234,6 +274,29 @@ async fn backup_and_restore_lifecycle() {
   .await;
   assert_eq!(status, 200);
   assert_eq!(reveal_res["data"]["value"], "super-secret-key-123");
+
+  // Version history comes back with the snapshot, so a restored secret can
+  // still roll back to its earlier value.
+  let (status, history, _) = call(
+    &router,
+    "GET",
+    &format!("/api/v1/environments/{env_id}/secrets/API_KEY/versions"),
+    Some(&token),
+    None,
+  )
+  .await;
+  assert_eq!(status, 200);
+  assert_eq!(history["data"]["items"].as_array().unwrap().len(), 2);
+  let (status, earlier, _) = call(
+    &router,
+    "POST",
+    &format!("/api/v1/environments/{env_id}/secrets/API_KEY/versions/1/reveal"),
+    Some(&token),
+    None,
+  )
+  .await;
+  assert_eq!(status, 200);
+  assert_eq!(earlier["data"]["value"], "first-key-000");
 
   // Verify NEW_SECRET is gone (restored to point-in-time)
   let (status, _, _) = call(
@@ -508,7 +571,32 @@ async fn bootstrap_restore_lifecycle() {
 
 #[tokio::test]
 async fn bootstrap_restore_with_different_master_key() {
-  let (dir1, _state1, router1, token1) = admin_setup().await;
+  let (dir1, state1, router1, token1) = admin_setup().await;
+
+  // Single sign-on settings, whose client secret is encrypted with the
+  // master key, and root's linked identity.
+  let now = Utc::now().to_rfc3339();
+  let (sso_ciphertext, sso_nonce) = state1
+    .crypto
+    .encrypt_master(
+      b"sso-client-secret",
+      &app::services::crypto::sso_client_secret_aad("sso_backup"),
+    )
+    .unwrap();
+  sqlx::query("INSERT INTO sso_providers(id,preset,display_name,issuer,client_id,client_secret_ciphertext,client_secret_nonce,enabled,verified_at,created_at,updated_at) VALUES('sso_backup','generic','Acme SSO','https://idp.example.com','dopbase',?,?,1,?,?,?)")
+    .bind(sso_ciphertext)
+    .bind(sso_nonce)
+    .bind(&now)
+    .bind(&now)
+    .bind(&now)
+    .execute(state1.db.pool())
+    .await
+    .unwrap();
+  sqlx::query("INSERT INTO admin_identities(id,admin_id,provider_id,issuer,subject,linked_via,created_at) SELECT 'idn_backup',id,'sso_backup','https://idp.example.com','root-subject','manual',? FROM admins WHERE role='root'")
+    .bind(&now)
+    .execute(state1.db.pool())
+    .await
+    .unwrap();
 
   // 1. Create secret on Server 1
   let (status, project, _) = call(
@@ -539,6 +627,15 @@ async fn bootstrap_restore_with_different_master_key() {
     &format!("/api/v1/environments/{env_id}/secrets/DATABASE_URL"),
     Some(&token1),
     Some(json!({"value": "postgres://prod:secret@db.internal:5432/main"})),
+  )
+  .await;
+  assert_eq!(status, 200);
+  let (status, _, _) = call(
+    &router1,
+    "PUT",
+    &format!("/api/v1/environments/{env_id}/secrets/DATABASE_URL"),
+    Some(&token1),
+    Some(json!({"value": "postgres://broken"})),
   )
   .await;
   assert_eq!(status, 200);
@@ -655,6 +752,30 @@ async fn bootstrap_restore_with_different_master_key() {
   assert_eq!(server2_updated_key, server2_original_key);
   assert_ne!(server2_updated_key, server1_key_bytes);
 
+  // The client secret was re-keyed with everything else, and the link kept.
+  let (sso_ciphertext, sso_nonce): (Vec<u8>, Vec<u8>) = sqlx::query_as(
+    "SELECT client_secret_ciphertext, client_secret_nonce FROM sso_providers WHERE id='sso_backup'",
+  )
+  .fetch_one(state2.db.pool())
+  .await
+  .unwrap();
+  assert_eq!(
+    state2
+      .crypto
+      .decrypt_master(
+        &sso_ciphertext,
+        &sso_nonce,
+        &app::services::crypto::sso_client_secret_aad("sso_backup"),
+      )
+      .unwrap(),
+    b"sso-client-secret"
+  );
+  let linked: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM admin_identities")
+    .fetch_one(state2.db.pool())
+    .await
+    .unwrap();
+  assert_eq!(linked, 1);
+
   // Sign in on server2 using restored admin account
   let (status, login, _) = call(
     &router2,
@@ -668,6 +789,17 @@ async fn bootstrap_restore_with_different_master_key() {
   .await;
   assert_eq!(status, 200);
   let token2 = login["data"]["token"].as_str().unwrap();
+
+  // Earlier versions are re-keyed too, so a rollback works on server2.
+  let (status, rolled_back, _) = call(
+    &router2,
+    "POST",
+    &format!("/api/v1/environments/{env_id}/secrets/DATABASE_URL/rollback"),
+    Some(token2),
+    Some(json!({"version": 1, "expectedVersion": 2})),
+  )
+  .await;
+  assert_eq!(status, 200, "{rolled_back}");
 
   // Decrypt secret on server2 using server2's own re-keyed master key!
   let (status, secret_res, _) = call(

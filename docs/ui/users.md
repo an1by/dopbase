@@ -1,6 +1,6 @@
 ---
-title: "Users and AI agents"
-description: "Add teammates, choose their roles, and manage read-only AI accounts in the Admin UI."
+title: "Admin UI: users and AI agents"
+description: "Add teammates to Dopbase, choose root, admin, or member roles, edit or remove accounts, and create read-only AI agent accounts in the Admin UI."
 ---
 
 # Users and AI agents

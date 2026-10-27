@@ -32,6 +32,7 @@ use crate::{
   config::{ServerConfig, database_path, ensure_data_dir},
   constants::{
     api,
+    config::AUDIT_RETENTION_INTERVAL,
     errors::{INTERNAL_ERROR, REQUEST_INVALID},
   },
   http::HttpError,
@@ -59,6 +60,11 @@ pub(crate) async fn prepare_instance(config: &ServerConfig) -> Result<(DbClient,
   db.migrate()
     .await
     .context("failed to run database migrations")?;
+  if let Some(retention) = config.audit_retention() {
+    crate::services::audit_chain::apply_retention(db.pool(), &retention)
+      .await
+      .context("failed to apply audit retention")?;
+  }
   let crypto = CryptoService::initialize(db.pool(), &config.master_key.path)
     .await
     .context("failed to initialize master key")?;
@@ -69,6 +75,8 @@ pub(crate) async fn prepare_instance(config: &ServerConfig) -> Result<(DbClient,
     let mut tx = db.pool().begin().await?;
     for table in [
       "audit_events",
+      "audit_chain_anchor",
+      "audit_chain_genesis",
       "runner_tokens",
       "workspace_tokens",
       "agent_tokens",
@@ -76,6 +84,10 @@ pub(crate) async fn prepare_instance(config: &ServerConfig) -> Result<(DbClient,
       "environment_env_layout",
       "environments",
       "projects",
+      "cli_device_requests",
+      "sso_flows",
+      "admin_identities",
+      "sso_providers",
       "sessions",
       "service_accounts",
       "admins",
@@ -112,6 +124,9 @@ async fn build_instance_state(
   let admin_count: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM admins")
     .fetch_one(db.pool())
     .await?;
+  // The presets are compiled in; a broken file fails here, not at the first
+  // sign-in.
+  modules::sso::presets::all();
   let setup_token = if setup_enabled && admin_count == 0 {
     Some(token::generate("setup_")?)
   } else {
@@ -123,6 +138,7 @@ async fn build_instance_state(
     crypto,
     setup: Arc::new(tokio::sync::RwLock::new(SetupState { token: setup_token })),
     rate_limiter: RateLimiter::default(),
+    oidc: Default::default(),
     maintenance: Arc::new(std::sync::atomic::AtomicBool::new(false)),
     started_at: std::time::Instant::now(),
   })
@@ -169,6 +185,10 @@ pub fn router(state: AppState) -> Router {
       maintenance_gate,
     ))
     .layer(axum::middleware::from_fn(middlewares::security::headers))
+    .layer(middleware::from_fn_with_state(
+      state.clone(),
+      middlewares::client_ip::capture,
+    ))
     .with_state(state)
 }
 
@@ -455,13 +475,33 @@ async fn serve_instance(
     );
   }
   tracing::info!(%address,"Dopbase server started");
-  let serve_result = axum::serve(listener, router(state.clone()))
-    .with_graceful_shutdown(shutdown_signal())
-    .await;
+  // The audit head goes to the log at startup and shutdown, so the log
+  // collector keeps a copy of it outside the database.
+  crate::services::audit_chain::log_checkpoint(state.db.pool()).await;
+  // Startup already applied retention in prepare_instance; this keeps it
+  // applied while the server runs.
+  let retention_task = state.config.audit_retention().map(|retention| {
+    crate::services::audit_chain::spawn_retention(
+      state.db.pool().clone(),
+      retention,
+      AUDIT_RETENTION_INTERVAL,
+    )
+  });
+  // Connection info carries the peer address the audit log records.
+  let serve_result = axum::serve(
+    listener,
+    router(state.clone()).into_make_service_with_connect_info::<std::net::SocketAddr>(),
+  )
+  .with_graceful_shutdown(shutdown_signal())
+  .await;
+  if let Some(task) = retention_task {
+    task.abort();
+  }
   if daemonized {
     let _ = crate::daemon::remove_pid_file(&crate::daemon::pid_file_path(&state.config.data_dir));
   }
   serve_result?;
+  crate::services::audit_chain::log_checkpoint(state.db.pool()).await;
   if let Err(error) = state.db.checkpoint().await {
     tracing::warn!(%error, "failed to checkpoint SQLite WAL during shutdown");
   }

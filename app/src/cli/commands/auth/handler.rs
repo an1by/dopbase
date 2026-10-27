@@ -14,8 +14,12 @@ pub(crate) async fn login(
     let token = read_runner_token()?;
     client::validate_runner_token(&token)?;
     client::save_credential(server, &token, None)?;
-  } else {
+  } else if args.password {
     let _ = client::login(server, true).await?;
+  } else if args.browser || args.browser_open {
+    let _ = client::browser_login(server, args.browser_open, true).await?;
+  } else {
+    let _ = client::interactive_login(server, true).await?;
   }
   let data = json!({"server_url":server.url,"authentication":"encrypted_session"});
   if json_output {

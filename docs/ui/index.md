@@ -1,5 +1,5 @@
 ---
-title: "Admin UI"
+title: "Admin UI overview"
 description: "The Dopbase Admin UI is the browser interface for a self-hosted server, embedded in the same executable with nothing extra to install."
 ---
 
@@ -29,6 +29,14 @@ commands. CLI changes appear in the UI.
 | [Audit and instance status](./audit-instance)        | Read the audit log and check server health                                       |
 | [Users and AI agents](./users)                       | Manage human roles and create AI service accounts                                |
 | [Account settings](./account)                        | Manage profile details, update passwords, and view session status                |
+
+## On phones and tablets
+
+The UI works on screens down to phone width. Below 1024 pixels the sidebar
+becomes a top bar, and its menu button opens the navigation. Tables keep the
+name column and the actions; the other fields move to a second line under
+each row. Dialogs open from the bottom of a phone screen and scroll, so their
+buttons stay in view.
 
 ## Who can sign in
 

@@ -1,5 +1,5 @@
 ---
-title: "Self-hosted or Cloud"
+title: "Self-hosted vs Cloud: which to choose"
 description: "Compare self-hosting Dopbase with Dopbase Cloud: who runs the server, TLS, backups, and master-key infrastructure in each model."
 ---
 

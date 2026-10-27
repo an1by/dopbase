@@ -4,6 +4,7 @@ import { defineConfig, type HeadConfig } from "vitepress";
 import { withMermaid } from "vitepress-mermaid-viewer";
 import { assetFileNames } from "../../config/asset-file-names.ts";
 import {
+  documentationVersion,
   documentationVersionLabel,
   documentationVersionPlugin,
 } from "./version.ts";
@@ -16,12 +17,45 @@ const siteDescription =
 const ogImage = `${siteUrl}/og-image.jpg`;
 const ogImageAlt =
   "Dopbase documentation for the CLI, Admin UI, API, and self-hosting";
+const sectionNames: Record<string, string> = {
+  guide: "Guide",
+  cli: "CLI",
+  ui: "Admin UI",
+  "self-hosting": "Self-hosting",
+  cloud: "Cloud",
+  reference: "Reference",
+  about: "About",
+  security: "Security",
+};
+
+function buildBreadcrumbs(cleanPath: string, title: string) {
+  const section = cleanPath.split("/")[0];
+  const crumbs = [{ name: "Docs", url: `${siteUrl}/` }];
+  if (sectionNames[section]) {
+    crumbs.push({ name: sectionNames[section], url: `${siteUrl}/${section}/` });
+  }
+  if (cleanPath !== `${section}/`) {
+    crumbs.push({ name: title, url: `${siteUrl}/${cleanPath}` });
+  }
+
+  return {
+    "@type": "BreadcrumbList",
+    itemListElement: crumbs.map((crumb, index) => ({
+      "@type": "ListItem",
+      position: index + 1,
+      name: crumb.name,
+      item: crumb.url,
+    })),
+  };
+}
 
 function buildJsonLd(pageData: {
   relativePath: string;
+  cleanPath: string;
   title: string;
   description: string;
   url: string;
+  dateModified?: string;
 }): string {
   const project = {
     "@type": "Organization",
@@ -46,6 +80,8 @@ function buildJsonLd(pageData: {
         {
           "@type": "SoftwareApplication",
           name: siteName,
+          softwareVersion: documentationVersion,
+          downloadUrl: `${projectUrl}/releases`,
           applicationCategory: "DeveloperApplication",
           operatingSystem: "Linux, macOS",
           description: pageData.description,
@@ -60,15 +96,22 @@ function buildJsonLd(pageData: {
 
   return JSON.stringify({
     "@context": "https://schema.org",
-    "@type": "TechArticle",
-    headline: pageData.title,
-    description: pageData.description,
-    url: pageData.url,
-    mainEntityOfPage: pageData.url,
-    inLanguage: "en-US",
-    isPartOf: { "@id": `${siteUrl}/#website` },
-    author: project,
-    publisher: project,
+    "@graph": [
+      {
+        "@type": "TechArticle",
+        headline: pageData.title,
+        description: pageData.description,
+        url: pageData.url,
+        mainEntityOfPage: pageData.url,
+        image: ogImage,
+        inLanguage: "en-US",
+        ...(pageData.dateModified && { dateModified: pageData.dateModified }),
+        isPartOf: { "@id": `${siteUrl}/#website` },
+        author: project,
+        publisher: project,
+      },
+      buildBreadcrumbs(pageData.cleanPath, pageData.title),
+    ],
   });
 }
 
@@ -92,7 +135,11 @@ const config = defineConfig({
       `User-agent: *\nAllow: /\n\nSitemap: ${siteUrl}/sitemap.xml\n`,
     );
   },
-  transformHead({ pageData }) {
+  transformHead({ pageData, title: fullTitle }) {
+    if (pageData.isNotFound || pageData.relativePath === "404.md") {
+      return [["meta", { name: "robots", content: "noindex" }]];
+    }
+
     const cleanPath = pageData.relativePath
       .replace(/(^|\/)index\.md$/, "$1")
       .replace(/\.md$/, "");
@@ -101,17 +148,21 @@ const config = defineConfig({
     const description =
       (pageData.frontmatter?.description as string | undefined) ??
       siteDescription;
+    const isHome = pageData.relativePath === "index.md";
+    const dateModified = pageData.lastUpdated
+      ? new Date(pageData.lastUpdated).toISOString()
+      : undefined;
 
     const head: HeadConfig[] = [
       ["link", { rel: "canonical", href: url }],
-      ["meta", { property: "og:title", content: title }],
+      ["meta", { property: "og:title", content: fullTitle }],
       ["meta", { property: "og:description", content: description }],
       ["meta", { property: "og:url", content: url }],
       [
         "meta",
         {
           property: "og:type",
-          content: pageData.relativePath === "index.md" ? "website" : "article",
+          content: isHome ? "website" : "article",
         },
       ],
       ["meta", { property: "og:site_name", content: siteName }],
@@ -120,9 +171,9 @@ const config = defineConfig({
       ["meta", { property: "og:image:width", content: "1200" }],
       ["meta", { property: "og:image:height", content: "630" }],
       ["meta", { property: "og:image:alt", content: ogImageAlt }],
-      ["meta", { property: "og:locale", content: "en-US" }],
+      ["meta", { property: "og:locale", content: "en_US" }],
       ["meta", { name: "twitter:card", content: "summary_large_image" }],
-      ["meta", { name: "twitter:title", content: title }],
+      ["meta", { name: "twitter:title", content: fullTitle }],
       ["meta", { name: "twitter:description", content: description }],
       ["meta", { name: "twitter:image", content: ogImage }],
       ["meta", { name: "twitter:image:alt", content: ogImageAlt }],
@@ -131,12 +182,20 @@ const config = defineConfig({
         { type: "application/ld+json" },
         buildJsonLd({
           relativePath: pageData.relativePath,
+          cleanPath,
           title,
           description,
           url,
+          dateModified,
         }),
       ],
     ];
+    if (!isHome && dateModified) {
+      head.push([
+        "meta",
+        { property: "article:modified_time", content: dateModified },
+      ]);
+    }
     return head;
   },
   head: [
@@ -153,9 +212,20 @@ const config = defineConfig({
   ],
   markdown: {
     theme: { light: "github-light", dark: "github-dark" },
+    image: { lazyLoad: true },
     config(md) {
+      const image = md.renderer.rules.image;
       const tableOpen = md.renderer.rules.table_open;
       const tableClose = md.renderer.rules.table_close;
+
+      if (image) {
+        md.renderer.rules.image = (tokens, idx, options, env, slf) => {
+          const alt = md.utils.escapeHtml(
+            slf.renderInlineAsText(tokens[idx].children ?? [], options, env),
+          );
+          return `<ImageViewer alt="${alt}">${image(tokens, idx, options, env, slf)}</ImageViewer>`;
+        };
+      }
 
       if (!tableOpen) return;
 
@@ -243,6 +313,9 @@ const config = defineConfig({
             { text: "Import a .env file", link: "/guide/import-env" },
             { text: "Run an application", link: "/guide/run-an-application" },
             { text: "AI agent access", link: "/guide/ai-agent-access" },
+            { text: "Single sign-on", link: "/guide/single-sign-on" },
+            { text: "Sign in with Google", link: "/guide/sso-google" },
+            { text: "Sign in with Keycloak", link: "/guide/sso-keycloak" },
             {
               text: "Backup and restore",
               link: "/guide/backups-and-restore",
@@ -370,6 +443,23 @@ const config = defineConfig({
           items: [
             { text: "Troubleshooting", link: "/reference/troubleshooting" },
             { text: "Glossary", link: "/reference/glossary" },
+          ],
+        },
+      ],
+      "/security/": [
+        {
+          text: "Security Updates",
+          items: [
+            { text: "Public security updates", link: "/security/" },
+            {
+              text: "September 2026 audit",
+              link: "/security/audits/2026-09",
+            },
+            {
+              text: "September 2026 scanner results",
+              link: "/security/scans/2026-09",
+            },
+            { text: "Security model", link: "/reference/security" },
           ],
         },
       ],

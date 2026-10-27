@@ -25,7 +25,8 @@ A self-hosted installation owns:
 - Updates, monitoring, and incident response
 
 Dopbase Cloud is planned to handle these responsibilities for its managed
-endpoint. It will not manage independent self-hosted servers.
+endpoint. It will not manage independent self-hosted servers. Compare the two
+in [self-hosted vs Cloud](/cloud/self-hosted-vs-cloud).
 
 ## Start small
 

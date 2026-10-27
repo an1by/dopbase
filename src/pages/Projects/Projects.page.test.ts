@@ -95,4 +95,33 @@ describe("ProjectsPage", () => {
     await nextTick();
     expect(writeText).toHaveBeenCalledWith("env_482731");
   });
+
+  it("opens the project list in a sheet and closes it once an environment is chosen", async () => {
+    const host = document.createElement("div");
+    document.body.append(host);
+    app = createApp({ render: () => h(ProjectsPage) });
+    app.mount(host);
+    const sheetSelector =
+      '[role="dialog"][aria-label="Projects and environments"]';
+
+    const switcher = host.querySelector<HTMLButtonElement>(
+      '[data-testid="project-switcher"]',
+    );
+    expect(switcher?.textContent?.replace(/\s+/g, " ").trim()).toBe(
+      "payments / production",
+    );
+    switcher?.click();
+    await nextTick();
+    expect(document.body.querySelector(sheetSelector)).not.toBeNull();
+
+    const previous = controller.selectedEnvironment.value;
+    controller.selectedEnvironment.value = {
+      ...previous,
+      id: "env_900001",
+      name: "staging",
+    };
+    await nextTick();
+    expect(switcher?.getAttribute("aria-expanded")).toBe("false");
+    controller.selectedEnvironment.value = previous;
+  });
 });

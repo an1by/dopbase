@@ -35,3 +35,39 @@ pub async fn list(
     "AUDIT_EVENTS_FETCHED",
   ))
 }
+
+/// Verify the audit hash chain
+///
+/// Walks every audit record in sequence order, recomputes each record's
+/// hash from its stored contents, and reports the first inconsistency. The
+/// walk stops at the first break, so `records` counts the records checked
+/// before it. `legacy` counts records written before the chain existed,
+/// which carry no hashes. `unsequenced` counts records without a chain
+/// position written after it existed; it should stay at zero.
+///
+/// Pass `anchorSeq` and `anchorHash`, saved from an earlier report or an
+/// export, to also detect a rewritten log or deleted newest records, which
+/// the chain alone cannot tell from an honest log.
+#[utoipa::path(
+  get,
+  path = crate::constants::api::audit::VERIFY,
+  tag = "audit",
+  params(ChainVerifyQuery),
+  security(("bearerAuth" = []), ("cookieAuth" = [])),
+  responses(
+    (status = 200, description = "Audit chain verified", body = inline(HttpResponseFormat<ChainVerifyReport>)),
+    (status = 400, description = "The anchor is incomplete or invalid", body = crate::http::ErrorBody),
+    (status = 401, description = "Authentication is required", body = crate::http::ErrorBody),
+    (status = 403, description = "Only administrators may verify the audit chain", body = crate::http::ErrorBody),
+  ),
+)]
+pub async fn verify(
+  State(state): State<AppState>,
+  identity: AuthIdentity,
+  Query(query): Query<ChainVerifyQuery>,
+) -> Result<HttpResponse<ChainVerifyReport>, AuditError> {
+  Ok(HttpResponse::ok(
+    service::verify(&state, &identity, query).await?,
+    "AUDIT_CHAIN_VERIFIED",
+  ))
+}

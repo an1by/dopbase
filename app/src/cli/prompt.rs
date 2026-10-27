@@ -1,6 +1,6 @@
 use crate::cli::client::CliCancelled;
 use anyhow::{Result, bail};
-use inquire::{Confirm, InquireError, Password, PasswordDisplayMode, Text};
+use inquire::{Confirm, InquireError, Password, PasswordDisplayMode, Select, Text};
 use std::io::{self, IsTerminal, Read};
 
 fn map_error(
@@ -116,6 +116,21 @@ pub(crate) fn confirm_with_cancel(
     return Err(cancelled.into());
   }
   Ok(())
+}
+
+/// Lets the user pick one of `options` and returns its index.
+pub(crate) fn select(
+  question: &str,
+  options: Vec<String>,
+  cancelled: CliCancelled,
+) -> Result<usize> {
+  if !io::stdin().is_terminal() {
+    bail!("interactive selection requires a terminal");
+  }
+  Select::new(question, options)
+    .raw_prompt()
+    .map(|choice| choice.index)
+    .map_err(|error| map_error(error, cancelled))
 }
 
 pub(crate) fn choice(

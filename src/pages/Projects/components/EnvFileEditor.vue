@@ -229,7 +229,7 @@ defineExpose({ focus });
       <span :class="issues.length > 0 ? 'text-crit' : ''">
         {{ issues.length }} problems
       </span>
-      <span class="ml-auto">ENV · UTF-8</span>
+      <span class="ml-auto hidden sm:inline">ENV · UTF-8</span>
     </div>
 
     <!-- Problems strip -->

@@ -1,3 +1,4 @@
+import { nextTick } from "vue";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { createPinia, setActivePinia } from "pinia";
 import { useDashboardLayoutController } from "./DashboardLayout.controller";
@@ -6,11 +7,14 @@ import { ApiError } from "~/services/http.client";
 import { useAuthStore } from "~/stores/auth.store";
 import { browserSession } from "~/tests/browser-session";
 
-const { routerPush, routerReplace, route } = vi.hoisted(() => ({
-  routerPush: vi.fn(),
-  routerReplace: vi.fn(),
-  route: { fullPath: "/projects/default/billing/staging" },
-}));
+const { routerPush, routerReplace, route } = await vi.hoisted(async () => {
+  const { reactive } = await import("vue");
+  return {
+    routerPush: vi.fn(),
+    routerReplace: vi.fn(),
+    route: reactive({ fullPath: "/projects/p/billing/e/env_1" }),
+  };
+});
 
 vi.mock("vue-router", () => ({
   useRoute: () => route,
@@ -23,6 +27,7 @@ beforeEach(() => {
   setActivePinia(createPinia());
   routerPush.mockReset();
   routerReplace.mockReset();
+  route.fullPath = "/projects/p/billing/e/env_1";
   sessionStorage.clear();
 });
 
@@ -79,7 +84,17 @@ describe("useDashboardLayoutController", () => {
 
     expect(routerReplace).toHaveBeenCalledWith({
       name: "login",
-      query: { redirect: "/projects/default/billing/staging" },
+      query: { redirect: "/projects/p/billing/e/env_1" },
     });
+  });
+
+  it("closes the navigation sheet when the route changes", async () => {
+    const c = useDashboardLayoutController();
+    c.navOpen.value = true;
+
+    route.fullPath = "/backups";
+    await nextTick();
+
+    expect(c.navOpen.value).toBe(false);
   });
 });

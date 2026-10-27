@@ -4,8 +4,11 @@ import {
   createUser,
   deleteUser,
   fetchUsers,
+  unlinkUserSso,
   updateUser,
 } from "~/services/users.api";
+import { fetchAuthMethods } from "~/services/auth.api";
+import { useReauthentication } from "~/composable/reauthentication";
 import type { User } from "~/services/users.api";
 import { useAuthStore } from "~/stores/auth.store";
 import {
@@ -33,6 +36,8 @@ import {
   tokenExpiryUnits,
 } from "~/utils/token-expiry";
 
+// TODO(rbac): the fixed roles an admin can give out. List assignable roles
+// from the server once roles are configurable.
 export const roleOptions = [
   { value: "member", label: "Member - project management" },
   { value: "admin", label: "Admin - user management" },
@@ -40,7 +45,15 @@ export const roleOptions = [
 
 export function useUsersController() {
   const authStore = useAuthStore();
+  const { runWithReauth } = useReauthentication();
   const users = ref<User[]>([]);
+  /** Accounts may skip the password only while single sign-on is on. */
+  const ssoEnabled = ref(false);
+  const unlinkingUser = ref<string | null>(null);
+  /** Accounts without a usable password confirm through the shared dialog. */
+  const tokenNeedsPassword = computed(
+    () => authStore.session?.passwordConfirmation !== false,
+  );
   const serviceAccounts = ref<ServiceAccount[]>([]);
   const agentTokens = ref<Record<string, AgentToken[] | null>>({});
   const loading = ref(false);
@@ -93,17 +106,28 @@ export function useUsersController() {
   const canSave = computed(() => {
     const trimmedEmail = email.value.trim();
     if (!trimmedEmail || !role.value) return false;
-    if (!editing.value && !password.value) return false;
+    if (!editing.value && !password.value && !ssoEnabled.value) return false;
     return true;
   });
 
   const canSaveAgent = computed(() => agentName.value.trim().length > 0);
 
+  /** Older servers lack the endpoint; then a password stays required. */
+  async function loadSsoState(): Promise<void> {
+    try {
+      ssoEnabled.value = (await fetchAuthMethods())?.sso != null;
+    } catch {
+      ssoEnabled.value = false;
+    }
+  }
+
   async function load(): Promise<void> {
+    void loadSsoState();
     loading.value = true;
     error.value = null;
     try {
       const [u, sa] = await Promise.all([fetchUsers(), fetchServiceAccounts()]);
+
       const tokenLists = await Promise.allSettled(
         sa.map((account) => fetchAgentTokens(account.id)),
       );
@@ -167,7 +191,7 @@ export function useUsersController() {
 
     if (!editing.value) {
       if (!password.value) {
-        errors.password = "Password is required.";
+        if (!ssoEnabled.value) errors.password = "Password is required.";
       } else if (
         validatePasswordLength(password.value).code === "PASSWORD_TOO_SHORT"
       ) {
@@ -214,13 +238,8 @@ export function useUsersController() {
     } catch (err) {
       if (err instanceof ApiError) {
         let handled = false;
-        if (
-          err.hasCode("EMAIL_INVAILD") ||
-          err.hasCode("EMAIL_INVALID") ||
-          err.hasCode("EMAIL_TAKEN")
-        ) {
+        if (err.hasCode("EMAIL_INVALID") || err.hasCode("EMAIL_TAKEN")) {
           fieldErrors.value.email =
-            err.codes.EMAIL_INVAILD ??
             err.codes.EMAIL_INVALID ??
             err.codes.EMAIL_TAKEN ??
             "Please enter a valid email address.";
@@ -251,6 +270,25 @@ export function useUsersController() {
       }
     } finally {
       saving.value = false;
+    }
+  }
+
+  async function unlinkSso(user: User): Promise<void> {
+    error.value = null;
+    unlinkingUser.value = user.id;
+    try {
+      await runWithReauth(async () => {
+        await unlinkUserSso(user.id);
+      });
+      await load();
+    } catch (err) {
+      if (err instanceof DOMException && err.name === "AbortError") return;
+      error.value =
+        err instanceof ApiError
+          ? err.message
+          : "Single sign-on could not be unlinked.";
+    } finally {
+      unlinkingUser.value = null;
     }
   }
 
@@ -389,38 +427,45 @@ export function useUsersController() {
       return;
     }
 
-    if (!tokenPassword.value) {
+    if (tokenNeedsPassword.value && !tokenPassword.value) {
       tokenPasswordError.value = "Password is required.";
       return;
     }
 
     generatingToken.value = true;
-    try {
-      await authStore.reauthenticate(tokenPassword.value);
-    } catch (err) {
-      tokenReauthError.value =
-        err instanceof ApiError ? err.message : "The password is incorrect.";
-      generatingToken.value = false;
-      return;
+    if (tokenNeedsPassword.value) {
+      try {
+        await authStore.reauthenticate(tokenPassword.value);
+      } catch (err) {
+        tokenReauthError.value =
+          err instanceof ApiError ? err.message : "The password is incorrect.";
+        generatingToken.value = false;
+        return;
+      }
     }
 
     try {
       const agentId = agentForToken.value.id;
-      // Refresh token: revoke any existing active tokens for this agent
-      const existingTokens = await fetchAgentTokens(agentId);
-      const activeTokens = existingTokens.filter((t) => !t.revokedAt);
-      for (const t of activeTokens) {
-        await revokeAgentToken(agentId, t.id);
-      }
-      agentTokens.value[agentId] = [];
+      // Without a password, the shared dialog confirms at the provider when
+      // the server asks, then this runs again.
+      const created = await new Promise<CreatedAgentToken>(
+        (resolve, reject) => {
+          runWithReauth(async () => {
+            // Refresh token: revoke any existing active tokens for this agent
+            const existingTokens = await fetchAgentTokens(agentId);
+            const activeTokens = existingTokens.filter((t) => !t.revokedAt);
+            for (const t of activeTokens) {
+              await revokeAgentToken(agentId, t.id);
+            }
+            agentTokens.value[agentId] = [];
 
-      // Generate the replacement token with the selected lifetime.
-      const tokenName = `token-${Date.now()}`;
-      const created = await createAgentToken(
-        agentId,
-        tokenName,
-        undefined,
-        expiresIn,
+            // Generate the replacement token with the selected lifetime.
+            const tokenName = `token-${Date.now()}`;
+            resolve(
+              await createAgentToken(agentId, tokenName, undefined, expiresIn),
+            );
+          }).catch(reject);
+        },
       );
 
       createdAgentToken.value = created;
@@ -428,6 +473,7 @@ export function useUsersController() {
       tokenPassword.value = "";
       showTokenReauth.value = false;
     } catch (err) {
+      if (err instanceof DOMException && err.name === "AbortError") return;
       tokenReauthError.value =
         err instanceof ApiError
           ? err.message
@@ -446,6 +492,9 @@ export function useUsersController() {
 
   const state = reactive({
     users,
+    ssoEnabled,
+    unlinkingUser,
+    tokenNeedsPassword,
     serviceAccounts,
     agentTokens,
     loading,
@@ -493,6 +542,7 @@ export function useUsersController() {
     openEdit,
     save,
     promptDelete,
+    unlinkSso,
     closeDeleteUser,
     confirmDeleteUser,
     close,

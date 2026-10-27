@@ -19,6 +19,10 @@ describe("shared validation", () => {
     expect(isSafeRedirect("//evil.example.test/phish")).toBe(false);
     expect(isSafeRedirect("javascript:alert(1)")).toBe(false);
     expect(isSafeRedirect("workspace")).toBe(false);
+    expect(isSafeRedirect("/\\evil.example.test")).toBe(false);
+    expect(isSafeRedirect("/\t/evil.example.test")).toBe(false);
+    expect(isSafeRedirect("/\n/evil.example.test")).toBe(false);
+    expect(isSafeRedirect(`/${"a".repeat(600)}`)).toBe(false);
   });
 
   it("counts password characters consistently with the server", () => {

@@ -1,5 +1,5 @@
 ---
-title: "CLI overview"
+title: "CLI overview: manage secrets from the terminal"
 description: "The Dopbase CLI starts a server, selects a remote server, manages projects and environments, and runs applications with their secrets."
 ---
 

@@ -10,6 +10,7 @@ use crate::{
   constants::{
     errors::{AUTHENTICATION_INVALID, AUTHORIZATION_DENIED, CSRF_REQUIRED_MESSAGE},
     limits::{BROWSER_SESSION_IDLE_HOURS, CLI_SESSION_IDLE_DAYS, RECENT_AUTHENTICATION_MINUTES},
+    tokens::CSRF_TOKEN_PREFIX,
   },
   http::HttpError,
   models::{AdminRole, AuthIdentity, SessionKind},
@@ -320,7 +321,8 @@ pub fn require_mutation(
     let expected = csrf_hash
       .as_ref()
       .ok_or_else(|| HttpError::forbidden(AUTHORIZATION_DENIED, CSRF_REQUIRED_MESSAGE))?;
-    if token::hash(provided) != *expected {
+    let tab = token::tab_csrf(CSRF_TOKEN_PREFIX, expected);
+    if token::hash(provided) != *expected && !token::constant_time_eq(provided, &tab) {
       return Err(HttpError::forbidden(
         AUTHORIZATION_DENIED,
         CSRF_REQUIRED_MESSAGE,

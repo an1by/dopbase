@@ -1,5 +1,5 @@
 ---
-title: "Encryption keys"
+title: "Master key and encryption keys"
 description: "Keep the Dopbase master encryption key outside the database that stores encrypted secrets, and plan for its backup and recovery."
 ---
 

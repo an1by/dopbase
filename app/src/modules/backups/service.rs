@@ -5,6 +5,7 @@ use std::{
   sync::OnceLock,
 };
 
+use anyhow::Context;
 use chrono::Utc;
 use regex::Regex;
 use sqlx::Connection;
@@ -12,6 +13,7 @@ use zip::{ZipArchive, ZipWriter, write::SimpleFileOptions};
 
 use super::model::*;
 use crate::{
+  constants::config::AUDIT_ARCHIVE_DIRECTORY_NAME,
   extractors::{require_recent_browser_auth, require_root},
   http::HttpError,
   models::AuthIdentity,
@@ -197,9 +199,9 @@ pub async fn create(
   let created_at = Utc::now().to_rfc3339();
 
   // Audit
-  let _ = common::audit(
+  let _ = common::audit_standalone(
     state.db.pool(),
-    "admin",
+    identity.audit_actor_type(),
     Some(admin_id),
     Some(email),
     "backup.created",
@@ -238,9 +240,9 @@ pub async fn read_for_download(
     .map_err(|_| HttpError::internal())?
     .len();
 
-  let _ = common::audit(
+  let _ = common::audit_standalone(
     state.db.pool(),
-    "admin",
+    identity.audit_actor_type(),
     Some(admin_id),
     Some(email),
     "backup.downloaded",
@@ -474,9 +476,9 @@ pub async fn upload(
   let size = final_bytes.len() as u64;
   let created_at = Utc::now().to_rfc3339();
 
-  let _ = common::audit(
+  let _ = common::audit_standalone(
     state.db.pool(),
-    "admin",
+    identity.audit_actor_type(),
     Some(admin_id),
     Some(email),
     "backup.uploaded",
@@ -541,17 +543,33 @@ pub async fn restore(
     state,
     decrypted,
     source_key_to_rekey,
-    Some((admin_id, email, session_id_from_identity(identity))),
+    Some(PreservedAdmin {
+      admin_id,
+      email,
+      session_id: session_id_from_identity(identity),
+      actor_type: identity.audit_actor_type(),
+    }),
     Some(&safe_key),
   )
   .await
+}
+
+/// The signed-in administrator a restore keeps: their account and session
+/// survive the restore, and the `backup.restored` record names them.
+#[derive(Clone, Copy, Debug)]
+pub struct PreservedAdmin<'a> {
+  pub admin_id: &'a str,
+  pub email: &'a str,
+  pub session_id: &'a str,
+  /// The actor type the `backup.restored` record stores.
+  pub actor_type: &'a str,
 }
 
 pub async fn restore_database_from_archive(
   state: &AppState,
   decrypted: Vec<u8>,
   source_master_key_to_rekey: Option<&[u8]>,
-  preserve_admin: Option<(&str, &str, &str)>,
+  preserve_admin: Option<PreservedAdmin<'_>>,
   audit_key: Option<&str>,
 ) -> Result<(), HttpError> {
   let temp_dir = tempfile::tempdir().map_err(|_| HttpError::internal())?;
@@ -685,7 +703,12 @@ pub async fn restore_database_from_archive(
     let mut current_admin: Option<AdminRowTuple> = None;
     let mut current_session: Option<SessionRowTuple> = None;
 
-    if let Some((admin_id, _, session_id)) = preserve_admin {
+    if let Some(PreservedAdmin {
+      admin_id,
+      session_id,
+      ..
+    }) = preserve_admin
+    {
       current_admin = sqlx::query_as(
         "SELECT id, email, password_hash, role, created_at, updated_at FROM admins WHERE id = ?",
       )
@@ -702,16 +725,34 @@ pub async fn restore_database_from_archive(
       .await?;
     }
 
+    // The restore replaces the audit log with the snapshot's, which would
+    // erase everything written since the snapshot. Keep it on disk first;
+    // without that copy the restore does not go ahead.
+    let archived = crate::services::audit_chain::archive_all(
+      &mut tx,
+      &state.config.data_dir.join(AUDIT_ARCHIVE_DIRECTORY_NAME),
+    )
+    .await
+    .context("failed to archive the audit log before restoring")?;
+
     // Wipe existing data
     sqlx::query("DELETE FROM audit_events").execute(&mut *tx).await?;
+    sqlx::query("DELETE FROM audit_chain_anchor").execute(&mut *tx).await?;
+    sqlx::query("DELETE FROM audit_chain_genesis").execute(&mut *tx).await?;
     sqlx::query("DELETE FROM runner_tokens").execute(&mut *tx).await?;
     sqlx::query("DELETE FROM workspace_tokens").execute(&mut *tx).await?;
     sqlx::query("DELETE FROM agent_tokens").execute(&mut *tx).await?;
     sqlx::query("DELETE FROM service_accounts").execute(&mut *tx).await?;
+    sqlx::query("DELETE FROM secret_versions").execute(&mut *tx).await?;
     sqlx::query("DELETE FROM secrets").execute(&mut *tx).await?;
     sqlx::query("DELETE FROM environment_env_layout").execute(&mut *tx).await?;
     sqlx::query("DELETE FROM environments").execute(&mut *tx).await?;
     sqlx::query("DELETE FROM projects").execute(&mut *tx).await?;
+    sqlx::query("DELETE FROM cli_device_requests").execute(&mut *tx).await?;
+    sqlx::query("DELETE FROM sso_flows").execute(&mut *tx).await?;
+    sqlx::query("DELETE FROM admin_identities").execute(&mut *tx).await?;
+    sqlx::query("DELETE FROM sso_providers").execute(&mut *tx).await?;
+    sqlx::query("DELETE FROM project_locations").execute(&mut *tx).await?;
     sqlx::query("DELETE FROM workspaces").execute(&mut *tx).await?;
     sqlx::query("DELETE FROM sessions").execute(&mut *tx).await?;
     sqlx::query("DELETE FROM admins").execute(&mut *tx).await?;
@@ -732,13 +773,22 @@ pub async fn restore_database_from_archive(
     sqlx::query("INSERT INTO environments SELECT * FROM backup_db.environments").execute(&mut *tx).await?;
     sqlx::query("INSERT OR REPLACE INTO environment_env_layout SELECT * FROM backup_db.environment_env_layout").execute(&mut *tx).await?;
     sqlx::query("INSERT INTO secrets SELECT * FROM backup_db.secrets").execute(&mut *tx).await?;
+    sqlx::query("INSERT INTO secret_versions SELECT * FROM backup_db.secret_versions").execute(&mut *tx).await?;
     sqlx::query("INSERT INTO runner_tokens SELECT * FROM backup_db.runner_tokens").execute(&mut *tx).await?;
     let _ = sqlx::query("INSERT INTO workspace_tokens SELECT * FROM backup_db.workspace_tokens")
       .execute(&mut *tx)
       .await;
     sqlx::query("INSERT INTO audit_events SELECT * FROM backup_db.audit_events").execute(&mut *tx).await?;
+    // The chain's genesis and pruning anchor belong to the restored records.
+    sqlx::query("INSERT INTO audit_chain_anchor SELECT * FROM backup_db.audit_chain_anchor").execute(&mut *tx).await?;
+    sqlx::query("INSERT INTO audit_chain_genesis SELECT * FROM backup_db.audit_chain_genesis").execute(&mut *tx).await?;
+    // The backup uses this server's master key, or was re-keyed to it
+    // before this point, so its SSO client secret decrypts here. Identities of accounts the restore left
+    // out, such as a replaced root, are dropped.
+    sqlx::query("INSERT INTO sso_providers SELECT * FROM backup_db.sso_providers").execute(&mut *tx).await?;
+    sqlx::query("INSERT INTO admin_identities SELECT * FROM backup_db.admin_identities WHERE admin_id IN (SELECT id FROM admins)").execute(&mut *tx).await?;
 
-    let mut effective_admin_id = preserve_admin.map(|(id, _, _)| id.to_string());
+    let mut effective_admin_id = preserve_admin.map(|admin| admin.admin_id.to_string());
 
     // Re-preserve current admin and session if requested
     if let (Some(admin), Some(mut sess)) = (current_admin, current_session) {
@@ -768,11 +818,14 @@ pub async fn restore_database_from_archive(
         .execute(&mut *tx).await?;
     }
 
-    if let Some((_, email, _)) = preserve_admin {
+    if let Some(PreservedAdmin {
+      email, actor_type, ..
+    }) = preserve_admin
+    {
       let key_str = audit_key.unwrap_or("unknown");
       common::audit(
-        &mut *tx,
-        "admin",
+        &mut tx,
+        actor_type,
         effective_admin_id.as_deref(),
         Some(email),
         "backup.restored",
@@ -780,13 +833,18 @@ pub async fn restore_database_from_archive(
         None,
         Some("backup"),
         Some(key_str),
-        serde_json::json!({ "backup": key_str }),
+        serde_json::json!({
+          "backup": key_str,
+          "previousHead": archived.head.as_ref().map(|(seq, hash)| serde_json::json!({"seq": seq, "hash": hash})),
+          "archivedRecords": archived.records,
+          "archive": archived.archive,
+        }),
       )
       .await?;
     }
 
     tx.commit().await?;
-    Ok::<(), sqlx::Error>(())
+    Ok::<(), anyhow::Error>(())
   }
   .await;
 
@@ -797,7 +855,10 @@ pub async fn restore_database_from_archive(
   drop(conn);
   restore_db.close().await;
   restore_result.map_err(|error| {
-    tracing::error!(%error, "failed to apply backup restore");
+    tracing::error!(
+      error = format!("{error:#}"),
+      "failed to apply backup restore"
+    );
     HttpError::internal()
   })?;
 
@@ -846,9 +907,9 @@ pub async fn delete(
     HttpError::internal()
   })?;
 
-  let _ = common::audit(
+  let _ = common::audit_standalone(
     state.db.pool(),
-    "admin",
+    identity.audit_actor_type(),
     Some(admin_id),
     Some(email),
     "backup.deleted",

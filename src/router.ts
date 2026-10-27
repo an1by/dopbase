@@ -22,6 +22,12 @@ export const router = createRouter({
       meta: { public: true, guestOnly: true },
     },
     {
+      path: "/login/sso",
+      name: "login-sso",
+      component: () => import("~/pages/Login/SsoHandoff.page.vue"),
+      meta: { public: true },
+    },
+    {
       path: "/setup",
       name: "setup",
       component: () => import("~/pages/Setup/Setup.page.vue"),
@@ -84,6 +90,18 @@ export const router = createRouter({
       meta: { rootOnly: true },
     },
     {
+      path: "/sso/confirmed",
+      name: "sso-confirmed",
+      component: () => import("~/pages/SsoConfirmed/SsoConfirmed.page.vue"),
+      meta: { public: true },
+    },
+    {
+      path: "/sso",
+      name: "sso",
+      component: () => import("~/pages/Sso/Sso.page.vue"),
+      meta: { rootOnly: true },
+    },
+    {
       path: "/audit",
       name: "audit",
       component: () => import("~/pages/Audit/Audit.page.vue"),
@@ -104,6 +122,14 @@ export const router = createRouter({
       name: "users",
       component: () => import("~/pages/Users/Users.page.vue"),
       meta: { adminOnly: true },
+    },
+    {
+      path: "/cli/approve",
+      name: "cli-approve",
+      component: () => import("~/pages/CliApprove/CliApprove.page.vue"),
+      // The page decides about the session itself: it always wants a sign-in
+      // newer than the request, so the usual login redirect is not enough.
+      meta: { public: true },
     },
     {
       path: "/:pathMatch(.*)*",

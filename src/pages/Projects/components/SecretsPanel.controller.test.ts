@@ -10,12 +10,14 @@ import * as secretsApi from "~/services/secrets.api";
 import * as authApi from "~/services/auth.api";
 import { ApiError } from "~/services/http.client";
 import { mountController } from "~/tests/mount-controller";
+import { useAuthStore } from "~/stores/auth.store";
 
 vi.mock("~/services/secrets.api");
 vi.mock("~/services/auth.api");
 
 beforeEach(() => {
   setActivePinia(createPinia());
+  useReauthentication().dismiss();
   vi.mocked(secretsApi.listSecrets).mockReset();
   vi.mocked(secretsApi.setSecret).mockReset();
   vi.mocked(secretsApi.deleteSecret).mockReset();
@@ -184,6 +186,20 @@ describe("useSecretsPanelController", () => {
     expect(c.revealedValue.value).toBe("postgres://secret");
   });
 
+  it("shows no save error behind the session-expired dialog", async () => {
+    vi.mocked(secretsApi.setSecret).mockRejectedValue(
+      new ApiError(401, { UNAUTHORIZED: "Sign in again." }),
+    );
+    const c = makeController();
+    useAuthStore().sessionExpired = true;
+    await expect(c.setSecret("DATABASE_URL", "new-value")).rejects.toThrow();
+    expect(c.actionError.value).toBeNull();
+
+    useAuthStore().sessionExpired = false;
+    await expect(c.setSecret("DATABASE_URL", "new-value")).rejects.toThrow();
+    expect(c.actionError.value).toBe("Could not save the secret.");
+  });
+
   it("setSecret saves and reloads", async () => {
     vi.mocked(secretsApi.listSecrets).mockResolvedValue([metadata]);
     vi.mocked(secretsApi.setSecret).mockResolvedValueOnce(metadata);
@@ -350,27 +366,37 @@ describe("useSecretsPanelController — .env editor save flow", () => {
     await c.openEditor();
     c.editorContent.value = "# app\nDATABASE_URL=new-value\nAPI_KEY=k-123\n";
     expect(await c.saveDraft()).toBe(true);
-    expect(secretsApi.importSecrets).toHaveBeenNthCalledWith(1, "env_1", {
-      mode: "replace",
-      dryRun: true,
-      entries: [
-        { key: "DATABASE_URL", value: "new-value" },
-        { key: "API_KEY", value: "k-123" },
-      ],
-    });
+    expect(secretsApi.importSecrets).toHaveBeenNthCalledWith(
+      1,
+      "env_1",
+      {
+        mode: "replace",
+        dryRun: true,
+        entries: [
+          { key: "DATABASE_URL", value: "new-value" },
+          { key: "API_KEY", value: "k-123" },
+        ],
+      },
+      expect.any(AbortSignal),
+    );
     expect(c.editorDiff.value?.dryRun).toBe(true);
 
     expect(await c.applyDraft()).toBe(true);
-    expect(secretsApi.importSecrets).toHaveBeenNthCalledWith(2, "env_1", {
-      mode: "replace",
-      dryRun: false,
-      entries: [
-        { key: "DATABASE_URL", value: "new-value" },
-        { key: "API_KEY", value: "k-123" },
-      ],
-      envLayout: "# app\nDATABASE_URL=\nAPI_KEY=\n",
-      expectedRevision: "rev-1",
-    });
+    expect(secretsApi.importSecrets).toHaveBeenNthCalledWith(
+      2,
+      "env_1",
+      {
+        mode: "replace",
+        dryRun: false,
+        entries: [
+          { key: "DATABASE_URL", value: "new-value" },
+          { key: "API_KEY", value: "k-123" },
+        ],
+        envLayout: "# app\nDATABASE_URL=\nAPI_KEY=\n",
+        expectedRevision: "rev-1",
+      },
+      expect.any(AbortSignal),
+    );
     expect(c.editorDirty.value).toBe(false);
     expect(c.editorDiff.value).toBeNull();
   });
@@ -427,5 +453,104 @@ describe("useSecretsPanelController — .env editor save flow", () => {
     c.backToEditing();
     expect(c.editorDiff.value).toBeNull();
     expect(c.editorContent.value).not.toBeNull();
+  });
+});
+
+describe("editor import password confirmation", () => {
+  const preview = {
+    addedKeys: [],
+    updatedKeys: ["DATABASE_URL"],
+    unchangedKeys: [],
+    deletedKeys: [],
+    dryRun: true,
+    revision: "rev-1",
+  };
+  const challenge = () =>
+    new ApiError(403, { RECENT_AUTHENTICATION_REQUIRED: "Confirm password." });
+
+  it.each([true, false])(
+    "retries a captured editor request with dryRun=%s",
+    async (dryRun) => {
+      mockEditorLoad();
+      const c = makeController();
+      await c.openEditor();
+      c.editorContent.value = "DATABASE_URL=changed\n";
+      c.editorDiff.value = dryRun ? null : preview;
+      vi.mocked(secretsApi.importSecrets)
+        .mockRejectedValueOnce(challenge())
+        .mockResolvedValueOnce(preview);
+      const saving = dryRun ? c.saveDraft() : c.applyDraft();
+      await vi.waitFor(() =>
+        expect(secretsApi.importSecrets).toHaveBeenCalledTimes(1),
+      );
+      expect(await (dryRun ? c.saveDraft() : c.applyDraft())).toBe(false);
+      vi.mocked(authApi.reauthenticate).mockResolvedValueOnce();
+      await useReauthentication().submit("fixture-password");
+      expect(await saving).toBe(true);
+      const calls = vi.mocked(secretsApi.importSecrets).mock.calls;
+      expect(calls[1]).toEqual(calls[0]);
+      expect(calls[1]?.[1].dryRun).toBe(dryRun);
+      expect(c.editorSaving.value).toBe(false);
+    },
+  );
+
+  it.each(["close", "change", "environment", "unmount", "dismiss", "back"])(
+    "cancels a pending editor apply on %s",
+    async (action) => {
+      mockEditorLoad();
+      const environment = ref("env_1");
+      const { controller: c, unmount } = mountController(() =>
+        useSecretsPanelController(environment),
+      );
+      await c.openEditor();
+      c.editorContent.value = "DATABASE_URL=changed\n";
+      c.editorDiff.value = preview;
+      vi.mocked(secretsApi.importSecrets).mockRejectedValueOnce(challenge());
+      const saving = c.applyDraft();
+      await vi.waitFor(() =>
+        expect(secretsApi.importSecrets).toHaveBeenCalledTimes(1),
+      );
+      await nextTick();
+      if (action === "close") c.closeEditor();
+      if (action === "change")
+        c.editorContent.value = "DATABASE_URL=different\n";
+      if (action === "environment") {
+        environment.value = "env_2";
+        await nextTick();
+      }
+      if (action === "unmount") unmount();
+      if (action === "dismiss") useReauthentication().dismiss();
+      if (action === "back") c.backToEditing();
+      expect(await saving).toBe(false);
+      vi.mocked(authApi.reauthenticate).mockResolvedValueOnce();
+      await useReauthentication().submit("fixture-password");
+      expect(secretsApi.importSecrets).toHaveBeenCalledTimes(1);
+      expect(c.editorError.value).toBeNull();
+    },
+  );
+
+  it("discards a stale preview after password confirmation", async () => {
+    mockEditorLoad();
+    const c = makeController();
+    await c.openEditor();
+    c.editorContent.value = "DATABASE_URL=changed\n";
+    c.editorDiff.value = preview;
+    vi.mocked(secretsApi.importSecrets)
+      .mockRejectedValueOnce(challenge())
+      .mockRejectedValueOnce(
+        new ApiError(409, { IMPORT_PREVIEW_STALE: "Changed." }),
+      );
+    const saving = c.applyDraft();
+    await vi.waitFor(() =>
+      expect(secretsApi.importSecrets).toHaveBeenCalledTimes(1),
+    );
+    vi.mocked(authApi.reauthenticate).mockResolvedValueOnce();
+    await useReauthentication().submit("fixture-password");
+    expect(await saving).toBe(false);
+    expect(c.editorDiff.value).toBeNull();
+    expect(c.editorDirty.value).toBe(true);
+    expect(c.editorError.value).toBe(
+      "The secrets changed. Preview your changes again.",
+    );
   });
 });

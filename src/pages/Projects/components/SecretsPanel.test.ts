@@ -53,6 +53,21 @@ vi.mock("./ImportSecretsDialog.vue", () => ({
 vi.mock("./ExportSecretsDialog.vue", () => ({
   default: defineComponent({ render: () => null }),
 }));
+const history = vi.hoisted(() => ({ key: null as string | null }));
+vi.mock("./SecretHistoryDialog.vue", async () => {
+  const { defineComponent: define } = await import("vue");
+  return {
+    default: define({
+      props: { secretKey: { type: String, default: null } },
+      setup(props) {
+        return () => {
+          history.key = props.secretKey;
+          return null;
+        };
+      },
+    }),
+  };
+});
 
 import SecretsPanel from "./SecretsPanel.vue";
 
@@ -154,5 +169,26 @@ describe("SecretsPanel create dialog", () => {
     await nextTick();
 
     expect(controller.setSecret).toHaveBeenCalledWith("SPACES", "   ");
+  });
+});
+
+describe("SecretsPanel history", () => {
+  it("opens the history of a row from its History button", async () => {
+    controller.secrets.value = [
+      {
+        key: "API_KEY",
+        version: 3,
+        createdAt: "2026-10-01T00:00:00Z",
+        updatedAt: "2026-10-23T00:00:00Z",
+      },
+    ] as never;
+    await mountPanel();
+    expect(history.key).toBeNull();
+    document
+      .querySelector<HTMLButtonElement>('button[aria-label="History API_KEY"]')!
+      .click();
+    await nextTick();
+    expect(history.key).toBe("API_KEY");
+    controller.secrets.value = [];
   });
 });

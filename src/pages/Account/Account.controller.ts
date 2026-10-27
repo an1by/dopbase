@@ -2,7 +2,8 @@ import { computed, ref } from "vue";
 import { useRouter } from "vue-router";
 import { ApiError } from "~/services/http.client";
 import { useAuthStore } from "~/stores/auth.store";
-import { formatDateTime, formatRelativeTime } from "~/utils/format";
+import { useReauthentication } from "~/composable/reauthentication";
+import { formatDateTime, formatRelativeTime, formatRole } from "~/utils/format";
 import {
   MAX_PASSWORD_LENGTH,
   MIN_PASSWORD_LENGTH,
@@ -18,6 +19,11 @@ import {
 export function useAccountController() {
   const router = useRouter();
   const auth = useAuthStore();
+  const { runWithReauth } = useReauthentication();
+  /** An account without a password sets one instead of changing it. */
+  const needsCurrentPassword = computed(
+    () => auth.session?.hasPassword !== false,
+  );
 
   const currentPassword = ref("");
   const newPassword = ref("");
@@ -35,20 +41,7 @@ export function useAccountController() {
   const role = computed(() => auth.session?.role ?? "admin");
   const lastLoginAt = computed(() => auth.session?.lastLoginAt ?? null);
 
-  const formattedRole = computed(() => {
-    switch (role.value) {
-      case "root":
-        return "Root Administrator";
-      case "admin":
-        return "Administrator";
-      case "member":
-        return "Member";
-      case "ai_agent":
-        return "AI Agent";
-      default:
-        return role.value;
-    }
-  });
+  const formattedRole = computed(() => formatRole(role.value));
 
   const formattedLastLogin = computed(() => {
     if (!lastLoginAt.value) return null;
@@ -66,7 +59,7 @@ export function useAccountController() {
 
   function validate(): boolean {
     const errors: typeof fieldErrors.value = {};
-    if (currentPassword.value === "") {
+    if (needsCurrentPassword.value && currentPassword.value === "") {
       errors.currentPassword = "Enter your current password.";
     }
     const passwordResult = validatePasswordLength(newPassword.value);
@@ -102,12 +95,20 @@ export function useAccountController() {
     if (!validate() || submitting.value) return;
     submitting.value = true;
     try {
-      await auth.changePassword(currentPassword.value, newPassword.value);
+      // Setting a first password needs a recent sign-in; the shared dialog
+      // asks for one and this runs again.
+      await runWithReauth(() =>
+        auth.changePassword(
+          needsCurrentPassword.value ? currentPassword.value : "",
+          newPassword.value,
+        ),
+      );
       router.push({
         name: "login",
         query: { notice: "password-changed" },
       });
     } catch (error) {
+      if (error instanceof DOMException && error.name === "AbortError") return;
       mapApiError(error);
     } finally {
       submitting.value = false;
@@ -122,6 +123,7 @@ export function useAccountController() {
     formattedLastLogin,
     fullLastLogin,
     recentAuthentication,
+    needsCurrentPassword,
     currentPassword,
     newPassword,
     confirmPassword,

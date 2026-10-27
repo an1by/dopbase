@@ -9,12 +9,11 @@ use argon2::{
 };
 use regex::Regex;
 use serde_json::Value;
-use sqlx::{Executor, Sqlite};
 
 use crate::{
-  constants::errors::{EMAIL_INVAILD, EMAIL_INVAILD_MESSAGE},
+  constants::errors::{EMAIL_INVALID, EMAIL_INVALID_MESSAGE},
   http::HttpError,
-  services::token,
+  services::{audit_chain::AuditEntry, token},
 };
 
 pub fn validate_slug(
@@ -37,8 +36,8 @@ pub fn validate_email(value: &str) -> Result<String, HttpError> {
   let valid = EMAIL.get_or_init(|| Regex::new(r"^[^\s@]+@[^\s@]+\.[^\s@]+$").unwrap());
   if normalized.len() > 254 || !valid.is_match(&normalized) {
     return Err(HttpError::validation(BTreeMap::from([(
-      EMAIL_INVAILD.into(),
-      EMAIL_INVAILD_MESSAGE.into(),
+      EMAIL_INVALID.into(),
+      EMAIL_INVALID_MESSAGE.into(),
     )])));
   }
   Ok(normalized)
@@ -63,6 +62,40 @@ pub fn validate_password(value: &str) -> Result<(), HttpError> {
     Ok(())
   } else {
     Err(HttpError::validation(errors))
+  }
+}
+
+/// Stored as the password hash of an account that signs in only through
+/// single sign-on. It is not a valid hash, so it matches no password. The
+/// column stays NOT NULL because SQLite relaxes that only by rebuilding the
+/// table, and inside the transaction sqlx wraps every migration in, the
+/// rebuild would cascade-delete sessions.
+pub const NO_PASSWORD_HASH: &str = "";
+
+pub fn has_password(encoded: &str) -> bool {
+  !encoded.is_empty()
+}
+
+/// A real hash to verify against when an account is missing or has no
+/// password, so a failed login takes as long either way and its timing
+/// does not reveal which emails have accounts or passwords.
+fn dummy_hash() -> &'static str {
+  static HASH: OnceLock<String> = OnceLock::new();
+  HASH.get_or_init(|| hash_password("dopbase-timing-equalizer").unwrap_or_default())
+}
+
+/// Verify `value` against `encoded`, or against a dummy hash when there is
+/// nothing to verify, which always fails.
+pub async fn verify_password_or_dummy(
+  value: String,
+  encoded: Option<String>,
+) -> Result<bool, HttpError> {
+  match encoded.filter(|encoded| has_password(encoded)) {
+    Some(encoded) => verify_password_async(value, encoded).await,
+    None => {
+      let _ = verify_password_async(value, dummy_hash().to_owned()).await?;
+      Ok(false)
+    }
   }
 }
 
@@ -130,9 +163,18 @@ pub async fn verify_password_async(
   })
 }
 
+/// Record an audit event on the caller's connection.
+///
+/// The record joins the tamper-evident hash chain, which reads the chain head
+/// before inserting. The connection must therefore already hold SQLite's
+/// write lock: pass an immediate transaction, or a transaction whose first
+/// statement was a write. Every business transaction that audits already
+/// writes first, and [`audit_standalone`] handles the remaining cases.
+///
+/// The client IP comes from the current request, when there is one.
 #[allow(clippy::too_many_arguments)]
-pub async fn audit<'e, E>(
-  executor: E,
+pub async fn audit(
+  connection: &mut sqlx::SqliteConnection,
   actor_type: &str,
   actor_id: Option<&str>,
   actor_label: Option<&str>,
@@ -142,12 +184,60 @@ pub async fn audit<'e, E>(
   resource_type: Option<&str>,
   resource_id: Option<&str>,
   metadata: Value,
-) -> Result<(), sqlx::Error>
-where
-  E: Executor<'e, Database = Sqlite>,
-{
-  sqlx::query("INSERT INTO audit_events(id, actor_type, actor_id, actor_label, action, project_id, environment_id, resource_type, resource_id, metadata, created_at) VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)")
-        .bind(token::public_id("aud_")).bind(actor_type).bind(actor_id).bind(actor_label).bind(action)
-        .bind(project_id).bind(environment_id).bind(resource_type).bind(resource_id).bind(metadata.to_string())
-        .bind(chrono::Utc::now().to_rfc3339()).execute(executor).await.map(|_| ())
+) -> Result<(), sqlx::Error> {
+  let metadata = metadata.to_string();
+  let created_at = chrono::Utc::now().to_rfc3339();
+  let ip_address = crate::services::client_ip::current().map(|address| address.to_string());
+  crate::services::audit_chain::append(
+    connection,
+    &AuditEntry {
+      id: &token::public_id("aud_"),
+      actor_type,
+      actor_id,
+      actor_label,
+      action,
+      project_id,
+      environment_id,
+      resource_type,
+      resource_id,
+      ip_address: ip_address.as_deref(),
+      metadata: &metadata,
+      created_at: &created_at,
+    },
+  )
+  .await
+}
+
+/// Record an audit event in its own committed transaction.
+///
+/// For actions that have no business transaction to join, so the record is
+/// durable on its own and the chain append stays atomic.
+#[allow(clippy::too_many_arguments)]
+pub async fn audit_standalone(
+  pool: &sqlx::SqlitePool,
+  actor_type: &str,
+  actor_id: Option<&str>,
+  actor_label: Option<&str>,
+  action: &str,
+  project_id: Option<&str>,
+  environment_id: Option<&str>,
+  resource_type: Option<&str>,
+  resource_id: Option<&str>,
+  metadata: Value,
+) -> Result<(), sqlx::Error> {
+  let mut transaction = pool.begin_with("BEGIN IMMEDIATE").await?;
+  audit(
+    &mut transaction,
+    actor_type,
+    actor_id,
+    actor_label,
+    action,
+    project_id,
+    environment_id,
+    resource_type,
+    resource_id,
+    metadata,
+  )
+  .await?;
+  transaction.commit().await
 }

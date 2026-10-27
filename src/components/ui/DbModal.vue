@@ -1,50 +1,51 @@
 <script setup lang="ts">
-import { onBeforeUnmount, onMounted, ref, watch } from "vue";
+import { computed, onBeforeUnmount, onMounted, ref, watch } from "vue";
 import { XIcon } from "~/assets/icons";
-import { acquireModalLayer, releaseModalLayer } from "./modalLayer";
+import { acquireScrollLock, releaseScrollLock } from "~/composable/scroll-lock";
+import { modalsSuspended } from "~/composable/modal-suspension";
 
 /**
  * DbModal — the single dialog primitive. Renders via Teleport, closes on
  * Escape and backdrop click (unless `persistent`), and locks body scroll
- * while open.
+ * while open. Below `sm` it docks to the bottom of the screen; the body
+ * scrolls on its own so the header and footer actions stay in reach.
+ *
+ * `layer` decides stacking, independent of mount order: page dialogs sit
+ * below the password confirmation (`auth`), which sits below "Session
+ * expired" (`session`). While the session is gone every dialog except the
+ * session layer hides and asks its owner to close.
  */
 const props = withDefaults(
   defineProps<{
     open: boolean;
     title: string;
-    size?: "sm" | "md" | "lg";
+    size?: "sm" | "md" | "lg" | "xl";
     persistent?: boolean;
-    /** Keeps the dialog above routine stacked modals (e.g. session expired). */
-    priority?: boolean;
+    layer?: "page" | "auth" | "session";
   }>(),
-  { size: "md", priority: false },
+  { size: "md", layer: "page" },
 );
 
 const emit = defineEmits<{ close: [] }>();
 
 const panel = ref<HTMLElement | null>(null);
-const layerZ = ref(70);
 
 const widthClass = {
   sm: "max-w-sm",
   md: "max-w-lg",
   lg: "max-w-2xl",
+  xl: "max-w-4xl",
 }[props.size];
 
-// Stacked dialogs (e.g. a confirm dialog over the import dialog) share one
-// body scroll lock: it is released only when the last one closes, so an
-// inner dialog unmounting early cannot unlock the page beneath an open one.
-let scrollLockCount = 0;
+const layerClass = {
+  page: "z-50",
+  auth: "z-[60]",
+  session: "z-[70]",
+}[props.layer];
 
-function acquireScrollLock(): void {
-  scrollLockCount += 1;
-  if (scrollLockCount === 1) document.body.style.overflow = "hidden";
-}
-
-function releaseScrollLock(): void {
-  scrollLockCount = Math.max(0, scrollLockCount - 1);
-  if (scrollLockCount === 0) document.body.style.overflow = "";
-}
+const visible = computed(
+  () => props.open && !(modalsSuspended.value && props.layer !== "session"),
+);
 
 function onKeydown(event: KeyboardEvent): void {
   if (event.key === "Escape" && !props.persistent) emit("close");
@@ -59,70 +60,70 @@ function focusPanel(): void {
   });
 }
 
-function setOpen(open: boolean): void {
+watch(visible, (open) => {
   if (open) {
-    layerZ.value = acquireModalLayer(props.priority);
     document.addEventListener("keydown", onKeydown);
     acquireScrollLock();
     focusPanel();
   } else {
     document.removeEventListener("keydown", onKeydown);
     releaseScrollLock();
-    releaseModalLayer();
   }
-}
+});
 
-watch(
-  () => props.open,
-  (open) => setOpen(open),
-);
+// Ask the owner to close as well, so its draft and pending state reset. An
+// owner that refuses (for example mid-save) stays hidden all the same.
+watch(modalsSuspended, (suspended) => {
+  if (suspended && props.open && props.layer !== "session") emit("close");
+});
 
 onMounted(() => {
-  if (props.open) setOpen(true);
+  if (visible.value) {
+    document.addEventListener("keydown", onKeydown);
+    acquireScrollLock();
+    focusPanel();
+  }
 });
 
 onBeforeUnmount(() => {
   document.removeEventListener("keydown", onKeydown);
-  if (props.open) {
-    releaseScrollLock();
-    releaseModalLayer();
-  }
+  if (visible.value) releaseScrollLock();
 });
 </script>
 
 <template>
   <Teleport to="body">
     <div
-      v-if="open"
-      class="fixed inset-0 flex items-center justify-center bg-black/60 p-4"
-      :style="{ zIndex: layerZ }"
+      v-if="visible"
+      :class="layerClass"
+      class="fixed inset-0 flex items-end justify-center bg-black/60 pt-4 sm:items-center sm:p-4"
       @mousedown.self="!persistent && emit('close')">
       <div
         ref="panel"
         :class="widthClass"
-        class="w-full rounded-card border border-line bg-panel shadow-2xl focus:outline-none"
+        class="flex max-h-[calc(100svh-1rem)] w-full flex-col rounded-t-card border border-line bg-panel shadow-2xl focus:outline-none sm:max-h-[calc(100svh-2rem)] sm:rounded-card"
         role="dialog"
         aria-modal="true"
         :aria-label="title"
         tabindex="-1">
         <header
-          class="flex items-center justify-between border-b border-line-soft px-5 py-3.5">
+          class="flex shrink-0 items-center justify-between gap-3 border-b border-line-soft px-5 py-3.5">
           <h2 class="text-[15px] font-semibold text-ink-strong">{{ title }}</h2>
           <button
             v-if="!persistent"
             type="button"
-            class="cursor-pointer rounded-control p-1 text-ink-muted transition-colors hover:bg-raised hover:text-ink-strong"
+            class="cursor-pointer rounded-control p-1 text-ink-muted pointer-coarse:p-2 transition-colors hover:bg-raised hover:text-ink-strong"
             aria-label="Close dialog"
             @click="emit('close')">
             <XIcon class="h-4 w-4" />
           </button>
         </header>
-        <div class="px-5 py-4">
+        <div class="min-h-0 overflow-y-auto px-5 py-4">
           <slot />
         </div>
         <footer
           v-if="$slots.footer"
-          class="flex items-center justify-end gap-2 border-t border-line-soft px-5 py-3.5">
+          class="flex shrink-0 flex-wrap items-center justify-end gap-2 border-t border-line-soft px-5 py-3.5">
           <slot name="footer" />
         </footer>
       </div>

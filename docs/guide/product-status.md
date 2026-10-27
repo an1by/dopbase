@@ -1,6 +1,6 @@
 ---
-title: "Product status"
-description: "What ships in Dopbase: the Rust server, CLI, Admin UI, REST API, and SQLite storage in one executable, plus current operational boundaries."
+title: "Product status: what ships in latest version"
+description: "What ships in Dopbase latest version: the Rust server, CLI, Admin UI, REST API, and SQLite storage in one executable, plus current operational boundaries."
 ---
 
 # Product status
@@ -19,20 +19,28 @@ documentation, and SQLite storage in one executable.
 - An embedded browser Admin UI covering setup, sign-in, project and
   environment management, secret management with a `.env` editor, runner
   tokens, audit events, and instance status
-- Process injection through `dopbase run`
+- Process injection through `dopbase run`, with `--only` and `--preserve-env`
+  to choose which secrets reach the process
+- Secret version history and rollback in the CLI and the Admin UI
 - Human authentication and environment-scoped runner tokens
+- Single sign-on for the Admin UI through one OpenID Connect provider, and
+  browser approval for `dopbase login`
 - Root, admin, member, and AI agent identities with role-aware permissions
 - User and AI account management, account metadata, and last-sign-in details
 - Instance status, resource health, and a root-only factory reset
 - Root-only full-instance encrypted backups with account-aware restore
-- Audit records
+- Audit records in a hash chain, with `dopbase audit verify`, `list`, and
+  `export`, and configurable retention
 - Self-hosted binaries for macOS and Linux on AMD64 and ARM64
 
 ## Current boundaries
 
-Version 0.1.0 requires a fresh data directory. Databases and `.dop` backups
-created by earlier releases are not supported. Keep the matching master key
-with every backup, and test restores before relying on them for recovery.
+The server migrates an existing database when it starts. From 0.1.10,
+migrations use timestamp versions, and a database that 0.1.10 has opened
+cannot go back to 0.1.9. Back up the database and master key before you
+upgrade. Databases and `.dop` backups from releases before 0.1.0 are not
+supported. Keep the matching master key with every backup, and test restores
+before relying on them for recovery.
 
 Dopbase Cloud is not available yet. The current release does not include
 native Windows binaries, automatic upgrades, or managed backups.

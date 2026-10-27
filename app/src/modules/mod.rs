@@ -14,6 +14,7 @@ pub mod instance;
 pub mod projects;
 pub mod secrets;
 pub mod service_accounts;
+pub mod sso;
 pub mod tokens;
 pub mod users;
 pub mod workspaces;
@@ -33,6 +34,7 @@ pub fn routes() -> Router<AppState> {
     .merge(instance::routes())
     .merge(backups::routes())
     .merge(users::routes())
+    .merge(sso::routes())
 }
 
 pub fn openapi() -> OpenApi {
@@ -49,5 +51,6 @@ pub fn openapi() -> OpenApi {
   doc.merge(instance::doc::build());
   doc.merge(backups::doc::build());
   doc.merge(users::doc::build());
+  doc.merge(sso::doc::build());
   doc
 }

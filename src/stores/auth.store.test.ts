@@ -43,6 +43,19 @@ describe("auth store", () => {
     expect(store.isAuthenticated).toBe(true);
   });
 
+  it("completeSso stores the exchanged session and returns the redirect", async () => {
+    vi.mocked(authApi.exchangeSso).mockResolvedValueOnce({
+      session: browserSession(),
+      redirectTo: "/projects/p/api",
+    });
+    const store = useAuthStore();
+    expect(await store.completeSso("ssoh_code")).toBe("/projects/p/api");
+    expect(authApi.exchangeSso).toHaveBeenCalledWith("ssoh_code");
+    expect(store.isAuthenticated).toBe(true);
+    expect(store.session?.recentAuthentication).toBe(true);
+    expect(store.csrfToken).toBe(browserSession().csrfToken);
+  });
+
   it("logout clears session and CSRF even when the API fails", async () => {
     vi.mocked(authApi.login).mockResolvedValueOnce(browserSession());
     vi.mocked(authApi.logout).mockRejectedValueOnce(
@@ -132,6 +145,20 @@ describe("auth store", () => {
       role: "admin",
       lastLoginAt: null,
     });
+  });
+
+  it("fetchSession gives a tab opened later its own CSRF token", async () => {
+    const store = useAuthStore();
+    vi.mocked(authApi.fetchSession).mockResolvedValueOnce(browserSessionInfo());
+    await store.fetchSession();
+    expect(store.csrfToken).toBeNull();
+
+    vi.mocked(authApi.fetchSession).mockResolvedValueOnce({
+      ...browserSessionInfo(),
+      csrfToken: "csrf_tab",
+    });
+    await store.fetchSession();
+    expect(store.csrfToken).toBe("csrf_tab");
   });
 
   it("reauthenticate marks the session recent", async () => {

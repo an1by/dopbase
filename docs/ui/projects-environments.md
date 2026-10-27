@@ -1,6 +1,6 @@
 ---
-title: "Projects and environments"
-description: "How the Admin UI organizes projects, environments, and secrets, and how to navigate between them."
+title: "Admin UI: projects and environments"
+description: "Browse projects and environments in the Dopbase Admin UI, share direct links to an environment, and manage its runner tokens."
 ---
 
 # Projects and environments
@@ -23,6 +23,12 @@ something usable instead of an empty screen.
   stop working, because names are part of the address.
 - **Delete** a project and Dopbase shows what goes with it (every environment
   and every secret inside) before you confirm. Deletion cannot be undone.
+
+On screens narrower than 1024 pixels the rail is hidden. The current project
+and environment appear at the top of the page as `project / environment`; tap
+them to open the rail, and it closes once you pick an environment. On touch
+screens the rename and delete buttons are always shown, because there is no
+hover to reveal them.
 
 ## Environments
 

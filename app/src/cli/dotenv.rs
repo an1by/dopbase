@@ -74,7 +74,7 @@ fn parse_triple_quoted(
   following: &[&str],
   next_line_idx: usize,
 ) -> Result<(String, usize)> {
-  let mut body = opening
+  let body = opening
     .strip_prefix("\"\"\"")
     .context("expected triple double quote opener")?;
 
@@ -95,9 +95,7 @@ fn parse_triple_quoted(
     i += 1;
     let trimmed_end = raw.trim_end();
     if trimmed_end.ends_with("\"\"\"") {
-      let part = trimmed_end
-        .strip_suffix("\"\"\"")
-        .unwrap_or(trimmed_end);
+      let part = trimmed_end.strip_suffix("\"\"\"").unwrap_or(trimmed_end);
       if !part.is_empty() {
         if !buf.is_empty() {
           buf.push('\n');
@@ -285,6 +283,3 @@ pub fn render_layout(
   }
   Ok(output)
 }
-
-
-

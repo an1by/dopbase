@@ -36,6 +36,28 @@ fn encode_project_ref(project_ref: &str) -> String {
     .join("%2F")
 }
 
+/// Append URL-encoded query parameters. Empty values are skipped, so callers
+/// can pass their options directly.
+fn with_params(
+  path: &str,
+  params: &[(&str, &str)],
+) -> String {
+  let query = params
+    .iter()
+    .filter(|(_, value)| !value.is_empty())
+    .map(|(name, value)| {
+      let encoded: String = url::form_urlencoded::byte_serialize(value.as_bytes()).collect();
+      format!("{name}={encoded}")
+    })
+    .collect::<Vec<_>>()
+    .join("&");
+  if query.is_empty() {
+    path.to_owned()
+  } else {
+    format!("{path}?{query}")
+  }
+}
+
 pub mod docs {
   pub const UI: &str = "/api/docs";
   pub const OPENAPI: &str = api_path!("/openapi.json");
@@ -57,6 +79,21 @@ pub mod auth {
   pub const SESSION: &str = api_path!("/auth/session");
   pub const REAUTHENTICATE: &str = api_path!("/auth/reauthenticate");
   pub const CHANGE_PASSWORD: &str = api_path!("/auth/change-password");
+  pub const METHODS: &str = api_path!("/auth/methods");
+  pub const CLI_DEVICE: &str = api_path!("/auth/cli/device");
+  pub const CLI_TOKEN: &str = api_path!("/auth/cli/token");
+  pub const CLI_CANCEL: &str = api_path!("/auth/cli/cancel");
+  pub const CLI_INSPECT: &str = api_path!("/auth/cli/inspect");
+  pub const CLI_APPROVE: &str = api_path!("/auth/cli/approve");
+  pub const CLI_DENY: &str = api_path!("/auth/cli/deny");
+  pub const SSO_START: &str = api_path!("/auth/sso/start");
+  pub const SSO_CALLBACK: &str = api_path!("/auth/sso/callback");
+  pub const SSO_EXCHANGE: &str = api_path!("/auth/sso/exchange");
+  pub const SSO_LINK: &str = api_path!("/auth/sso/link");
+  pub const SSO_IDENTITY: &str = api_path!("/auth/sso/identity");
+  pub const SSO_REAUTH: &str = api_path!("/auth/sso/reauth");
+  /// Admin UI page where a user approves a browser CLI login.
+  pub const CLI_APPROVE_PAGE: &str = "/cli/approve";
 }
 
 pub mod workspaces {
@@ -126,6 +163,10 @@ pub mod secrets {
   pub const RUNTIME: &str = api_path!("/environments/{environment_id}/secrets/runtime");
   pub const ITEM: &str = api_path!("/environments/{environment_id}/secrets/{key}");
   pub const REVEAL: &str = api_path!("/environments/{environment_id}/secrets/{key}/reveal");
+  pub const VERSIONS: &str = api_path!("/environments/{environment_id}/secrets/{key}/versions");
+  pub const VERSION_REVEAL: &str =
+    api_path!("/environments/{environment_id}/secrets/{key}/versions/{version}/reveal");
+  pub const ROLLBACK: &str = api_path!("/environments/{environment_id}/secrets/{key}/rollback");
 
   pub fn collection(environment_id: &str) -> String {
     super::render(COLLECTION, &[("environment_id", environment_id)])
@@ -160,6 +201,45 @@ pub mod secrets {
   ) -> String {
     super::render(REVEAL, &[("environment_id", environment_id), ("key", key)])
   }
+
+  pub fn versions(
+    environment_id: &str,
+    key: &str,
+    params: &[(&str, &str)],
+  ) -> String {
+    super::with_params(
+      &super::render(
+        VERSIONS,
+        &[("environment_id", environment_id), ("key", key)],
+      ),
+      params,
+    )
+  }
+
+  pub fn version_reveal(
+    environment_id: &str,
+    key: &str,
+    version: i64,
+  ) -> String {
+    super::render(
+      VERSION_REVEAL,
+      &[
+        ("environment_id", environment_id),
+        ("key", key),
+        ("version", &version.to_string()),
+      ],
+    )
+  }
+
+  pub fn rollback(
+    environment_id: &str,
+    key: &str,
+  ) -> String {
+    super::render(
+      ROLLBACK,
+      &[("environment_id", environment_id), ("key", key)],
+    )
+  }
 }
 
 pub mod tokens {
@@ -181,7 +261,27 @@ pub mod tokens {
 }
 
 pub mod audit {
+  use super::with_params as with_query;
+
   pub const COLLECTION: &str = api_path!("/audit-events");
+  pub const VERIFY: &str = api_path!("/audit-events/verify");
+
+  /// Build the audit list path with optional filters. Empty values are
+  /// skipped, so callers can pass their options directly.
+  pub fn collection(filters: &[(&str, &str)]) -> String {
+    with_query(COLLECTION, filters)
+  }
+
+  /// Build the verification path, with an outside anchor when given.
+  pub fn verify(anchor: Option<(i64, &str)>) -> String {
+    match anchor {
+      Some((seq, hash)) => with_query(
+        VERIFY,
+        &[("anchorSeq", &seq.to_string()), ("anchorHash", hash)],
+      ),
+      None => VERIFY.to_owned(),
+    }
+  }
 }
 
 pub mod instance {
@@ -190,9 +290,24 @@ pub mod instance {
   pub const FACTORY_RESET: &str = api_path!("/instance/factory-reset");
 }
 
+pub mod sso {
+  pub const PROVIDER: &str = api_path!("/sso/provider");
+  pub const PROVIDER_ENABLED: &str = api_path!("/sso/provider/enabled");
+  pub const PROVIDER_REQUIRED: &str = api_path!("/sso/provider/required");
+  pub const PROVIDER_PASSWORD_FORM: &str = api_path!("/sso/provider/password-form");
+  /// Admin UI pages the provider callback sends the browser back to.
+  pub const LOGIN_PAGE: &str = "/login";
+  pub const HANDOFF_PAGE: &str = "/login/sso";
+  pub const SETTINGS_PAGE: &str = "/sso";
+  pub const ACCOUNT_PAGE: &str = "/account";
+  /// Popup page that closes itself after a reauthentication.
+  pub const CONFIRMED_PAGE: &str = "/sso/confirmed";
+}
+
 pub mod users {
   pub const COLLECTION: &str = api_path!("/users");
   pub const ITEM: &str = api_path!("/users/{id}");
+  pub const SSO: &str = api_path!("/users/{id}/sso");
 
   pub fn item(id: &str) -> String {
     super::render(ITEM, &[("id", id)])

@@ -1,5 +1,6 @@
 <script setup lang="ts">
 import { useAccountController } from "./Account.controller";
+import SsoLinkCard from "./components/SsoLinkCard.vue";
 import { DashboardLayout } from "~/layouts";
 import {
   DbAlert,
@@ -22,6 +23,7 @@ const {
   formattedLastLogin,
   fullLastLogin,
   recentAuthentication,
+  needsCurrentPassword,
   currentPassword,
   newPassword,
   confirmPassword,
@@ -34,9 +36,9 @@ const {
 
 <template>
   <DashboardLayout>
-    <div class="mx-auto max-w-5xl p-8">
+    <div class="mx-auto max-w-5xl px-4 py-6 sm:px-6 lg:p-8">
       <!-- Header -->
-      <header class="mb-6 flex items-center justify-between">
+      <header class="mb-6 flex flex-wrap items-start justify-between gap-4">
         <div>
           <div class="flex items-center gap-2.5">
             <h1 class="text-lg font-semibold text-ink-strong">Account</h1>
@@ -96,6 +98,8 @@ const {
 
         <!-- Right column: Password Rotation -->
         <div class="space-y-6 lg:col-span-2">
+          <SsoLinkCard />
+
           <!-- Offline Recovery Card -->
           <section
             class="rounded-card border border-line bg-panel p-5 shadow-xs"
@@ -129,11 +133,16 @@ const {
               <h2
                 id="password-heading"
                 class="text-sm font-semibold text-ink-strong">
-                Change password
+                {{
+                  needsCurrentPassword ? "Change password" : "Set a password"
+                }}
               </h2>
               <p class="mt-1 text-xs text-ink-muted">
-                Rotating your password immediately invalidates all active
-                sessions across devices, including this one.
+                {{
+                  needsCurrentPassword
+                    ? "Rotating your password immediately invalidates all active sessions across devices, including this one."
+                    : "Your account signs in with single sign-on only. A password lets you sign in when the provider is unavailable. Saving it signs you out everywhere."
+                }}
               </p>
             </div>
 
@@ -143,6 +152,7 @@ const {
               data-testid="change-password-form"
               @submit.prevent="submit">
               <DbInput
+                v-if="needsCurrentPassword"
                 v-model="currentPassword"
                 label="Current password"
                 name="currentPassword"
@@ -175,7 +185,9 @@ const {
               <div
                 class="mt-2 flex items-center justify-end border-t border-line-soft pt-4">
                 <DbButton variant="primary" type="submit" :loading="submitting">
-                  Change password
+                  {{
+                    needsCurrentPassword ? "Change password" : "Set password"
+                  }}
                 </DbButton>
               </div>
             </form>

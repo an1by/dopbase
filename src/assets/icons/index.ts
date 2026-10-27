@@ -33,6 +33,7 @@ export { default as LayersIcon } from "./Layers.icon.vue";
 export { default as LockIcon } from "./Lock.icon.vue";
 export { default as LogOutIcon } from "./LogOut.icon.vue";
 export { default as MapPinIcon } from "./MapPin.icon.vue";
+export { default as MenuIcon } from "./Menu.icon.vue";
 export { default as MessageCircleIcon } from "./MessageCircle.icon.vue";
 export { default as PencilIcon } from "./Pencil.icon.vue";
 export { default as PlusIcon } from "./Plus.icon.vue";

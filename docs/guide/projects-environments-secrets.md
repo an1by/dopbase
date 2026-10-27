@@ -92,9 +92,39 @@ Reading metadata does not reveal a value. Reveal operations are explicit,
 permission-controlled, and audited. The official CLI requires interactive
 password confirmation every time `--reveal` is used.
 
+### Versions and rollback
+
+Every save gives a secret a new version number: setting it, importing it, or
+rolling it back. Dopbase keeps each version encrypted with the same envelope
+encryption as the current value, so you can see who changed a secret and when,
+and restore an earlier value:
+
+```bash
+dopbase secret history payment-service/staging DATABASE_URL
+dopbase secret rollback payment-service/staging DATABASE_URL 3
+```
+
+A rollback saves the earlier value as a new version. If `DATABASE_URL` is at
+v5 and you roll back to v3, it becomes v6 with the value of v3, and v1 to v5
+stay as they were. The server does this in one transaction, so runtime clients
+see either the old value or the restored one, never a partial change.
+
+Retention keeps the value of the newest 20 versions of each secret. Older
+versions keep only their metadata (the change, who made it, and when) and
+show as `expired`. Change the count with `secret_history_versions` in
+`server.toml`, or `DOPBASE_SECRET_HISTORY_VERSIONS`, to anything from 2 to 1000. Dopbase applies it when a secret is next saved, so lowering the count
+does not remove old values from secrets that stop changing. Each retained
+version takes about the size of its value plus a few hundred bytes.
+
+Secrets that existed before version history was added start with one version
+(their current value), shown as "before history". Deleting a secret, its
+environment, or its project deletes the history too. Rolling back a whole
+environment at once is not supported yet.
+
 ## Deletion
 
-Deleting an environment also removes its secrets and scoped tokens. Deleting a
+Deleting an environment also removes its secrets, their version history, and
+its scoped tokens. Deleting a
 project removes all of its environments. Dopbase shows affected resource counts
 and requires confirmation or `--yes` before either operation.
 

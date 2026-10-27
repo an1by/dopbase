@@ -164,6 +164,38 @@ pub(super) fn string(
     .to_owned()
 }
 
+/// Makes text safe to print to a terminal. Control characters, which could
+/// move the cursor or rewrite earlier lines, and bidirectional overrides,
+/// which could reorder what is shown, each become `?`.
+pub(super) fn printable(value: &str) -> String {
+  value
+    .chars()
+    .map(|character| {
+      if character.is_control()
+        || matches!(character, '\u{202a}'..='\u{202e}' | '\u{2066}'..='\u{2069}')
+      {
+        '?'
+      } else {
+        character
+      }
+    })
+    .collect()
+}
+
+/// Quotes a value for POSIX shells when it holds anything beyond characters
+/// that never need quoting.
+pub(super) fn shell_quote(value: &str) -> String {
+  let plain = !value.is_empty()
+    && value
+      .bytes()
+      .all(|byte| byte.is_ascii_alphanumeric() || b"@%+=:,./_-".contains(&byte));
+  if plain {
+    value.to_owned()
+  } else {
+    format!("'{}'", value.replace('\'', "'\\''"))
+  }
+}
+
 pub(super) fn timestamp(
   value: &Value,
   field: &str,

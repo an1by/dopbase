@@ -1,3 +1,5 @@
+import type { AccountRole } from "~/services/auth.api";
+
 /** Formats an RFC 3339 timestamp as a compact relative age, e.g. `2h ago`. */
 export function formatRelativeTime(
   iso: string,
@@ -61,4 +63,18 @@ export function formatBytes(bytes: number): string {
     unitIndex++;
   } while (val >= 1024 && unitIndex < units.length - 1);
   return `${val >= 10 ? Math.round(val) : val.toFixed(1)} ${units[unitIndex]}`;
+}
+
+// TODO(rbac): labels for the fixed roles. Show each role's own name from the
+// server once roles are configurable.
+const ROLE_LABELS: Record<AccountRole, string> = {
+  root: "Root Administrator",
+  admin: "Administrator",
+  member: "Member",
+  ai_agent: "AI Agent",
+};
+
+/** The name of an account role as people see it, e.g. `Root Administrator`. */
+export function formatRole(role: string): string {
+  return ROLE_LABELS[role as AccountRole] ?? role;
 }

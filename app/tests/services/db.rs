@@ -58,7 +58,7 @@ async fn creates_owner_only_database_file() {
 
 #[tokio::test]
 async fn migrations_apply_rollback_and_reapply() {
-  const TABLES: [&str; 11] = [
+  const TABLES: [&str; 14] = [
     "instance_metadata",
     "admins",
     "sessions",
@@ -70,12 +70,17 @@ async fn migrations_apply_rollback_and_reapply() {
     "environment_env_layout",
     "service_accounts",
     "agent_tokens",
+    "audit_chain_anchor",
+    "audit_chain_genesis",
+    "secret_versions",
   ];
-  const INDEXES: [&str; 10] = [
+  const TRIGGERS: [&str; 1] = ["audit_events_sealed_immutable"];
+  const INDEXES: [&str; 11] = [
     "sessions_token_hash_idx",
     "runner_tokens_token_hash_idx",
     "audit_events_created_idx",
     "audit_events_action_idx",
+    "audit_events_seq_idx",
     "sessions_revoked_retention_idx",
     "sessions_idle_retention_idx",
     "sessions_absolute_retention_idx",
@@ -94,6 +99,7 @@ async fn migrations_apply_rollback_and_reapply() {
   MIGRATOR.run(db.pool()).await.unwrap();
   assert_schema_objects(&db, "table", &TABLES, true).await;
   assert_schema_objects(&db, "index", &INDEXES, true).await;
+  assert_schema_objects(&db, "trigger", &TRIGGERS, true).await;
   let expiry_column: String = sqlx::query_scalar(
     "SELECT name FROM pragma_table_info('runner_tokens') WHERE name='expires_at'",
   )
@@ -101,14 +107,32 @@ async fn migrations_apply_rollback_and_reapply() {
   .await
   .unwrap();
   assert_eq!(expiry_column, "expires_at");
+  for column in ["seq", "prev_hash", "record_hash"] {
+    let chain_column: String =
+      sqlx::query_scalar("SELECT name FROM pragma_table_info('audit_events') WHERE name=?")
+        .bind(column)
+        .fetch_one(db.pool())
+        .await
+        .unwrap();
+    assert_eq!(chain_column, column);
+  }
+  let user_agent: i64 = sqlx::query_scalar(
+    "SELECT COUNT(*) FROM pragma_table_info('audit_events') WHERE name='user_agent'",
+  )
+  .fetch_one(db.pool())
+  .await
+  .unwrap();
+  assert_eq!(user_agent, 0, "the unused user_agent column is dropped");
 
   MIGRATOR.undo(db.pool(), 0).await.unwrap();
   assert_schema_objects(&db, "table", &TABLES, false).await;
   assert_schema_objects(&db, "index", &INDEXES, false).await;
+  assert_schema_objects(&db, "trigger", &TRIGGERS, false).await;
 
   MIGRATOR.run(db.pool()).await.unwrap();
   assert_schema_objects(&db, "table", &TABLES, true).await;
   assert_schema_objects(&db, "index", &INDEXES, true).await;
+  assert_schema_objects(&db, "trigger", &TRIGGERS, true).await;
   db.close().await;
 }
 
@@ -131,6 +155,7 @@ async fn foreign_keys_cascade_dependent_records() {
   .unwrap();
   sqlx::query("INSERT INTO environments(id,project_id,name,created_at,updated_at) VALUES('env_test','prj_test','production','now','now')").execute(db.pool()).await.unwrap();
   sqlx::query("INSERT INTO secrets(environment_id,key,ciphertext,value_nonce,wrapped_key,key_nonce,created_at,updated_at) VALUES('env_test','API_KEY',X'01',X'02',X'03',X'04','now','now')").execute(db.pool()).await.unwrap();
+  sqlx::query("INSERT INTO secret_versions(environment_id,key,version,ciphertext,value_nonce,wrapped_key,key_nonce,change_type,actor_type,created_at) VALUES('env_test','API_KEY',1,X'01',X'02',X'03',X'04','created','admin','now')").execute(db.pool()).await.unwrap();
   sqlx::query("INSERT INTO runner_tokens(id,environment_id,name,token_hash,created_at) VALUES('tok_test','env_test','runner',X'05','now')").execute(db.pool()).await.unwrap();
   let expiry: Option<String> =
     sqlx::query_scalar("SELECT expires_at FROM runner_tokens WHERE id='tok_test'")
@@ -148,13 +173,68 @@ async fn foreign_keys_cascade_dependent_records() {
     .await
     .unwrap();
 
-  for table in ["sessions", "environments", "secrets", "runner_tokens"] {
+  for table in [
+    "sessions",
+    "environments",
+    "secrets",
+    "secret_versions",
+    "runner_tokens",
+  ] {
     let count: i64 = sqlx::query_scalar(&format!("SELECT COUNT(*) FROM {table}"))
       .fetch_one(db.pool())
       .await
       .unwrap();
     assert_eq!(count, 0, "cascade did not clear {table}");
   }
+  db.close().await;
+}
+
+#[tokio::test]
+async fn secret_versions_migration_keeps_existing_values_as_legacy_versions() {
+  let directory = tempfile::TempDir::new().unwrap();
+  let database = directory.path().join("secret-versions.db");
+  let db = DbClient::connect(&format!("sqlite://{}", database.display()))
+    .await
+    .unwrap();
+  MIGRATOR.run(db.pool()).await.unwrap();
+  MIGRATOR
+    .undo(db.pool(), version_before("secret_versions"))
+    .await
+    .unwrap();
+  sqlx::query(
+    "INSERT INTO projects(id,name,created_at,updated_at) VALUES('prj_test','project','now','now')",
+  )
+  .execute(db.pool())
+  .await
+  .unwrap();
+  sqlx::query("INSERT INTO environments(id,project_id,name,created_at,updated_at) VALUES('env_test','prj_test','production','now','now')").execute(db.pool()).await.unwrap();
+  sqlx::query("INSERT INTO secrets(environment_id,key,version,ciphertext,value_nonce,wrapped_key,key_nonce,created_at,updated_at) VALUES('env_test','API_KEY',3,X'01',X'02',X'03',X'04','created','updated')").execute(db.pool()).await.unwrap();
+
+  MIGRATOR.run(db.pool()).await.unwrap();
+
+  let row: (i64, Vec<u8>, Vec<u8>, String, String, String, Option<String>) = sqlx::query_as(
+    "SELECT version,ciphertext,wrapped_key,change_type,actor_type,created_at,expired_at FROM secret_versions WHERE environment_id='env_test' AND key='API_KEY'",
+  )
+  .fetch_one(db.pool())
+  .await
+  .unwrap();
+  assert_eq!(
+    row,
+    (
+      3,
+      vec![1],
+      vec![3],
+      "legacy".into(),
+      "system".into(),
+      "updated".into(),
+      None
+    )
+  );
+  // Half-expired rows are rejected, so a version is either restorable or not.
+  let invalid = sqlx::query("UPDATE secret_versions SET ciphertext=NULL WHERE key='API_KEY'")
+    .execute(db.pool())
+    .await;
+  assert!(invalid.is_err());
   db.close().await;
 }
 
@@ -177,4 +257,28 @@ async fn assert_schema_objects(
       "unexpected state for {object_type} {name}"
     );
   }
+}
+
+/// Return the version immediately before `name` in migration order.
+///
+/// Tests undo to this version to revert `name` without pinning its number, so
+/// migrations added later do not require touching them.
+pub(crate) fn version_before(name: &str) -> i64 {
+  // sqlx turns the underscores in a migration's file name into spaces when it
+  // derives the description.
+  let description = name.replace('_', " ");
+  let mut migrations: Vec<_> = MIGRATOR
+    .iter()
+    .filter(|migration| !migration.migration_type.is_down_migration())
+    .collect();
+  migrations.sort_by_key(|migration| migration.version);
+
+  let mut previous = 0;
+  for migration in migrations {
+    if migration.description.as_ref() == description.as_str() {
+      return previous;
+    }
+    previous = migration.version;
+  }
+  panic!("migration {name} not found");
 }

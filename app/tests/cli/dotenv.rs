@@ -17,9 +17,7 @@ fn rejects_duplicates() {
 #[test]
 fn parses_triple_quoted_multiline() {
   let pem = "-----BEGIN OPENSSH PRIVATE KEY-----\nline2\n-----END OPENSSH PRIVATE KEY-----";
-  let text = format!(
-    "DEPLOY_SSH_KEY=\"\"\"\n{pem}\n\"\"\"\nPLAIN=ok\n"
-  );
+  let text = format!("DEPLOY_SSH_KEY=\"\"\"\n{pem}\n\"\"\"\nPLAIN=ok\n");
   let values = parse(&text).unwrap();
   assert_eq!(values.len(), 2);
   assert_eq!(values[0].key, "DEPLOY_SSH_KEY");
@@ -113,4 +111,3 @@ fn editor_parser_rejects_malformed_input_without_echoing_it() {
     assert!(!error.contains("private"));
   }
 }
-

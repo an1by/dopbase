@@ -22,6 +22,353 @@ All notable changes to Dopbase are documented in this file.
   runtime secrets API. Environment runner tokens (`dbs_…`) keep the scoped
   export API from 0.1.9.
 
+## 0.1.10 - 2026-10-26
+
+[Dopbase](https://dopbase.com) 0.1.10 adds single sign-on for the Admin UI
+through OpenID Connect, browser approval for `dopbase login`, and secret
+version history with rollback. The audit log becomes a hash chain that
+`dopbase audit verify` checks, and it can be listed, exported, and pruned on a
+schedule. The Admin UI works on phones. Migrations now use timestamp versions,
+so a database cannot go back to 0.1.9, and the invalid email error code is
+now `EMAIL_INVALID`.
+
+### Added
+
+- Accounts can go without a password once single sign-on is on. Administrators
+  leave the password empty on the Users page, which marks such accounts, and
+  the person signs in through the provider and can set a password later on the
+  Account page. Root can turn on **Require single sign-on**, which refuses
+  password sign-in for everyone except root, so root stays the way back in.
+  Turning single sign-on off lifts it, and the settings page warns how many
+  accounts have no password before you turn it off or remove it. Sensitive
+  actions can be confirmed at the provider in a popup that asks for a fresh
+  sign-in (`max_age=0`) and checks `auth_time`; in the CLI, an account that
+  cannot use a password, because it has none or single sign-on is required,
+  approves a code in the Admin UI instead of typing one, and only the owner of
+  that terminal session can approve it. Administrators can unlink an account's
+  identity, and people with a password can unlink their own. Root can also
+  hide the password form so the sign-in page shows only the single sign-on
+  button; passwords keep working in the CLI and the API, and root reaches the
+  form at `/login?password`. In the API, `POST /api/v1/users` accepts no `password` while single sign-on
+  is on, users report `hasPassword` and `ssoLinked`, and
+  `GET /api/v1/auth/session` reports `hasPassword`, `passwordConfirmation`,
+  and `ssoConfirmation`. New audit events: `sso_identity.unlinked` and
+  `sso_provider.policy_changed`. Issue #121.
+
+- Single sign-on for the Admin UI through one OpenID Connect provider, with
+  presets for Google, Microsoft Entra ID, Okta, Auth0, Amazon Cognito, Clerk,
+  Supabase, and Keycloak, plus an option for any other OpenID Connect
+  provider, such as Authentik or Zitadel. The presets live in one file,
+  `app/src/modules/sso/presets.toml`, so adding a provider takes one new entry
+  and no database or Admin UI change; `CONTRIBUTING.md` lists the fields.
+  `GET /api/v1/sso/provider` returns the list as `presets`, and saving an
+  unknown preset fails with `SSO_PRESET_INVALID`. It needs an HTTPS public
+  URL (`localhost` excepted): the settings page stays locked and says how to set one until then, and the
+  server refuses setup and sign-ins without it. Issuers entered with or
+  without a trailing slash are stored the way the provider publishes them.
+  Root configures it on the new Single sign-on page, registers the redirect URI it shows, and
+  must complete a test sign-in, which links the root account, before turning it
+  on. The sign-in page then shows a **Sign in with …** button. A first sign-in
+  links to an existing admin or member account only when the provider marks
+  the email as verified; later sign-ins match the provider's subject
+  identifier, so an email change at the provider cannot move the identity. Root
+  is never linked by email, unknown emails are refused, and people can link
+  from the Account page by hand. Saving a different issuer, for example when
+  moving from Google to Keycloak, removes the old links and turns single
+  sign-on off until the next test sign-in; people then link again by verified
+  email. Entra accounts link by email only with the
+  `xms_edov` claim. Sign-ins use PKCE, a nonce, and a `state` bound to the
+  starting browser, and finish through a one-time handoff code, so the
+  session cookie and CSRF token are set the same way as for password login.
+  The client secret is encrypted with the master key, re-encrypted on key
+  rotation, and restored with backups. Passwords keep working. New audit
+  events: `sso_provider.*`, `sso_identity.linked`, and `sso_login.failed`;
+  logins record `method: sso`. Issue #121.
+
+- `dopbase login --browser` signs the CLI in through the Admin UI, so the
+  password is never typed in the terminal. It prints a link to copy into any
+  browser and a short code, then waits until the code is approved at
+  `/cli/approve`. `--browser-open` also opens the link in this machine's
+  browser, and `--password` forces the password prompt. The approval page
+  stands on its own, with the code entered in one box per character. It uses
+  the browser's current session and shows which account it will sign in, with
+  a button to switch. Approving needs a recent confirmation, so an older
+  session gets the usual confirm dialog instead of being signed out. With no
+  session, or one that ends while the page is open, it goes to the sign-in page
+  and back, without the "session expired" dialog. Plain
+  `dopbase login` keeps asking for a password and switches to the browser when
+  the server reports that single sign-on is on or password login is off. The
+  new `GET /api/v1/auth/methods` endpoint reports which methods a server
+  accepts. The approval page shows the requesting hostname and IP address.
+  After an approval it counts down for 5 seconds and closes the tab. If the
+  browser won't let it, because the tab wasn't opened by a script, the page
+  says it can be closed by hand.
+  Approvals and
+  denials are audited as `cli_login.approved` and `cli_login.denied`, and the
+  issued session as `login.succeeded` with `method: browser`. Codes expire
+  after 10 minutes and work once, wrong codes are rate limited per session,
+  and Ctrl+C cancels the pending request. Issue #30.
+
+- `dopbase run` can pick which secrets reach the child. `--only KEY[,KEY]`
+  injects only the named keys and stops before the child starts if one is not
+  stored; `--allow-missing` turns that into a warning.
+  `--preserve-env KEY[,KEY]` keeps the value the shell already has for the
+  named keys. Both flags repeat and take comma lists. Warnings and the summary
+  line go to standard error and contain names only. Issue #17.
+
+- Secrets keep their version history. Every save (set, import, project init,
+  or rollback) stores the new version encrypted, with the change type, who
+  made it, and when. `dopbase secret history <ENVIRONMENT_REF> <KEY>` lists
+  versions newest first with their status (`current`, `available`, or
+  `expired`), pages with `--limit` and `--before`, prints the next-page
+  command to standard error, and prints the API page unchanged with `--json`.
+  `dopbase secret get <ENVIRONMENT_REF> <KEY> --version <N>` shows one
+  version, and `--reveal` prints its value after password confirmation. The
+  history never contains values; reveals are audited as
+  `secret.version_revealed`. Issue #33.
+
+- `dopbase secret rollback <ENVIRONMENT_REF> <KEY> [VERSION]` saves the value
+  of an earlier version as a new version and leaves the history unchanged, so
+  a rollback can be rolled back too. Without VERSION it lets you pick from the
+  versions that can still be restored. It shows the current version, the one
+  being restored, and the resulting version number, then asks for
+  confirmation unless `--yes` is passed; without a terminal, VERSION and
+  `--yes` are required. The request carries the version you saw, so a
+  rollback is refused with `SECRET_VERSION_CONFLICT` if someone changed the
+  secret in the meantime. Rollbacks are audited as `secret.rolled_back` with
+  the source, previous, and new versions and no value.
+
+- The secrets table in the web UI has a History button on each row, and the
+  update dialog links to it. The History dialog lists versions, reveals an
+  earlier value for thirty seconds after a password check, and rolls back
+  after one confirmation. When the secret changed while the dialog was open,
+  it reloads the history and asks you to try again.
+
+- `GET /api/v1/environments/{id}/secrets/{key}/versions`,
+  `POST .../versions/{version}/reveal`, and `POST .../rollback` serve the same
+  features to scripts. Listing has the access of `secret list`; reveal and
+  rollback need a project manager, the CSRF header and recent password
+  confirmation for browser sessions, and refuse runner and AI agent tokens.
+
+- `secret_history_versions` in `server.toml`, or
+  `DOPBASE_SECRET_HISTORY_VERSIONS`, sets how many of the newest versions of
+  each secret keep their value (2 to 1000, default 20). New instances start
+  with `secret_history_versions = 20` in the generated `server.toml`. Older
+  versions keep their metadata and show as `expired`. Pruning happens when a secret is
+  saved, so a lower count applies to each secret on its next save. The
+  `20261024010048_secret_versions` migration adds the `secret_versions` table
+  and records every existing secret as
+  its first version. Backups, restores, and master key rekeying carry the
+  retained versions.
+
+- The audit log is now a hash chain. Every audit record stores its position,
+  the hash of the record before it, and the hash of its own contents, so a
+  record that was modified, removed, or inserted after the fact stands out at
+  that point in the chain. `dopbase audit verify` recomputes every hash in
+  sequence order, stops at the first break, and exits with code `0` when the
+  chain is intact and `2` when it is broken. It prints the head sequence and
+  hash for external anchoring, and `--json` prints the full report.
+  `GET /api/v1/audit-events/verify` serves the same check to scripts and is
+  restricted to administrators, like the audit log itself.
+
+  Records written before this release are never sealed after the fact:
+  verification reports them as `legacy` without failing, and any record
+  without a chain position that is newer than the chain fails verification.
+  The database rejects updates of sealed records. The chain columns are
+  additive: existing audit endpoints, filters, and clients keep their shape,
+  and verification reads no secret values. Contributed by bosd in #123.
+  Issue #119.
+
+- `dopbase audit verify --anchor SEQ:HASH`, or `anchorSeq` and `anchorHash`
+  on the verify endpoint, compares the log with a head saved outside the
+  server and reports `matched`, `mismatch`, `missing`, or `pruned`. This
+  catches what the chain alone cannot: a fully rewritten log, or deleted
+  newest records. The server also logs the head as an `audit checkpoint` at
+  startup, at shutdown, and after every verification.
+
+- `dopbase audit list` shows one page of audit events, newest first, as a
+  table of time, chain sequence, actor, action, resource, project, and
+  environment. It takes the same `--action`, `--project`, `--environment`,
+  and `--actor` filters as `dopbase audit export`, plus `--limit` (1 to 200,
+  default 50) and `--cursor`. When more events match, the command for the
+  next page is printed to standard error with the same filters, and `--json`
+  prints the API page unchanged. Stored control characters show as `?` in
+  the table, so a planted record cannot rewrite the terminal around it.
+  Administrators only; no secret values are read.
+
+- `dopbase audit export` streams audit records as JSON lines to standard
+  output or, with `--output <FILE>`, to a file written with owner-only
+  permissions that is never replaced without `--force`. `--action`,
+  `--project`, `--environment`, and `--actor` narrow the stream, and `--limit`
+  caps it; without filters every record is exported by following pagination to
+  the end. Each line is the record exactly as the audit list API returns it,
+  chain fields (`seq`, `prevHash`, `recordHash`) included, so any exported
+  record can serve as a verification anchor. Export requires an
+  administrator account and reads no secret values. Contributed by bosd in
+  #124. Issue #119.
+
+- `audit_retention_days` in `server.toml`, or `DOPBASE_AUDIT_RETENTION_DAYS`,
+  sets how many days audit records are kept; unset keeps them forever. New
+  instances start with `audit_retention_days = 365` in the generated
+  `server.toml`. Existing instances keep their whole log until you add the
+  setting. Older records are archived as JSON lines to `audit-archive/` in
+  the data directory before they are deleted, and an `audit.pruned` record
+  marks where the chain continues, so `dopbase audit verify` still passes.
+  Retention runs at startup and then once a day, never inside the request
+  that writes a record.
+  Back up `audit-archive/` separately: snapshots store the database only.
+  Contributed by bosd in #125. Issue #119.
+
+- A Sign in with Google tutorial, with a diagram of the sign-in flow, that
+  covers the Google Auth Platform setup, the OAuth client, the Dopbase
+  settings, and the errors people run into most, such as
+  `redirect_uri_mismatch`.
+
+- A Sign in with Keycloak tutorial, with screenshots, that runs Keycloak in
+  Docker next to a local Dopbase and walks from creating the realm and client
+  to a member signing in. It is tested with Keycloak 26.4.7 and ends with
+  what changes for production and the common errors.
+
+- Screenshots in the documentation open full size when clicked. Escape, the
+  Close button, or a click on the image closes the view.
+
+### Improvement
+
+- The SQL for single sign-on, sign-in, CLI login, and users now lives in each
+  module's `repository.rs`, with the services calling it, as in the other
+  modules. Behavior is unchanged.
+
+- Code that hard-codes one of the four fixed roles (root, admin, member,
+  ai_agent) is marked with a `TODO(rbac):` comment, so the role-based access
+  control work can find every place with `rg "TODO\(rbac\)"`.
+  `CONTRIBUTING.md` and `CONTEXT.md` explain the marker.
+
+- Adding a migration file now rebuilds the binary. `sqlx::migrate!` embeds the
+  migrations at compile time, and without a build script a new file was only
+  picked up after some Rust source changed, so local builds and tests could run
+  a stale set.
+
+- Pull request descriptions have a Demo section. Features and improvements
+  need a screenshot or video, and other changes write `Not needed:` with a
+  reason. The template check enforces it, and `CONTRIBUTING.md` explains what
+  counts.
+
+- The update dialog in the web UI shows the key as a read-only field with
+  the current version, and says which version the save creates.
+
+- Audit records store the client's IP address, which was always empty
+  before. Behind a reverse proxy, list it in `trusted_proxies` in
+  `server.toml` or `DOPBASE_TRUSTED_PROXIES`, and the address comes from
+  `X-Forwarded-For` for that proxy's connections only, so a client cannot
+  choose the address it is recorded under. The audit list API returns
+  `ipAddress`, and the Audit page shows it with the actor type when an
+  event is expanded.
+
+- Restoring a backup archives the current audit log to
+  `audit-archive/pre-restore-<TIME>.jsonl` before replacing it, so records
+  written after the snapshot are kept; the restore stops if the archive
+  cannot be written. `backup.restored` names the archive, its record count,
+  and the replaced chain's head.
+
+- The admin UI now works on phones and tablets. Below 1024px the sidebar
+  folds into a top bar with a menu button that opens the navigation in a
+  side sheet, and the project rail moves behind a `project / environment`
+  switcher at the top of the Projects page.
+  Tables for secrets, tokens, backups, and audit events keep their
+  key columns on small screens and show the rest as a second line under each row.
+  Dialogs dock to the bottom of a phone screen and scroll inside,
+  so their buttons stay in reach. Project and environment rename and delete
+  buttons are always visible on touch screens, and form fields use
+  16px text on phones so iOS no longer zooms in when a field is focused.
+
+### Security
+
+- Improved security to prevent secret value guessing when importing secrets
+  in the Admin UI. The import also checks whether the session has expired.
+  Reported by kta1kri.
+
+- Fixed an account lockout bypass where failed logins for fake emails could
+  reset the attempt budget. The limiter now keeps locked entries, evicts the
+  keys with the fewest failures first, and scans for evictions in batches.
+  Applies to password confirmation, setup, CLI login codes, and SSO callbacks.
+  Reported by onurcangnc.
+
+- A failed login now takes as long for an unknown email, or an account with
+  no password, as for a wrong password: Dopbase verifies against a dummy hash.
+  Before, an unknown email answered at once, which told an attacker which
+  emails have accounts.
+
+- Turning on **Require single sign-on** signs out every account except root,
+  so sessions started with a password, CLI ones included, do not outlive the
+  policy.
+
+- One client can hold at most 20 pending single sign-on sign-ins and 20
+  pending CLI login requests, so the anonymous endpoints cannot be used to
+  fill the global caps and block everyone else.
+
+- Redirect targets after sign-in refuse backslashes and control characters,
+  which browsers can turn into a path to another site.
+
+### Note
+
+- **Breaking:** The error code for an invalid email is now `EMAIL_INVALID`. It
+  was spelled `EMAIL_INVAILD`; API clients that match on it need the new
+  spelling.
+
+- **Breaking:** Database migrations use UTC timestamp versions
+  (`YYYYMMDDHHMMSS_<name>.up.sql` and `.down.sql`), the format
+  `sqlx migrate add -r` generates, so two branches no longer pick the same
+  four-digit number. The existing migrations kept their names and only gained
+  the timestamp; 0.1.9 databases move onto the new versions automatically at
+  startup, and downgrading to 0.1.9 after this release is not supported.
+  Contributed by meulatea in #140. Issue #139.
+
+- **Breaking:** `dopbase run` no longer injects reserved names from stored
+  secrets, and prints the skipped names to standard error. The list covers the Dopbase
+  control variables (`DOPBASE_TOKEN`, `DOPBASE_URL`, `DOPBASE_ENV`,
+  `DOPBASE_DATA_DIR`, `DOPBASE_SECRETS_PATH`) and the shell variables skip:
+  `PATH`, `HOME`, `PS1`, `PS2`, and names that start
+  with `XDG_` or `LC_`. Before, a stored `DOPBASE_TOKEN` was injected even
+  though the inherited one was removed.
+  Names that load code into the child (`LD_PRELOAD`, `LD_LIBRARY_PATH`,
+  `DYLD_INSERT_LIBRARIES`, `DYLD_LIBRARY_PATH`, `NODE_OPTIONS`, `PERL5OPT`,
+  `PYTHONWARNINGS`, `BASH_ENV`, `PROMPT_COMMAND`, `JAVA_TOOL_OPTIONS`,
+  `PHPRC`) are skipped too unless `--only` names them; then they are
+  injected with a warning. If you store `NODE_OPTIONS` or another of these on
+  purpose, add it to `--only`. `NODE_VERSION`, `BROWSER`, `HOSTNAME`,
+  `WINDIR`, and `USERPROFILE` are still injected, with a warning. The summary
+  line counts injected keys, as `N of M key(s)` when some were left out.
+
+- Deleting a secret, an environment, or a project also deletes the version
+  history of the secrets involved, and so does a replace import for the keys
+  it removes. Restoring deleted secrets is tracked in #135.
+
+- The unused `user_agent` column is removed from `audit_events`; nothing
+  ever recorded a value in it.
+
+- Audit records name the root user's actions with the actor type `root`
+  instead of `admin`, so they stand apart from other administrators. Other
+  administrators keep `admin`.
+
+### Fixed
+
+- `GET /api/v1/auth/session` returns a `csrfToken` for browser sessions. Before,
+  only the tab that signed in had a token, so an Admin UI tab opened from a
+  link or in a new window could read but not change anything. The new token is
+  derived from the session's own on the server, and both stay valid.
+
+- Dialogs in the web UI stack in a fixed order: page dialogs, then the
+  password confirmation, then "Session expired". Before, a dialog could
+  open behind the one that was already up. When the session expires, every
+  other dialog closes, so saving with an expired session leaves only
+  "Session expired" and its sign-in button on screen, without an error
+  banner behind it.
+
+- The "confirm your password" dialog clears the password field whenever it
+  closes. Before, a password typed and then cancelled was still filled in the
+  next time the dialog opened.
+
+
 ## 0.1.9 - 2026-10-07
 
 [Dopbase](https://dopbase.com) 0.1.9 adds guided server setup, optional web UI,
