@@ -119,5 +119,19 @@ describe("highlightEnvContent", () => {
       true,
     );
   });
+
+  it("does not treat PEM or base64 padding lines as key=value", () => {
+    const content =
+      'DEPLOY_SSH_KEY="""\n-----BEGIN OPENSSH PRIVATE KEY-----\nYWxj=\n-----END OPENSSH PRIVATE KEY-----\n"""\n';
+    const lines = highlightEnvContent(content);
+    expect(lines[1].every((t) => t.type !== "key" && t.type !== "equals")).toBe(
+      true,
+    );
+    expect(lines[2]).toEqual([{ text: "YWxj=", type: "value" }]);
+    expect(lines.every((row) => !row.some((t) => t.type === "error"))).toBe(
+      true,
+    );
+  });
 });
+
 

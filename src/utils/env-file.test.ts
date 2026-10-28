@@ -40,6 +40,21 @@ describe("parseEnvFile", () => {
   });
 
   it("parses triple-quoted multiline values", () => {
+    const text =
+      'DEPLOY_SSH_KEY="""\n-----BEGIN OPENSSH PRIVATE KEY-----\nYWxj=\n-----END OPENSSH PRIVATE KEY-----\n"""\nPLAIN=ok\n';
+    const { entries, errors } = parseEnvFile(text);
+    expect(errors).toEqual([]);
+    expect(entries).toEqual([
+      {
+        key: "DEPLOY_SSH_KEY",
+        value:
+          "-----BEGIN OPENSSH PRIVATE KEY-----\nYWxj=\n-----END OPENSSH PRIVATE KEY-----",
+      },
+      { key: "PLAIN", value: "ok" },
+    ]);
+  });
+
+  it("parses triple-quoted multiline values (short body)", () => {
     const text = 'DEPLOY_SSH_KEY="""\ndasdas\n"""\nPLAIN=ok\n';
     const { entries, errors } = parseEnvFile(text);
     expect(errors).toEqual([]);
@@ -207,6 +222,7 @@ describe("mergeLayoutValues", () => {
     expect(layout).not.toContain("two words");
   });
 });
+
 
 
 

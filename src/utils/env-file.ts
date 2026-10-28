@@ -20,9 +20,14 @@ export interface ParsedEnvLines {
   issues: EnvFileIssue[];
 }
 
+import {
+  TRIPLE_DOUBLE,
+  computeTripleQuoteContinuationLines,
+  splitEnvLines,
+} from "./env-triple-quote";
+
 // Keep the browser grammar identical to the secrets endpoint.
 const KEY_PATTERN = /^[A-Za-z_][A-Za-z0-9_]*$/;
-const TRIPLE_DOUBLE = '"""';
 
 type TripleQuotedParse =
   | { ok: true; value: string; nextIndex: number }
@@ -106,7 +111,7 @@ export function parseEnvFileLines(content: string): ParsedEnvLines {
   const entries: ParsedEnvEntry[] = [];
   const issues: EnvFileIssue[] = [];
   const seen = new Set<string>();
-  const lines = content.split(/\r?\n/);
+  const lines = splitEnvLines(content);
 
   let index = 0;
   while (index < lines.length) {
@@ -187,7 +192,12 @@ export function parseEnvFileLines(content: string): ParsedEnvLines {
     entries.push({ key, value });
   }
 
-  return { entries, issues };
+  const continuation = computeTripleQuoteContinuationLines(lines);
+  const filteredIssues = issues.filter(
+    (issue) => !continuation.has(issue.line - 1),
+  );
+
+  return { entries, issues: filteredIssues };
 }
 
 /**

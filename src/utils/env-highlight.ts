@@ -7,6 +7,12 @@
  * here merely collapse into a single "error" token.
  */
 
+import {
+  TRIPLE_DOUBLE,
+  computeTripleQuoteContinuationLines,
+  splitEnvLines,
+} from "./env-triple-quote";
+
 export type EnvTokenType =
   | "plain"
   | "comment"
@@ -24,31 +30,11 @@ export interface EnvToken {
 
 const KEY_START = /^[A-Za-z_]/;
 const KEY_CHARS = /^[A-Za-z0-9_]*/;
-const TRIPLE_DOUBLE = '"""';
+const KEY_PATTERN = /^[A-Za-z_][A-Za-z0-9_]*$/;
 
 function whitespace(line: string, start: number): EnvToken | null {
   const match = /^\s+/.exec(line.slice(start));
   return match ? { text: match[0], type: "plain" } : null;
-}
-
-function lineOpensUnclosedTripleQuote(line: string): boolean {
-  const trimmed = line.trim();
-  if (trimmed === "" || trimmed.startsWith("#")) {
-    return false;
-  }
-  const withoutExport = trimmed.startsWith("export ")
-    ? trimmed.slice(7).trim()
-    : trimmed;
-  const separator = withoutExport.indexOf("=");
-  if (separator <= 0) {
-    return false;
-  }
-  const rawValue = withoutExport.slice(separator + 1).trim();
-  if (!rawValue.startsWith(TRIPLE_DOUBLE)) {
-    return false;
-  }
-  const body = rawValue.slice(TRIPLE_DOUBLE.length);
-  return !body.endsWith(TRIPLE_DOUBLE);
 }
 
 /** Tokenizes a line inside an open `KEY="""` … `"""` block. */
@@ -128,9 +114,7 @@ function tokenizeValue(rawValue: string): EnvToken[] {
 
 /**
  * Tokenizes a single `.env` line. Blank lines yield an empty token list.
- * comments, assignments, and malformed lines follow the same grammar as
- * `parseEnvFileLines` (except multiline `"""` continuations — use
- * {@link highlightEnvContent}).
+ * Multiline `"""` continuations must go through {@link highlightEnvContent}.
  */
 export function highlightEnvLine(line: string): EnvToken[] {
   const trimmed = line.trim();
@@ -153,6 +137,10 @@ export function highlightEnvLine(line: string): EnvToken[] {
     return tokens;
   }
   const key = KEY_CHARS.exec(line.slice(index))?.[0] ?? "";
+  if (!KEY_PATTERN.test(key)) {
+    tokens.push({ text: line.slice(index), type: "error" });
+    return tokens;
+  }
   tokens.push({ text: key, type: "key" });
   index += key.length;
   const gap = whitespace(line, index);
@@ -170,22 +158,16 @@ export function highlightEnvLine(line: string): EnvToken[] {
 
 /** Tokenizes full `.env` content into one token list per line. */
 export function highlightEnvContent(content: string): EnvToken[][] {
-  const rawLines = content.split("\n");
+  const rawLines = splitEnvLines(content);
+  const continuation = computeTripleQuoteContinuationLines(rawLines);
   const result: EnvToken[][] = [];
-  let inTriple = false;
 
-  for (const line of rawLines) {
-    if (inTriple) {
+  for (let i = 0; i < rawLines.length; i++) {
+    const line = rawLines[i];
+    if (continuation.has(i)) {
       result.push(highlightTripleContinuationLine(line));
-      const trimmedEnd = line.trimEnd();
-      if (trimmedEnd.endsWith(TRIPLE_DOUBLE)) {
-        inTriple = false;
-      }
-      continue;
-    }
-    result.push(highlightEnvLine(line));
-    if (lineOpensUnclosedTripleQuote(line)) {
-      inTriple = true;
+    } else {
+      result.push(highlightEnvLine(line));
     }
   }
 

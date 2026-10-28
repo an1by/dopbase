@@ -1,7 +1,10 @@
+EnvFileEditor.vue 251L cognitive
+// D:/Programming/Allior/devops/dopbase/src/pages/Projects/components/EnvFileEditor.vue
+§ block block (L1-L87)
 <script setup lang="ts">
 import { computed, ref } from "vue";
 import { highlightEnvContent, type EnvTokenType } from "~/utils/env-highlight";
-import type { EnvFileIssue } from "~/utils/env-file";
+import { parseEnvFileLines, type EnvFileIssue } from "~/utils/env-file";
 
 /**
  * EnvFileEditor — a lightweight, dependency-free `.env` editor.
@@ -85,30 +88,33 @@ const tokenClass: Record<EnvTokenType, string> = {
 const caretLine = ref(1);
 const caretCol = ref(1);
 
+§ function activeHighlightLine(line (L88-L91)
 function activeHighlightLine(line: number): boolean {
   const peer = props.peerActiveLine;
   return line + 1 === (peer && peer > 0 ? peer : caretLine.value);
 }
-
+// ... 1 lines omitted
+§ function syncCaret(el (L93-L98)
 function syncCaret(el: HTMLTextAreaElement): void {
   const lines = el.value.slice(0, el.selectionStart).split("\n");
   caretLine.value = lines.length;
   caretCol.value = (lines[lines.length - 1]?.length ?? 0) + 1;
   emit("caret-line", caretLine.value);
 }
-
+// ... 1 lines omitted
+§ function onCaretMove(event (L100-L102)
 function onCaretMove(event: Event): void {
   syncCaret(event.target as HTMLTextAreaElement);
 }
-
-const textarea = ref<HTMLTextAreaElement | null>(null);
-
+// ... 3 lines omitted
+§ function onInput(event (L106-L110)
 function onInput(event: Event): void {
   const el = event.target as HTMLTextAreaElement;
   emit("update:modelValue", el.value);
   syncCaret(el);
 }
-
+// ... 1 lines omitted
+§ function onKeydown(event (L112-L131)
 function onKeydown(event: KeyboardEvent): void {
   // Save shortcut — the universal editor reflex.
   if ((event.metaKey || event.ctrlKey) && event.key.toLowerCase() === "s") {
@@ -129,123 +135,10 @@ function onKeydown(event: KeyboardEvent): void {
     el.selectionStart = el.selectionEnd = selectionStart + 2;
   });
 }
-
+// ... 1 lines omitted
+§ function focus (L133-L135)
 function focus(): void {
   textarea.value?.focus();
 }
-
-defineExpose({ focus });
-</script>
-
-<template>
-  <div
-    data-testid="env-editor"
-    class="flex flex-col overflow-hidden rounded-card border bg-panel transition-colors focus-within:border-accent"
-    :class="[
-      issues.length > 0 ? 'border-crit/60' : 'border-line',
-      fillHeight ? 'min-h-0 flex-1' : '',
-    ]">
-    <!-- Editor tab bar: filename + dirty dot + context, editor chrome. -->
-    <div
-      class="flex items-center gap-2 border-b border-line-soft bg-panel px-3 py-2">
-      <span class="flex items-center gap-1.5 font-mono text-xs text-ink-strong">
-        <span
-          v-if="dirty"
-          class="h-2 w-2 rounded-full bg-accent"
-          aria-hidden="true" />
-        {{ filename }}
-      </span>
-      <span v-if="subtitle" class="truncate text-xs text-ink-faint">
-        {{ subtitle }}
-      </span>
-      <span class="ml-auto font-mono text-xs text-ink-faint">dotenv</span>
-    </div>
-
-    <!-- Code area: gutter column + tokenized highlight overlay, on the
-         darker canvas so the editor reads as a distinct surface. -->
-    <div
-      class="overflow-y-auto bg-canvas"
-      :class="
-        fillHeight ? 'min-h-0 flex-1' : 'max-h-[26rem] min-h-[12rem]'
-      ">
-      <div class="relative">
-        <!-- Highlight overlay: gutter number + tokens per logical line. -->
-        <div
-          aria-hidden="true"
-          class="block w-full py-3 font-mono text-xs leading-relaxed">
-          <div v-for="(tokens, line) in lineTokens" :key="line" class="flex">
-            <span
-              aria-hidden="true"
-              class="w-[6ch] shrink-0 select-none border-r border-line-soft bg-panel pr-[1ch] text-right"
-              :class="
-                errorLines.has(line + 1)
-                  ? 'font-semibold text-crit'
-                  : activeHighlightLine(line)
-                    ? 'text-ink-strong'
-                    : 'text-ink-faint'
-              "
-              >{{ line + 1 }}</span
-            ><span
-              class="min-w-0 flex-1 whitespace-pre-wrap break-words pr-[1ch]"
-              :class="activeHighlightLine(line) ? 'bg-raised' : ''"
-              ><template v-if="tokens.length === 0">&#8203;</template
-              ><span
-                v-for="(token, tokenIndex) in tokens"
-                :key="tokenIndex"
-                :class="tokenClass[token.type]"
-                >{{ token.text }}</span
-              ></span
-            >
-          </div>
-        </div>
-        <!-- Input layer: transparent text, visible caret. -->
-        <textarea
-          ref="textarea"
-          :value="modelValue"
-          :disabled="disabled"
-          :aria-label="ariaLabel"
-          :placeholder="placeholder"
-          :aria-invalid="issues.length > 0 ? true : undefined"
-          spellcheck="false"
-          autocapitalize="off"
-          autocomplete="off"
-          data-testid="env-editor-input"
-          class="absolute inset-0 w-full resize-none overflow-hidden whitespace-pre-wrap break-words bg-transparent py-3 pr-[1ch] font-mono text-xs leading-relaxed text-transparent caret-accent-strong outline-none selection:bg-accent-soft placeholder:text-ink-faint disabled:opacity-50"
-          :style="{ paddingLeft: `${GUTTER_CH}ch` }"
-          @input="onInput"
-          @keydown="onKeydown"
-          @keyup="onCaretMove"
-          @click="onCaretMove"
-          @select="onCaretMove"
-          @focus="onCaretMove" />
-      </div>
-    </div>
-
-    <!-- Status bar: cursor position and counts — the editor's heartbeat. -->
-    <div
-      class="flex flex-wrap items-center gap-x-3 gap-y-0.5 border-t border-line-soft bg-panel px-3 py-1.5 font-mono text-xs text-ink-faint">
-      <span>Ln {{ caretLine }}, Col {{ caretCol }}</span>
-      <span>{{ keyCount }} keys</span>
-      <span :class="issues.length > 0 ? 'text-crit' : ''">
-        {{ issues.length }} problems
-      </span>
-      <span class="ml-auto hidden sm:inline">ENV · UTF-8</span>
-    </div>
-
-    <!-- Problems strip -->
-    <div
-      v-if="issues.length > 0"
-      data-testid="env-editor-issues"
-      class="flex flex-col gap-1 border-t border-crit/30 bg-crit/5 px-3 py-2">
-      <p
-        v-for="issue in visibleIssues"
-        :key="`${issue.line}-${issue.message}`"
-        class="font-mono text-xs text-crit">
-        Line {{ issue.line }}: {{ issue.message }}
-      </p>
-      <p v-if="hiddenIssueCount > 0" class="font-mono text-xs text-crit/80">
-        +{{ hiddenIssueCount }} more issue(s)…
-      </p>
-    </div>
-  </div>
-</template>
+7/9 chunks shown (1075 tokens)
+[lean-ctx] full source: read "D:/Programming/Allior/devops/dopbase/src/pages/Projects/components/EnvFileEditor.vue" directly (no MCP)  ·  or ctx_read("D:/Programming/Allior/devops/dopbase/src/pages/Projects/components/EnvFileEditor.vue", mode="full")
