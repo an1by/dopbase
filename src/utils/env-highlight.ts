@@ -24,10 +24,55 @@ export interface EnvToken {
 
 const KEY_START = /^[A-Za-z_]/;
 const KEY_CHARS = /^[A-Za-z0-9_]*/;
+const TRIPLE_DOUBLE = '"""';
 
 function whitespace(line: string, start: number): EnvToken | null {
   const match = /^\s+/.exec(line.slice(start));
   return match ? { text: match[0], type: "plain" } : null;
+}
+
+function lineOpensUnclosedTripleQuote(line: string): boolean {
+  const trimmed = line.trim();
+  if (trimmed === "" || trimmed.startsWith("#")) {
+    return false;
+  }
+  const withoutExport = trimmed.startsWith("export ")
+    ? trimmed.slice(7).trim()
+    : trimmed;
+  const separator = withoutExport.indexOf("=");
+  if (separator <= 0) {
+    return false;
+  }
+  const rawValue = withoutExport.slice(separator + 1).trim();
+  if (!rawValue.startsWith(TRIPLE_DOUBLE)) {
+    return false;
+  }
+  const body = rawValue.slice(TRIPLE_DOUBLE.length);
+  return !body.endsWith(TRIPLE_DOUBLE);
+}
+
+/** Tokenizes a line inside an open `KEY="""` … `"""` block. */
+function highlightTripleContinuationLine(line: string): EnvToken[] {
+  const trimmedEnd = line.trimEnd();
+  if (!trimmedEnd.endsWith(TRIPLE_DOUBLE)) {
+    if (line === "") {
+      return [];
+    }
+    return [{ text: line, type: "value" }];
+  }
+  const part = trimmedEnd.slice(0, -TRIPLE_DOUBLE.length);
+  const valueEnd = line.length - (trimmedEnd.length - part.length);
+  const tokens: EnvToken[] = [];
+  if (valueEnd > 0) {
+    tokens.push({ text: line.slice(0, valueEnd), type: "value" });
+  }
+  const closer = line.slice(valueEnd);
+  if (closer) {
+    tokens.push({ text: closer, type: "quote" });
+  } else {
+    tokens.push({ text: line, type: "quote" });
+  }
+  return tokens;
 }
 
 /** Tokenizes a value part: quoted spans, plain text, and trailing comments. */
@@ -37,6 +82,19 @@ function tokenizeValue(rawValue: string): EnvToken[] {
   if (leading) tokens.push({ text: leading, type: "plain" });
   const rest = rawValue.slice(leading.length);
   if (rest === "") return tokens;
+
+  if (rest.startsWith(TRIPLE_DOUBLE)) {
+    const body = rest.slice(TRIPLE_DOUBLE.length);
+    if (body.endsWith(TRIPLE_DOUBLE)) {
+      tokens.push({ text: rest, type: "quote" });
+      return tokens;
+    }
+    tokens.push({ text: leading + TRIPLE_DOUBLE, type: "quote" });
+    if (body) {
+      tokens.push({ text: body, type: "value" });
+    }
+    return tokens;
+  }
 
   const quote = rest[0];
   if (quote === '"' || quote === "'") {
@@ -53,7 +111,6 @@ function tokenizeValue(rawValue: string): EnvToken[] {
       }
       return tokens;
     }
-    // Unterminated quote — the whole value is flagged for the error line.
     tokens.push({ text: rest, type: "error" });
     return tokens;
   }
@@ -72,7 +129,8 @@ function tokenizeValue(rawValue: string): EnvToken[] {
 /**
  * Tokenizes a single `.env` line. Blank lines yield an empty token list.
  * comments, assignments, and malformed lines follow the same grammar as
- * `parseEnvFileLines`.
+ * `parseEnvFileLines` (except multiline `"""` continuations — use
+ * {@link highlightEnvContent}).
  */
 export function highlightEnvLine(line: string): EnvToken[] {
   const trimmed = line.trim();
@@ -112,5 +170,24 @@ export function highlightEnvLine(line: string): EnvToken[] {
 
 /** Tokenizes full `.env` content into one token list per line. */
 export function highlightEnvContent(content: string): EnvToken[][] {
-  return content.split("\n").map(highlightEnvLine);
+  const rawLines = content.split("\n");
+  const result: EnvToken[][] = [];
+  let inTriple = false;
+
+  for (const line of rawLines) {
+    if (inTriple) {
+      result.push(highlightTripleContinuationLine(line));
+      const trimmedEnd = line.trimEnd();
+      if (trimmedEnd.endsWith(TRIPLE_DOUBLE)) {
+        inTriple = false;
+      }
+      continue;
+    }
+    result.push(highlightEnvLine(line));
+    if (lineOpensUnclosedTripleQuote(line)) {
+      inTriple = true;
+    }
+  }
+
+  return result;
 }
