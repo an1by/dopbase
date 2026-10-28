@@ -22,8 +22,57 @@ export interface ParsedEnvLines {
 
 // Keep the browser grammar identical to the secrets endpoint.
 const KEY_PATTERN = /^[A-Za-z_][A-Za-z0-9_]*$/;
+const TRIPLE_DOUBLE = '"""';
+
+type TripleQuotedParse =
+  | { ok: true; value: string; nextIndex: number }
+  | { ok: false; message: string };
+
+/** `KEY="""` … `"""` — matches the Rust secrets parser (PEM, multiline). */
+function parseTripleQuoted(
+  opening: string,
+  following: string[],
+  nextLineIdx: number,
+): TripleQuotedParse {
+  if (!opening.startsWith(TRIPLE_DOUBLE)) {
+    return { ok: false, message: "expected triple double quote opener" };
+  }
+  const body = opening.slice(TRIPLE_DOUBLE.length);
+  if (body.endsWith(TRIPLE_DOUBLE)) {
+    return {
+      ok: true,
+      value: body.slice(0, -TRIPLE_DOUBLE.length),
+      nextIndex: nextLineIdx,
+    };
+  }
+  let buf = body;
+  let i = nextLineIdx;
+  while (i < following.length) {
+    const raw = following[i];
+    i += 1;
+    const trimmedEnd = raw.trimEnd();
+    if (trimmedEnd.endsWith(TRIPLE_DOUBLE)) {
+      const part = trimmedEnd.slice(0, -TRIPLE_DOUBLE.length);
+      if (part !== "") {
+        if (buf !== "") {
+          buf += "\n";
+        }
+        buf += part;
+      }
+      return { ok: true, value: buf, nextIndex: i };
+    }
+    if (buf !== "") {
+      buf += "\n";
+    }
+    buf += raw;
+  }
+  return { ok: false, message: "unterminated triple double quote" };
+}
 
 function unquote(raw: string): { value: string; quoted: boolean } | null {
+  if (raw.startsWith(TRIPLE_DOUBLE)) {
+    return null;
+  }
   if (raw.length < 2) return null;
   const quote = raw[0];
   if (quote !== '"' && quote !== "'") return null;
@@ -48,9 +97,10 @@ function unquote(raw: string): { value: string; quoted: boolean } | null {
  *
  * Deliberately strict and dependency-free: handles blank lines, `#`
  * comments, an optional `export ` prefix, single- and double-quoted values,
- * and trailing `# comment` after unquoted values. Values are returned to
- * callers that need them (import submit, the editor buffer) but UI previews
- * must use {@link summarizeEnvEntries} so plaintext never renders.
+ * triple-quoted multiline blocks (`KEY="""` … `"""`), and trailing `# comment`
+ * after unquoted values. Values are returned to callers that need them
+ * (import submit, the editor buffer) but UI previews must use
+ * {@link summarizeEnvEntries} so plaintext never renders.
  */
 export function parseEnvFileLines(content: string): ParsedEnvLines {
   const entries: ParsedEnvEntry[] = [];
@@ -58,10 +108,15 @@ export function parseEnvFileLines(content: string): ParsedEnvLines {
   const seen = new Set<string>();
   const lines = content.split(/\r?\n/);
 
-  lines.forEach((line, index) => {
+  let index = 0;
+  while (index < lines.length) {
+    const line = lines[index];
     const lineNumber = index + 1;
+    index += 1;
     const trimmed = line.trim();
-    if (trimmed === "" || trimmed.startsWith("#")) return;
+    if (trimmed === "" || trimmed.startsWith("#")) {
+      continue;
+    }
 
     const withoutExport = trimmed.startsWith("export ")
       ? trimmed.slice(7).trim()
@@ -69,42 +124,68 @@ export function parseEnvFileLines(content: string): ParsedEnvLines {
     const separator = withoutExport.indexOf("=");
     if (separator <= 0) {
       issues.push({ line: lineNumber, message: "expected KEY=value." });
-      return;
+      continue;
     }
 
     const key = withoutExport.slice(0, separator).trim();
     const rawValue = withoutExport.slice(separator + 1).trim();
     if (!KEY_PATTERN.test(key)) {
       issues.push({ line: lineNumber, message: `invalid key "${key}".` });
-      return;
+      continue;
     }
     if (seen.has(key)) {
       issues.push({ line: lineNumber, message: `duplicate key "${key}".` });
-      return;
+      continue;
     }
 
     let value: string;
-    const quoted = unquote(rawValue);
-    if (quoted) {
-      value = quoted.value;
+    if (rawValue.startsWith(TRIPLE_DOUBLE)) {
+      const triple = parseTripleQuoted(rawValue, lines, index);
+      if (!triple.ok) {
+        issues.push({ line: lineNumber, message: triple.message });
+        while (index < lines.length) {
+          const next = lines[index].trim();
+          if (next === "") {
+            break;
+          }
+          const nextBody = next.startsWith("export ")
+            ? next.slice(7).trim()
+            : next;
+          const nextEq = nextBody.indexOf("=");
+          if (
+            nextEq > 0 &&
+            KEY_PATTERN.test(nextBody.slice(0, nextEq).trim())
+          ) {
+            break;
+          }
+          index += 1;
+        }
+        continue;
+      }
+      value = triple.value;
+      index = triple.nextIndex;
     } else {
-      // Strip an inline comment that follows an unquoted value.
-      const hashIndex = rawValue.indexOf(" #");
-      value = (
-        hashIndex === -1 ? rawValue : rawValue.slice(0, hashIndex)
-      ).trim();
-      if (value.startsWith("#")) {
-        issues.push({
-          line: lineNumber,
-          message: `key "${key}" has no value.`,
-        });
-        return;
+      const quoted = unquote(rawValue);
+      if (quoted) {
+        value = quoted.value;
+      } else {
+        const hashIndex = rawValue.indexOf(" #");
+        value = (
+          hashIndex === -1 ? rawValue : rawValue.slice(0, hashIndex)
+        ).trim();
+        if (value.startsWith("#")) {
+          issues.push({
+            line: lineNumber,
+            message: `key "${key}" has no value.`,
+          });
+          continue;
+        }
       }
     }
 
     seen.add(key);
     entries.push({ key, value });
-  });
+  }
 
   return { entries, issues };
 }
@@ -125,6 +206,10 @@ export function parseEnvFile(content: string): ParsedEnvFile {
 /** Quotes a value for `.env` output when it contains risky characters. */
 function serializeValue(value: string): string {
   if (value === "") return "";
+  if (value.includes("\n") && !value.includes("\r")) {
+    const body = value.replace(/\n+$/, "");
+    return `${TRIPLE_DOUBLE}\n${body}\n${TRIPLE_DOUBLE}`;
+  }
   if (/^[A-Za-z0-9_@/+=.,:%~-]*$/.test(value)) return value;
   return `"${value
     .replace(/\\/g, "\\\\")
@@ -159,8 +244,12 @@ export function summarizeEnvEntries(entries: ParsedEnvEntry[]): {
  * `KEY= # comment` slot would not re-parse as a valid empty value.
  */
 export function stripLayoutValues(content: string): string {
+  const lines = content.split(/\r?\n/);
   const out: string[] = [];
-  for (const line of content.split(/\r?\n/)) {
+  let index = 0;
+  while (index < lines.length) {
+    const line = lines[index];
+    index += 1;
     const trimmed = line.trim();
     if (trimmed === "" || trimmed.startsWith("#")) {
       out.push(line);
@@ -168,12 +257,19 @@ export function stripLayoutValues(content: string): string {
     }
     const separator = trimmed.indexOf("=");
     if (separator <= 0) {
-      // Unparsable line: kept as-is (it blocks saving anyway).
       out.push(line);
       continue;
     }
     const prefix = trimmed.slice(0, separator + 1);
     const rawValue = trimmed.slice(separator + 1).trim();
+    if (rawValue.startsWith(TRIPLE_DOUBLE)) {
+      out.push(prefix);
+      const triple = parseTripleQuoted(rawValue, lines, index);
+      if (triple.ok) {
+        index = triple.nextIndex;
+      }
+      continue;
+    }
     const quoted = unquote(rawValue);
     if (quoted) {
       out.push(prefix);
@@ -226,8 +322,6 @@ export function mergeLayoutValues(
     }
     if (!replaced) out.push(line);
   }
-  // Appended keys go before a single trailing blank line (the artifact of a
-  // final newline) so they do not land after a stray empty line.
   const trailingBlank = out.length > 0 && out[out.length - 1] === "";
   if (trailingBlank) out.pop();
   for (const entry of entries) {

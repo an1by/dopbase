@@ -39,6 +39,23 @@ describe("parseEnvFile", () => {
     ]);
   });
 
+  it("parses triple-quoted multiline values", () => {
+    const text = 'DEPLOY_SSH_KEY="""\ndasdas\n"""\nPLAIN=ok\n';
+    const { entries, errors } = parseEnvFile(text);
+    expect(errors).toEqual([]);
+    expect(entries).toEqual([
+      { key: "DEPLOY_SSH_KEY", value: "dasdas" },
+      { key: "PLAIN", value: "ok" },
+    ]);
+  });
+
+  it("reports unterminated triple-quoted values", () => {
+    const { errors } = parseEnvFile('A="""\nstill open\n');
+    expect(errors).toEqual([
+      "Line 1: unterminated triple double quote",
+    ]);
+  });
+
   it("keeps single-quoted values literally", () => {
     const { entries } = parseEnvFile("A='keep \\n literal'\n");
     expect(entries).toEqual([{ key: "A", value: "keep \\n literal" }]);
@@ -77,7 +94,9 @@ describe("serializeEnvFile", () => {
       { key: "B", value: "line1\nline2" },
       { key: "C", value: "" },
     ]);
-    expect(content).toBe('A="has \\"quotes\\""\nB="line1\\nline2"\nC=\n');
+    expect(content).toBe(
+      'A="has \\"quotes\\""\nB="""\nline1\nline2\n"""\nC=\n',
+    );
   });
 });
 
@@ -128,6 +147,12 @@ describe("stripLayoutValues", () => {
     expect(stripLayoutValues("A=1 # trailing\nB=2\n")).toBe(
       "# trailing\nA=\nB=\n",
     );
+  });
+
+  it("strips triple-quoted multiline values", () => {
+    expect(
+      stripLayoutValues('DEPLOY_SSH_KEY="""\nsecret\n"""\nPLAIN=x\n'),
+    ).toBe("DEPLOY_SSH_KEY=\nPLAIN=\n");
   });
 
   it("keeps unparsable lines untouched", () => {
@@ -182,3 +207,6 @@ describe("mergeLayoutValues", () => {
     expect(layout).not.toContain("two words");
   });
 });
+
+
+
