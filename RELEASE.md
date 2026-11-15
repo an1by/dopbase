@@ -120,8 +120,8 @@ Keep accurate entries and correct any that do not match the code.
 
 ## 4. Verify the release preparation
 
-Run the same checks used by the GitHub release workflow, plus the documentation
-build:
+Run the checks that the `CI` workflow runs on the release pull request, plus a
+clean build:
 
 ```bash
 bun run format:app:check
@@ -129,6 +129,7 @@ bun run lint:app
 bun run clean
 bun install --frozen-lockfile
 bun run test:github
+bun run test:docs
 bun run test
 bun run build
 ```
@@ -203,8 +204,9 @@ git push origin <version>
 Watch the `Release` GitHub Actions workflow triggered by the tag. It must:
 
 - verify the tag, package versions, and changelog;
-- pass the frontend, documentation, Rust, and release-binary checks;
+- confirm the tag is a commit on `main`;
 - build macOS and Linux archives for AMD64 and ARM64;
+- pass the e2e suites on the linux amd64 release binary;
 - generate `checksums.txt`;
 - generate notes from `CHANGELOG.md` and `.github/RELEASE_TEMPLATE.md`; and
 - publish the GitHub release and all five assets.

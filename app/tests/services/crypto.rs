@@ -121,23 +121,6 @@ async fn rekey_database_preserves_values_and_swaps_keys() {
   .await
   .unwrap();
   sqlx::query(
-    "CREATE TABLE secrets (
-      environment_id TEXT NOT NULL,
-      key TEXT NOT NULL,
-      version INTEGER NOT NULL DEFAULT 1,
-      ciphertext BLOB NOT NULL,
-      value_nonce BLOB NOT NULL,
-      wrapped_key BLOB NOT NULL,
-      key_nonce BLOB NOT NULL,
-      created_at TEXT NOT NULL,
-      updated_at TEXT NOT NULL,
-      PRIMARY KEY(environment_id, key)
-    );",
-  )
-  .execute(&pool)
-  .await
-  .unwrap();
-  sqlx::query(
     "CREATE TABLE secret_versions (
       environment_id TEXT NOT NULL,
       key TEXT NOT NULL,
@@ -183,23 +166,8 @@ async fn rekey_database_preserves_values_and_swaps_keys() {
   let encrypted = old_crypto
     .encrypt(cleartext, "env_test", "DB_PASS", 1)
     .unwrap();
-  sqlx::query(
-    "INSERT INTO secrets (environment_id, key, version, ciphertext, value_nonce, wrapped_key, key_nonce, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
-  )
-  .bind("env_test")
-  .bind("DB_PASS")
-  .bind(1_i64)
-  .bind(&encrypted.ciphertext)
-  .bind(&encrypted.value_nonce)
-  .bind(&encrypted.wrapped_key)
-  .bind(&encrypted.key_nonce)
-  .bind("2026-09-05T00:00:00Z")
-  .bind("2026-09-05T00:00:00Z")
-  .execute(&pool)
-  .await
-  .unwrap();
-
-  // An earlier retained version, and one whose ciphertext retention removed.
+  // The current value lives in secret_versions only: an earlier retained
+  // version, the current one, and one whose ciphertext retention removed.
   let earlier = old_crypto
     .encrypt(b"earlier-password", "env_test", "DB_PASS", 0)
     .unwrap();
@@ -299,27 +267,5 @@ async fn rekey_database_preserves_values_and_swaps_keys() {
       .decrypt_master(&metadata.0, &metadata.1, b"instance-verification")
       .unwrap(),
     VERIFICATION_TEXT
-  );
-
-  let row: (Vec<u8>, Vec<u8>, Vec<u8>, Vec<u8>) = sqlx::query_as(
-    "SELECT ciphertext, value_nonce, wrapped_key, key_nonce FROM secrets WHERE environment_id = ? AND key = ?",
-  )
-  .bind("env_test")
-  .bind("DB_PASS")
-  .fetch_one(&pool)
-  .await
-  .unwrap();
-  let rekeyed = EncryptedValue {
-    ciphertext: row.0,
-    value_nonce: row.1,
-    wrapped_key: row.2,
-    key_nonce: row.3,
-  };
-  assert_eq!(
-    new_crypto
-      .decrypt(&rekeyed, "env_test", "DB_PASS", 1)
-      .unwrap()
-      .as_slice(),
-    cleartext
   );
 }

@@ -1,0 +1,55 @@
+{
+  "version": "0.1.10",
+  "root": {
+    "email": "root@dopbase.com",
+    "password": "e2e-fixture-password-123"
+  },
+  "people": [
+    {
+      "email": "ada@dopbase.com",
+      "password": "ada-fixture-password-1",
+      "role": "admin",
+      "id": "usr_01M76PCB367KPMT40S6KNBVQ0M"
+    },
+    {
+      "email": "max@dopbase.com",
+      "password": "max-fixture-password-1",
+      "role": "member",
+      "id": "usr_01M76PCB4SFTNKS1D7WDJQPD9T"
+    }
+  ],
+  "agent": {
+    "id": "aia_01M76PCB5H1PW189A4PMS5TRRS",
+    "name": "deploy-bot",
+    "token": "dpa_TRzqGmbbL3myxfQoF07GIjTgm2nN3umdejF5vayCTyk"
+  },
+  "project": {
+    "id": "prj_01M76PCB5VQD7659RH619BQE4E",
+    "name": "shop"
+  },
+  "environments": {
+    "dev": "env_256309",
+    "prod": "env_658771"
+  },
+  "secrets": {
+    "dev": {
+      "API_KEY": "upgrade_fixture_api_key_v3_2b996c15503c9396",
+      "DATABASE_URL": "upgrade_fixture_database_url_d45abc86b74581d0"
+    },
+    "prod": {
+      "API_KEY": "upgrade_fixture_prod_api_key_b40d9dce13463c19"
+    }
+  },
+  "apiKeyVersion": 3,
+  "deletedSecret": {
+    "environment": "prod",
+    "key": "OLD_FLAG",
+    "value": "upgrade_fixture_removed_e1f79758cc42e6fe"
+  },
+  "runnerToken": {
+    "id": "tok_01M76PCB6MXK9TGRGM0S6PWSEX",
+    "token": "dbs_wvey5zMI_zL9SU3W9EUGYXp8ZC1mnpWiiCYWKsVesbY"
+  },
+  "auditEventsBefore": 22,
+  "backupKey": "before-0-2.dop"
+}

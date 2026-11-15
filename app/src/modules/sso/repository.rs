@@ -1,4 +1,3 @@
-use crate::modules::common::NO_PASSWORD_HASH;
 use sqlx::{SqliteConnection, SqlitePool};
 
 #[derive(sqlx::FromRow)]
@@ -33,7 +32,7 @@ pub async fn provider_by_id(
   id: &str,
 ) -> Result<Option<ProviderRow>, sqlx::Error> {
   sqlx::query_as(&format!(
-    "SELECT {PROVIDER_COLUMNS} FROM sso_providers WHERE id=?"
+    "SELECT {PROVIDER_COLUMNS} FROM sso_providers WHERE id=$1"
   ))
   .bind(id)
   .fetch_optional(pool)
@@ -59,7 +58,7 @@ pub async fn confirmation_name(
   admin_id: &str,
 ) -> Result<Option<String>, sqlx::Error> {
   sqlx::query_scalar(
-    "SELECT p.display_name FROM sso_providers p JOIN admin_identities i ON i.provider_id=p.id WHERE p.enabled=1 AND i.admin_id=? LIMIT 1",
+    "SELECT p.display_name FROM sso_providers p JOIN user_identities i ON i.provider_id=p.id WHERE p.enabled=1 AND i.user_id=$1 LIMIT 1",
   )
   .bind(admin_id)
   .fetch_optional(pool)
@@ -70,21 +69,18 @@ pub async fn linked_count(
   pool: &SqlitePool,
   provider_id: &str,
 ) -> Result<i64, sqlx::Error> {
-  sqlx::query_scalar("SELECT COUNT(*) FROM admin_identities WHERE provider_id=?")
+  sqlx::query_scalar("SELECT COUNT(*) FROM user_identities WHERE provider_id=$1")
     .bind(provider_id)
     .fetch_one(pool)
     .await
 }
 
-/// Admins and members without a password, who can only sign in through
-/// single sign-on.
+/// People without a password, who can only sign in through single sign-on.
+/// Root always has one, and AI agents never sign in.
 pub async fn passwordless_count(pool: &SqlitePool) -> Result<i64, sqlx::Error> {
-  // TODO(rbac): counts the fixed admin and member roles. Count every role
-  // that may sign in without a password once roles are configurable.
   sqlx::query_scalar(
-    "SELECT COUNT(*) FROM admins WHERE password_hash=? AND role IN ('admin','member')",
+    "SELECT COUNT(*) FROM users u JOIN accounts a ON a.id = u.id JOIN roles r ON r.id = a.role_id WHERE u.password_hash IS NULL AND a.is_root = 0 AND r.sign_in = 'interactive'",
   )
-  .bind(NO_PASSWORD_HASH)
   .fetch_one(pool)
   .await
 }
@@ -105,7 +101,7 @@ pub async fn insert_provider(
   conn: &mut SqliteConnection,
   fields: ProviderFields<'_>,
 ) -> Result<(), sqlx::Error> {
-  sqlx::query("INSERT INTO sso_providers(id,preset,display_name,issuer,client_id,client_secret_ciphertext,client_secret_nonce,enabled,verified_at,created_at,updated_at) VALUES(?,?,?,?,?,?,?,0,NULL,?,?)")
+  sqlx::query("INSERT INTO sso_providers(id,preset,display_name,issuer,client_id,client_secret_ciphertext,client_secret_nonce,enabled,verified_at,created_at,updated_at) VALUES($1,$2,$3,$4,$5,$6,$7,0,NULL,$8,$9)")
     .bind(fields.id)
     .bind(fields.preset)
     .bind(fields.display_name)
@@ -127,7 +123,7 @@ pub async fn update_provider(
   fields: ProviderFields<'_>,
   reverify: bool,
 ) -> Result<(), sqlx::Error> {
-  sqlx::query("UPDATE sso_providers SET preset=?,display_name=?,issuer=?,client_id=?,client_secret_ciphertext=?,client_secret_nonce=?,enabled=CASE WHEN ? THEN 0 ELSE enabled END,require_sso=CASE WHEN ? THEN 0 ELSE require_sso END,verified_at=CASE WHEN ? THEN NULL ELSE verified_at END,updated_at=? WHERE id=?")
+  sqlx::query("UPDATE sso_providers SET preset=$1,display_name=$2,issuer=$3,client_id=$4,client_secret_ciphertext=$5,client_secret_nonce=$6,enabled=CASE WHEN $7 THEN 0 ELSE enabled END,require_sso=CASE WHEN $8 THEN 0 ELSE require_sso END,verified_at=CASE WHEN $9 THEN NULL ELSE verified_at END,updated_at=$10 WHERE id=$11")
     .bind(fields.preset)
     .bind(fields.display_name)
     .bind(fields.issuer)
@@ -152,7 +148,7 @@ pub async fn set_enabled(
   now: &str,
 ) -> Result<(), sqlx::Error> {
   sqlx::query(
-    "UPDATE sso_providers SET enabled=?,require_sso=require_sso AND ?,updated_at=? WHERE id=?",
+    "UPDATE sso_providers SET enabled=$1,require_sso=require_sso AND $2,updated_at=$3 WHERE id=$4",
   )
   .bind(enabled)
   .bind(enabled)
@@ -169,7 +165,7 @@ pub async fn set_required(
   required: bool,
   now: &str,
 ) -> Result<(), sqlx::Error> {
-  sqlx::query("UPDATE sso_providers SET require_sso=?,updated_at=? WHERE id=?")
+  sqlx::query("UPDATE sso_providers SET require_sso=$1,updated_at=$2 WHERE id=$3")
     .bind(required)
     .bind(now)
     .bind(id)
@@ -184,7 +180,7 @@ pub async fn set_password_form_hidden(
   hidden: bool,
   now: &str,
 ) -> Result<(), sqlx::Error> {
-  sqlx::query("UPDATE sso_providers SET hide_password_form=?,updated_at=? WHERE id=?")
+  sqlx::query("UPDATE sso_providers SET hide_password_form=$1,updated_at=$2 WHERE id=$3")
     .bind(hidden)
     .bind(now)
     .bind(id)
@@ -198,7 +194,7 @@ pub async fn delete_provider(
   conn: &mut SqliteConnection,
   id: &str,
 ) -> Result<(), sqlx::Error> {
-  sqlx::query("DELETE FROM sso_providers WHERE id=?")
+  sqlx::query("DELETE FROM sso_providers WHERE id=$1")
     .bind(id)
     .execute(conn)
     .await?;
@@ -213,7 +209,7 @@ pub async fn mark_verified(
   now: &str,
 ) -> Result<bool, sqlx::Error> {
   let updated =
-    sqlx::query("UPDATE sso_providers SET verified_at=? WHERE id=? AND verified_at IS NULL")
+    sqlx::query("UPDATE sso_providers SET verified_at=$1 WHERE id=$2 AND verified_at IS NULL")
       .bind(now)
       .bind(id)
       .execute(conn)
@@ -222,15 +218,15 @@ pub async fn mark_verified(
   Ok(updated == 1)
 }
 
-/// Signs out every account except root.
+/// Signs out every account except root. Root alone holds
+/// password.breakglass, the capability to keep password sign-in while single
+/// sign-on is required, and no role can be given it.
 pub async fn revoke_non_root_sessions(
   conn: &mut SqliteConnection,
   now: &str,
 ) -> Result<u64, sqlx::Error> {
-  // TODO(rbac): root is the fixed break-glass role. Exempt whichever roles
-  // may keep password sign-in once roles are configurable.
   Ok(
-    sqlx::query("UPDATE sessions SET revoked_at=? WHERE revoked_at IS NULL AND admin_id IN (SELECT id FROM admins WHERE role<>'root')")
+    sqlx::query("UPDATE sessions SET revoked_at=$1 WHERE revoked_at IS NULL AND user_id IN (SELECT id FROM accounts WHERE is_root=0)")
       .bind(now)
       .execute(conn)
       .await?
@@ -259,7 +255,7 @@ pub async fn insert_identity(
   conn: &mut SqliteConnection,
   identity: NewIdentity<'_>,
 ) -> Result<(), sqlx::Error> {
-  sqlx::query("INSERT INTO admin_identities(id,admin_id,provider_id,issuer,subject,email_at_link,linked_via,created_at,last_login_at) VALUES(?,?,?,?,?,?,?,?,?)")
+  sqlx::query("INSERT INTO user_identities(id,user_id,provider_id,issuer,subject,email_at_link,linked_via,created_at,last_login_at) VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9)")
     .bind(identity.id)
     .bind(identity.admin_id)
     .bind(identity.provider_id)
@@ -280,7 +276,7 @@ pub async fn identity_owner(
   issuer: &str,
   subject: &str,
 ) -> Result<Option<String>, sqlx::Error> {
-  sqlx::query_scalar("SELECT admin_id FROM admin_identities WHERE issuer=? AND subject=?")
+  sqlx::query_scalar("SELECT user_id FROM user_identities WHERE issuer=$1 AND subject=$2")
     .bind(issuer)
     .bind(subject)
     .fetch_optional(conn)
@@ -294,7 +290,11 @@ pub async fn linked_account(
   subject: &str,
 ) -> Result<Option<(String, String)>, sqlx::Error> {
   sqlx::query_as(
-    "SELECT a.id,a.role FROM admin_identities i JOIN admins a ON a.id=i.admin_id WHERE i.issuer=? AND i.subject=?",
+    concat!(
+      "SELECT a.id, ",
+      crate::legacy_role_sql!("a"),
+      " FROM user_identities i JOIN accounts a ON a.id = i.user_id WHERE i.issuer = $1 AND i.subject = $2"
+    ),
   )
   .bind(issuer)
   .bind(subject)
@@ -308,7 +308,7 @@ pub async fn touch_identity(
   subject: &str,
   now: &str,
 ) -> Result<(), sqlx::Error> {
-  sqlx::query("UPDATE admin_identities SET last_login_at=? WHERE issuer=? AND subject=?")
+  sqlx::query("UPDATE user_identities SET last_login_at=$1 WHERE issuer=$2 AND subject=$3")
     .bind(now)
     .bind(issuer)
     .bind(subject)
@@ -324,7 +324,7 @@ pub async fn identity_of(
   provider_id: &str,
 ) -> Result<Option<(Option<String>, String)>, sqlx::Error> {
   sqlx::query_as(
-    "SELECT email_at_link,created_at FROM admin_identities WHERE admin_id=? AND provider_id=?",
+    "SELECT email_at_link,created_at FROM user_identities WHERE user_id=$1 AND provider_id=$2",
   )
   .bind(admin_id)
   .bind(provider_id)
@@ -340,7 +340,7 @@ pub async fn delete_identities_from_other_issuers(
   issuer: &str,
 ) -> Result<u64, sqlx::Error> {
   Ok(
-    sqlx::query("DELETE FROM admin_identities WHERE provider_id=? AND issuer<>?")
+    sqlx::query("DELETE FROM user_identities WHERE provider_id=$1 AND issuer<>$2")
       .bind(provider_id)
       .bind(issuer)
       .execute(conn)
@@ -354,7 +354,7 @@ pub async fn delete_identities_of(
   admin_id: &str,
 ) -> Result<u64, sqlx::Error> {
   Ok(
-    sqlx::query("DELETE FROM admin_identities WHERE admin_id=?")
+    sqlx::query("DELETE FROM user_identities WHERE user_id=$1")
       .bind(admin_id)
       .execute(conn)
       .await?
@@ -367,7 +367,7 @@ pub async fn delete_expired_flows(
   conn: &mut SqliteConnection,
   now: &str,
 ) -> Result<(), sqlx::Error> {
-  sqlx::query("DELETE FROM sso_flows WHERE expires_at < ?")
+  sqlx::query("DELETE FROM sso_flows WHERE expires_at < $1")
     .bind(now)
     .execute(conn)
     .await?;
@@ -379,7 +379,7 @@ pub async fn pending_flows(
   conn: &mut SqliteConnection,
   client_ip: Option<&str>,
 ) -> Result<(i64, i64), sqlx::Error> {
-  sqlx::query_as("SELECT COUNT(*), COALESCE(SUM(client_ip IS ?), 0) FROM sso_flows")
+  sqlx::query_as("SELECT COUNT(*), COALESCE(SUM(CASE WHEN client_ip = $1 OR (client_ip IS NULL AND $1 IS NULL) THEN 1 ELSE 0 END), 0) FROM sso_flows")
     .bind(client_ip)
     .fetch_one(conn)
     .await
@@ -405,7 +405,7 @@ pub async fn insert_flow(
   conn: &mut SqliteConnection,
   flow: NewFlow<'_>,
 ) -> Result<(), sqlx::Error> {
-  sqlx::query("INSERT INTO sso_flows(id,state_hash,provider_id,purpose,nonce,pkce_verifier,binding_hash,session_id,admin_id,redirect_to,client_ip,created_at,expires_at) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?)")
+  sqlx::query("INSERT INTO sso_flows(id,state_hash,provider_id,purpose,nonce,pkce_verifier,binding_hash,session_id,user_id,redirect_to,client_ip,created_at,expires_at) VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13)")
     .bind(flow.id)
     .bind(flow.state_hash)
     .bind(flow.provider_id)
@@ -432,6 +432,7 @@ pub struct FlowRow {
   pub nonce: String,
   pub pkce_verifier: String,
   pub session_id: Option<String>,
+  #[sqlx(rename = "user_id")]
   pub admin_id: Option<String>,
   pub created_at: String,
 }
@@ -445,7 +446,7 @@ pub async fn consume_flow(
   now: &str,
 ) -> Result<Option<FlowRow>, sqlx::Error> {
   sqlx::query_as(
-    "UPDATE sso_flows SET consumed_at=? WHERE state_hash=? AND binding_hash=? AND consumed_at IS NULL AND expires_at > ? RETURNING id,provider_id,purpose,nonce,pkce_verifier,session_id,admin_id,created_at",
+    "UPDATE sso_flows SET consumed_at=$1 WHERE state_hash=$2 AND binding_hash=$3 AND consumed_at IS NULL AND expires_at > $4 RETURNING id,provider_id,purpose,nonce,pkce_verifier,session_id,user_id,created_at",
   )
   .bind(now)
   .bind(state_hash)
@@ -462,7 +463,7 @@ pub async fn set_handoff(
   expires_at: &str,
   admin_id: &str,
 ) -> Result<(), sqlx::Error> {
-  sqlx::query("UPDATE sso_flows SET handoff_hash=?,handoff_expires_at=?,admin_id=? WHERE id=?")
+  sqlx::query("UPDATE sso_flows SET handoff_hash=$1,handoff_expires_at=$2,user_id=$3 WHERE id=$4")
     .bind(handoff_hash)
     .bind(expires_at)
     .bind(admin_id)
@@ -481,7 +482,7 @@ pub async fn take_handoff(
   now: &str,
 ) -> Result<Option<(Option<String>, Option<String>)>, sqlx::Error> {
   sqlx::query_as(
-    "DELETE FROM sso_flows WHERE handoff_hash=? AND binding_hash=? AND handoff_expires_at > ? AND purpose='login' RETURNING admin_id,redirect_to",
+    "DELETE FROM sso_flows WHERE handoff_hash=$1 AND binding_hash=$2 AND handoff_expires_at > $3 AND purpose='login' RETURNING user_id,redirect_to",
   )
   .bind(handoff_hash)
   .bind(binding_hash)
@@ -494,7 +495,7 @@ pub async fn delete_flow(
   conn: &mut SqliteConnection,
   id: &str,
 ) -> Result<(), sqlx::Error> {
-  sqlx::query("DELETE FROM sso_flows WHERE id=?")
+  sqlx::query("DELETE FROM sso_flows WHERE id=$1")
     .bind(id)
     .execute(conn)
     .await?;
@@ -506,10 +507,14 @@ pub async fn account(
   conn: &mut SqliteConnection,
   admin_id: &str,
 ) -> Result<Option<(String, String)>, sqlx::Error> {
-  sqlx::query_as("SELECT email,role FROM admins WHERE id=?")
-    .bind(admin_id)
-    .fetch_optional(conn)
-    .await
+  sqlx::query_as(concat!(
+    "SELECT u.email, ",
+    crate::legacy_role_sql!("a"),
+    " FROM users u JOIN accounts a ON a.id = u.id WHERE u.id = $1"
+  ))
+  .bind(admin_id)
+  .fetch_optional(conn)
+  .await
 }
 
 /// The ID and role of the account with this email.
@@ -517,17 +522,21 @@ pub async fn account_by_email(
   conn: &mut SqliteConnection,
   email: &str,
 ) -> Result<Option<(String, String)>, sqlx::Error> {
-  sqlx::query_as("SELECT id,role FROM admins WHERE email=? COLLATE NOCASE")
-    .bind(email)
-    .fetch_optional(conn)
-    .await
+  sqlx::query_as(concat!(
+    "SELECT u.id, ",
+    crate::legacy_role_sql!("a"),
+    " FROM users u JOIN accounts a ON a.id = u.id WHERE lower(u.email) = lower($1)"
+  ))
+  .bind(email)
+  .fetch_optional(conn)
+  .await
 }
 
 pub async fn password_hash(
   pool: &SqlitePool,
   admin_id: &str,
 ) -> Result<Option<String>, sqlx::Error> {
-  sqlx::query_scalar("SELECT password_hash FROM admins WHERE id=?")
+  sqlx::query_scalar("SELECT COALESCE(password_hash, '') FROM users WHERE id = $1")
     .bind(admin_id)
     .fetch_optional(pool)
     .await
@@ -541,11 +550,14 @@ pub async fn live_session_account(
   now: &str,
 ) -> Result<Option<(String, String)>, sqlx::Error> {
   sqlx::query_as(
-    "SELECT a.email,a.role FROM sessions s JOIN admins a ON a.id=s.admin_id WHERE s.id=? AND s.admin_id=? AND s.revoked_at IS NULL AND s.idle_expires_at > ? AND s.absolute_expires_at > ?",
+    concat!(
+      "SELECT u.email, ",
+      crate::legacy_role_sql!("a"),
+      " FROM sessions s JOIN users u ON u.id = s.user_id JOIN accounts a ON a.id = u.id WHERE s.id = $1 AND s.user_id = $2 AND s.revoked_at IS NULL AND s.idle_expires_at > $3"
+    ),
   )
   .bind(session_id)
   .bind(admin_id)
-  .bind(now)
   .bind(now)
   .fetch_optional(conn)
   .await
@@ -556,7 +568,7 @@ pub async fn mark_recent_auth(
   session_id: Option<&str>,
   now: &str,
 ) -> Result<(), sqlx::Error> {
-  sqlx::query("UPDATE sessions SET recent_auth_at=? WHERE id=?")
+  sqlx::query("UPDATE sessions SET recent_auth_at=$1 WHERE id=$2")
     .bind(now)
     .bind(session_id)
     .execute(conn)

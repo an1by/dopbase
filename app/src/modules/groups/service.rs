@@ -1,0 +1,358 @@
+use super::{model::*, repository};
+use crate::modules::users;
+use crate::utils::time::Stamp;
+use crate::{
+  constants::tokens::GROUP_ID_PREFIX,
+  extractors::{
+    require_browser, require_capability, require_capability_browser, require_mutation,
+    require_recent_browser_auth,
+  },
+  http::HttpError,
+  models::AuthIdentity,
+  modules::{
+    common,
+    grants::{
+      self,
+      model::{GrantResponse, ScopeType},
+    },
+  },
+  services::{
+    authx::{self, Capability, Level},
+    features::Feature,
+    token,
+  },
+  state::AppState,
+};
+use axum::http::HeaderMap;
+use chrono::Utc;
+use std::collections::{BTreeMap, HashMap};
+
+fn not_found() -> HttpError {
+  HttpError::not_found("GROUP_NOT_FOUND", "The group was not found.")
+}
+
+fn map_unique(error: sqlx::Error) -> HttpError {
+  if error.to_string().contains("UNIQUE") {
+    HttpError::conflict(
+      "GROUP_ALREADY_EXISTS",
+      "A group with this name already exists.",
+    )
+  } else {
+    error.into()
+  }
+}
+
+fn validate_name(value: &str) -> Result<String, HttpError> {
+  let name = value.trim();
+  if name.is_empty() || name.chars().count() > 64 {
+    return Err(HttpError::validation(BTreeMap::from([(
+      "GROUP_NAME_INVALID".into(),
+      "Group names must contain between 1 and 64 characters.".into(),
+    )])));
+  }
+  Ok(name.to_owned())
+}
+
+fn validate_description(value: &str) -> Result<String, HttpError> {
+  let description = value.trim();
+  if description.chars().count() > 256 {
+    return Err(HttpError::validation(BTreeMap::from([(
+      "GROUP_DESCRIPTION_INVALID".into(),
+      "Descriptions may contain at most 256 characters.".into(),
+    )])));
+  }
+  Ok(description.to_owned())
+}
+
+/// Seeing groups needs users.view or groups.manage, from the Admin UI.
+/// Groups stay visible while RBAC is off, so a role's groups.manage still
+/// counts here.
+fn require_view(identity: &AuthIdentity) -> Result<(), HttpError> {
+  require_browser(identity)?;
+  match identity {
+    AuthIdentity::Admin { access, .. } if access.holds(Capability::GroupsManage) => Ok(()),
+    _ => require_capability(identity, Capability::UsersView).map(|_| ()),
+  }
+}
+
+/// Changing a group changes what its members reach, so a person may change
+/// it only when every grant it holds is on a project they manage. Grants on
+/// all projects leave the group to root.
+async fn require_manages(
+  identity: &AuthIdentity,
+  conn: &mut sqlx::SqliteConnection,
+  group_id: &str,
+) -> Result<(), HttpError> {
+  let AuthIdentity::Admin {
+    admin_id, access, ..
+  } = identity
+  else {
+    return Err(HttpError::internal());
+  };
+  if access.is_root {
+    return Ok(());
+  }
+  let grants = grants::repository::for_group(conn, group_id).await?;
+  let data = authx::account_data_access(conn, admin_id, access).await?;
+  let within = grants.iter().all(|grant| {
+    grant.scope_type != ScopeType::All && data.project(&grant.project_id) == Level::ProjectManager
+  });
+  if !within {
+    return Err(HttpError::forbidden(
+      "ACCESS_EXCEEDS_YOURS",
+      "This group has access you don't manage, so you can't change it.",
+    ));
+  }
+  Ok(())
+}
+
+async fn detail(
+  conn: &mut sqlx::SqliteConnection,
+  id: &str,
+) -> Result<GroupDetailResponse, HttpError> {
+  let group = repository::find(conn, id).await?.ok_or_else(not_found)?;
+  Ok(GroupDetailResponse {
+    members: repository::members(conn, id).await?,
+    grants: grants::repository::for_group(conn, id).await?,
+    group,
+  })
+}
+
+/// Every group with its members and grants, in three queries however many
+/// groups there are.
+pub async fn list(
+  state: &AppState,
+  identity: &AuthIdentity,
+) -> Result<Vec<GroupListItem>, HttpError> {
+  require_view(identity)?;
+  let pool = state.db.pool();
+  let mut members: HashMap<String, Vec<AccountRef>> = HashMap::new();
+  for (group_id, member) in repository::all_members(pool).await? {
+    members.entry(group_id).or_default().push(member);
+  }
+  let mut grants: HashMap<String, Vec<GrantResponse>> = HashMap::new();
+  for grant in grants::repository::for_groups(pool).await? {
+    grants
+      .entry(grant.principal_id.clone())
+      .or_default()
+      .push(grant);
+  }
+  Ok(
+    repository::list(pool)
+      .await?
+      .into_iter()
+      .map(|group| GroupListItem {
+        members: members.remove(&group.id).unwrap_or_default(),
+        grants: grants.remove(&group.id).unwrap_or_default(),
+        group,
+      })
+      .collect(),
+  )
+}
+
+pub async fn get(
+  state: &AppState,
+  identity: &AuthIdentity,
+  id: &str,
+) -> Result<GroupDetailResponse, HttpError> {
+  require_view(identity)?;
+  let mut conn = state.db.pool().acquire().await?;
+  detail(&mut conn, id).await
+}
+
+fn require_change(
+  state: &AppState,
+  identity: &AuthIdentity,
+  headers: &HeaderMap,
+) -> Result<(String, String), HttpError> {
+  require_mutation(identity, headers)?;
+  require_recent_browser_auth(identity)?;
+  state.config.features.require(Feature::Rbac)?;
+  let (id, email) = require_capability_browser(identity, Capability::GroupsManage)?;
+  Ok((id.to_owned(), email.to_owned()))
+}
+
+pub async fn create(
+  state: &AppState,
+  identity: &AuthIdentity,
+  headers: &HeaderMap,
+  request: CreateGroupRequest,
+) -> Result<GroupDetailResponse, HttpError> {
+  let (actor_id, actor_email) = require_change(state, identity, headers)?;
+  let name = validate_name(&request.name)?;
+  let description = validate_description(request.description.as_deref().unwrap_or(""))?;
+  let id = token::public_id(GROUP_ID_PREFIX);
+  let now = Utc::now().stamp();
+  let mut tx = crate::services::change::Change::begin(state.db.pool()).await?;
+  repository::insert(&mut tx, &id, &name, &description, &actor_id, &now)
+    .await
+    .map_err(map_unique)?;
+  common::audit(
+    &mut tx,
+    identity.audit_actor_type(),
+    Some(&actor_id),
+    Some(&actor_email),
+    crate::services::events::Action::GroupCreated,
+    None,
+    None,
+    Some("group"),
+    Some(&id),
+    serde_json::json!({"name":name}),
+  )
+  .await?;
+  let group = detail(&mut tx, &id).await?;
+  tx.commit().await?;
+  Ok(group)
+}
+
+pub async fn update(
+  state: &AppState,
+  identity: &AuthIdentity,
+  headers: &HeaderMap,
+  id: &str,
+  request: UpdateGroupRequest,
+) -> Result<GroupDetailResponse, HttpError> {
+  let (actor_id, actor_email) = require_change(state, identity, headers)?;
+  let mut tx = crate::services::change::Change::begin(state.db.pool()).await?;
+  let group = repository::find(&mut tx, id).await?.ok_or_else(not_found)?;
+  require_manages(identity, &mut tx, id).await?;
+  let name = match &request.name {
+    Some(value) => validate_name(value)?,
+    None => group.name.clone(),
+  };
+  let description = match &request.description {
+    Some(value) => validate_description(value)?,
+    None => group.description.clone(),
+  };
+  let now = Utc::now().stamp();
+  repository::update(&mut tx, id, &name, &description, &now)
+    .await
+    .map_err(map_unique)?;
+  common::audit(
+    &mut tx,
+    identity.audit_actor_type(),
+    Some(&actor_id),
+    Some(&actor_email),
+    crate::services::events::Action::GroupUpdated,
+    None,
+    None,
+    Some("group"),
+    Some(id),
+    serde_json::json!({"oldName":group.name,"name":name}),
+  )
+  .await?;
+  let group = detail(&mut tx, id).await?;
+  tx.commit().await?;
+  Ok(group)
+}
+
+pub async fn delete(
+  state: &AppState,
+  identity: &AuthIdentity,
+  headers: &HeaderMap,
+  id: &str,
+) -> Result<(), HttpError> {
+  let (actor_id, actor_email) = require_change(state, identity, headers)?;
+  let mut tx = crate::services::change::Change::begin(state.db.pool()).await?;
+  let group = repository::find(&mut tx, id).await?.ok_or_else(not_found)?;
+  require_manages(identity, &mut tx, id).await?;
+  repository::delete(&mut tx, id).await?;
+  common::audit(
+    &mut tx,
+    identity.audit_actor_type(),
+    Some(&actor_id),
+    Some(&actor_email),
+    crate::services::events::Action::GroupDeleted,
+    None,
+    None,
+    Some("group"),
+    Some(id),
+    serde_json::json!({"name":group.name,"members":group.member_count}),
+  )
+  .await?;
+  tx.commit().await?;
+  Ok(())
+}
+
+pub async fn add_member(
+  state: &AppState,
+  identity: &AuthIdentity,
+  headers: &HeaderMap,
+  id: &str,
+  user_id: &str,
+) -> Result<GroupDetailResponse, HttpError> {
+  let (actor_id, actor_email) = require_change(state, identity, headers)?;
+  let mut tx = crate::services::change::Change::begin(state.db.pool()).await?;
+  let group = repository::find(&mut tx, id).await?.ok_or_else(not_found)?;
+  require_manages(identity, &mut tx, id).await?;
+  // Joining a group gives its grants, so it follows the rule for giving
+  // access directly: people need users.view, AI agents agents.manage (or
+  // their owner), root never joins, and nobody adds themselves. A missing
+  // id gets the same answer, so ids can't be probed.
+  let account = users::authority::Account::load(&mut tx, user_id).await?;
+  users::authority::may_give_access(identity, &actor_id, account.as_ref()).map_err(|error| {
+    if error.status == axum::http::StatusCode::FORBIDDEN {
+      error
+    } else {
+      HttpError::validation(BTreeMap::from([(
+        "GROUP_MEMBER_INVALID".into(),
+        "This account can't join a group.".into(),
+      )]))
+    }
+  })?;
+  let email = account.map(|account| account.label).unwrap_or_default();
+  let now = Utc::now().stamp();
+  if repository::add_member(&mut tx, id, user_id, &actor_id, &now).await? {
+    common::audit(
+      &mut tx,
+      identity.audit_actor_type(),
+      Some(&actor_id),
+      Some(&actor_email),
+      crate::services::events::Action::GroupMemberAdded,
+      None,
+      None,
+      Some("group"),
+      Some(id),
+      serde_json::json!({"group":group.name,"userId":user_id,"email":email}),
+    )
+    .await?;
+  }
+  let group = detail(&mut tx, id).await?;
+  tx.commit().await?;
+  Ok(group)
+}
+
+pub async fn remove_member(
+  state: &AppState,
+  identity: &AuthIdentity,
+  headers: &HeaderMap,
+  id: &str,
+  user_id: &str,
+) -> Result<GroupDetailResponse, HttpError> {
+  let (actor_id, actor_email) = require_change(state, identity, headers)?;
+  let mut tx = crate::services::change::Change::begin(state.db.pool()).await?;
+  let group = repository::find(&mut tx, id).await?.ok_or_else(not_found)?;
+  require_manages(identity, &mut tx, id).await?;
+  if !repository::remove_member(&mut tx, id, user_id).await? {
+    return Err(HttpError::not_found(
+      "GROUP_MEMBER_NOT_FOUND",
+      "The user is not in this group.",
+    ));
+  }
+  common::audit(
+    &mut tx,
+    identity.audit_actor_type(),
+    Some(&actor_id),
+    Some(&actor_email),
+    crate::services::events::Action::GroupMemberRemoved,
+    None,
+    None,
+    Some("group"),
+    Some(id),
+    serde_json::json!({"group":group.name,"userId":user_id}),
+  )
+  .await?;
+  let group = detail(&mut tx, id).await?;
+  tx.commit().await?;
+  Ok(group)
+}

@@ -8,3 +8,4 @@ mod output;
 mod secret_editor;
 mod secret_format;
 mod session;
+mod version_check;

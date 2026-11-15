@@ -33,11 +33,39 @@ async fn test_app_with_ui(
     },
     docs_enabled,
     web_ui_enabled,
+    features: app::services::features::Features::all(),
     ..ServerConfig::default()
   };
   let state = server::build_setup_state(config).await.unwrap();
   let router = server::router(state.clone());
   (directory, state, router)
+}
+
+/// A router over the same data and sessions, with `features` in place of
+/// the instance's, as after a restart with other settings.
+fn with_features(
+  state: &app::state::AppState,
+  features: app::services::features::Features,
+) -> Router {
+  let mut config = (*state.config).clone();
+  config.features = features;
+  let mut state = state.clone();
+  state.config = std::sync::Arc::new(config);
+  server::router(state)
+}
+
+/// Asserts a request was refused because `setting` is off.
+fn feature_disabled(
+  status: u16,
+  body: &Value,
+  setting: &str,
+) {
+  assert_eq!(status, 403, "{body}");
+  let message = body["error"]["FEATURE_DISABLED"].as_str();
+  assert!(
+    message.is_some_and(|message| message.contains(setting)),
+    "{body}"
+  );
 }
 
 async fn call(
@@ -81,7 +109,7 @@ async fn admin_environment() -> (TempDir, app::state::AppState, Router, String, 
     "POST",
     "/api/v1/bootstrap/admin",
     None,
-    Some(json!({"setupToken":setup,"email":"admin@example.com","password":"correct-horse-123"})),
+    Some(json!({"setupToken":setup,"email":"admin@dopbase.com","password":"correct-horse-123"})),
   )
   .await;
   assert_eq!(status, 201);
@@ -90,7 +118,7 @@ async fn admin_environment() -> (TempDir, app::state::AppState, Router, String, 
     "POST",
     "/api/v1/auth/login",
     None,
-    Some(json!({"email":"admin@example.com","password":"correct-horse-123","sessionKind":"cli"})),
+    Some(json!({"email":"admin@dopbase.com","password":"correct-horse-123","sessionKind":"cli"})),
   )
   .await;
   let token = login["data"]["token"].as_str().unwrap().to_owned();
@@ -126,7 +154,7 @@ async fn bootstrap_admin(
     "POST",
     "/api/v1/bootstrap/admin",
     None,
-    Some(json!({"setupToken":setup,"email":"admin@example.com","password":"correct-horse-123"})),
+    Some(json!({"setupToken":setup,"email":"admin@dopbase.com","password":"correct-horse-123"})),
   )
   .await;
   assert_eq!(status, 201);
@@ -135,7 +163,7 @@ async fn bootstrap_admin(
     "POST",
     "/api/v1/auth/login",
     None,
-    Some(json!({"email":"admin@example.com","password":"correct-horse-123","sessionKind":"cli"})),
+    Some(json!({"email":"admin@dopbase.com","password":"correct-horse-123","sessionKind":"cli"})),
   )
   .await;
   assert_eq!(status, 200);
@@ -722,6 +750,7 @@ async fn health_and_openapi_are_available() {
     "/api/v1/environments/{environment_id}/secrets/layout",
     "/api/v1/environments/{environment_id}/secrets/export",
     "/api/v1/environments/{environment_id}/secrets/runtime",
+    "/api/v1/runtime/secrets",
     "/api/v1/environments/{environment_id}/tokens",
     "/api/v1/workspaces/{workspace_id}/tokens",
     "/api/v1/tokens/{token_id}/revoke",
@@ -733,13 +762,16 @@ async fn health_and_openapi_are_available() {
     "/api/v1/backups/{key}/restore",
     "/api/v1/instance",
     "/api/v1/status",
+    "/api/v1/status/checks/run",
     "/api/v1/instance/factory-reset",
     "/api/v1/users",
+    "/api/v1/users/identities",
     "/api/v1/users/{id}",
-    "/api/v1/service-accounts",
-    "/api/v1/service-accounts/{id}",
-    "/api/v1/service-accounts/{id}/tokens",
-    "/api/v1/service-accounts/{id}/tokens/{token_id}/revoke",
+    "/api/v1/users/{id}/tokens",
+    "/api/v1/users/{id}/tokens/{token_id}/revoke",
+    "/api/v1/users/{id}/access",
+    "/api/v1/grants",
+    "/api/v1/groups",
   ] {
     assert!(
       spec["paths"][path].is_object(),
@@ -749,18 +781,20 @@ async fn health_and_openapi_are_available() {
   for schema in [
     "ErrorBody",
     "UserResponse",
+    "UserIdentity",
     "CreateUserRequest",
     "UpdateUserRequest",
     "AdminRole",
     "InstanceStatus",
     "StatusResponse",
+    "Check",
+    "HealthReport",
+    "Activity",
     "FactoryResetPreview",
     "FactoryResetRequest",
-    "ServiceAccountResponse",
-    "CreateServiceAccountRequest",
-    "AgentTokenResponse",
-    "CreateAgentTokenRequest",
-    "CreatedAgentTokenResponse",
+    "PersonalTokenResponse",
+    "CreatePersonalTokenRequest",
+    "CreatedPersonalTokenResponse",
   ] {
     assert!(
       spec["components"]["schemas"][schema].is_object(),
@@ -790,7 +824,7 @@ async fn health_and_openapi_are_available() {
   );
   assert_eq!(
     spec["paths"]["/api/v1/status"]["get"]["summary"],
-    "Show public instance status"
+    "Show instance status and health checks"
   );
   assert_eq!(
     spec["paths"]["/api/v1/instance/factory-reset"]["get"]["summary"],
@@ -801,32 +835,16 @@ async fn health_and_openapi_are_available() {
     "Perform a factory reset"
   );
   assert_eq!(
-    spec["paths"]["/api/v1/service-accounts"]["get"]["summary"],
-    "List service accounts"
+    spec["paths"]["/api/v1/users/{id}/tokens"]["get"]["summary"],
+    "List personal tokens"
   );
   assert_eq!(
-    spec["paths"]["/api/v1/service-accounts"]["post"]["summary"],
-    "Create a service account"
+    spec["paths"]["/api/v1/users/{id}/tokens"]["post"]["summary"],
+    "Create a personal token"
   );
   assert_eq!(
-    spec["paths"]["/api/v1/service-accounts/{id}"]["get"]["summary"],
-    "Show a service account"
-  );
-  assert_eq!(
-    spec["paths"]["/api/v1/service-accounts/{id}"]["delete"]["summary"],
-    "Delete a service account"
-  );
-  assert_eq!(
-    spec["paths"]["/api/v1/service-accounts/{id}/tokens"]["get"]["summary"],
-    "List service account tokens"
-  );
-  assert_eq!(
-    spec["paths"]["/api/v1/service-accounts/{id}/tokens"]["post"]["summary"],
-    "Create a service account token"
-  );
-  assert_eq!(
-    spec["paths"]["/api/v1/service-accounts/{id}/tokens/{token_id}/revoke"]["post"]["summary"],
-    "Revoke a service account token"
+    spec["paths"]["/api/v1/users/{id}/tokens/{token_id}/revoke"]["post"]["summary"],
+    "Revoke a personal token"
   );
   state.db.close().await;
 }
@@ -954,7 +972,7 @@ async fn end_to_end_admin_and_runner_flow() {
     "POST",
     "/api/v1/bootstrap/admin",
     None,
-    Some(json!({"setupToken":setup,"email":"admin@example.com","password":"correct-horse-123"})),
+    Some(json!({"setupToken":setup,"email":"admin@dopbase.com","password":"correct-horse-123"})),
   )
   .await;
   assert_eq!(status, 201);
@@ -963,7 +981,7 @@ async fn end_to_end_admin_and_runner_flow() {
     "POST",
     "/api/v1/auth/login",
     None,
-    Some(json!({"email":"admin@example.com","password":"correct-horse-123","sessionKind":"cli"})),
+    Some(json!({"email":"admin@dopbase.com","password":"correct-horse-123","sessionKind":"cli"})),
   )
   .await;
   assert_eq!(status, 200);
@@ -1053,7 +1071,7 @@ async fn env_layout_persists_with_import_and_omits_values() {
     "POST",
     "/api/v1/bootstrap/admin",
     None,
-    Some(json!({"setupToken":setup,"email":"admin@example.com","password":"correct-horse-123"})),
+    Some(json!({"setupToken":setup,"email":"admin@dopbase.com","password":"correct-horse-123"})),
   )
   .await;
   assert_eq!(status, 201);
@@ -1062,7 +1080,7 @@ async fn env_layout_persists_with_import_and_omits_values() {
     "POST",
     "/api/v1/auth/login",
     None,
-    Some(json!({"email":"admin@example.com","password":"correct-horse-123","sessionKind":"cli"})),
+    Some(json!({"email":"admin@dopbase.com","password":"correct-horse-123","sessionKind":"cli"})),
   )
   .await;
   assert_eq!(status, 200);
@@ -1230,6 +1248,94 @@ async fn password_reverification_is_rate_limited() {
   state.db.close().await;
 }
 
+// Security audit v1 H2: wrong logins sent in parallel each used to pass the
+// limiter's check before any failure was recorded. Only answers of 401 run
+// a password check, so at most five may come back as 401.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn parallel_wrong_logins_check_at_most_five_passwords() {
+  let (_directory, state, router) = test_app().await;
+  bootstrap_admin(&state, &router).await;
+  let barrier = std::sync::Arc::new(Barrier::new(20));
+  let mut tasks = Vec::new();
+  for _ in 0..20 {
+    let router = router.clone();
+    let barrier = barrier.clone();
+    tasks.push(tokio::spawn(async move {
+      barrier.wait().await;
+      call(
+        &router,
+        "POST",
+        "/api/v1/auth/login",
+        None,
+        Some(
+          json!({"email":"admin@dopbase.com","password":"wrong-password-1","sessionKind":"cli"}),
+        ),
+      )
+      .await
+      .0
+    }));
+  }
+  let mut checked = 0;
+  for task in tasks {
+    match task.await.unwrap() {
+      401 => checked += 1,
+      429 => {}
+      other => panic!("unexpected status {other}"),
+    }
+  }
+  assert!(checked <= 5, "{checked} password checks ran");
+  state.db.close().await;
+}
+
+#[tokio::test]
+async fn wrong_logins_count_down_the_same_way_for_unknown_emails() {
+  let (_directory, state, router) = test_app().await;
+  bootstrap_admin(&state, &router).await;
+  let login = |email: &'static str, password: &'static str| {
+    let router = router.clone();
+    async move {
+      let (status, body, _) = call(
+        &router,
+        "POST",
+        "/api/v1/auth/login",
+        None,
+        Some(json!({"email":email,"password":password,"sessionKind":"cli"})),
+      )
+      .await;
+      (status, body)
+    }
+  };
+  let expected = [
+    "Email or password is wrong.",
+    "Email or password is wrong. 3 more tries, then a 15-minute pause.",
+    "Email or password is wrong. 2 more tries, then a 15-minute pause.",
+    "Email or password is wrong. 1 more try, then a 15-minute pause.",
+    "Email or password is wrong.",
+  ];
+  for message in expected {
+    let (status, known) = login("admin@dopbase.com", "wrong-password").await;
+    assert_eq!(status, 401);
+    assert_eq!(known["error"]["AUTHENTICATION_INVALID"], message);
+    // An unknown email reads the same, so replies do not reveal accounts.
+    let (status, unknown) = login("ghost@dopbase.com", "wrong-password").await;
+    assert_eq!(status, 401);
+    assert_eq!(unknown, known);
+  }
+  for (email, password) in [
+    ("admin@dopbase.com", "wrong-password"),
+    ("admin@dopbase.com", "correct-horse-123"),
+    ("ghost@dopbase.com", "wrong-password"),
+  ] {
+    let (status, body) = login(email, password).await;
+    assert_eq!(status, 429, "{email}");
+    assert_eq!(
+      body["error"]["RATE_LIMITED"], "Too many tries. Wait 15 minutes, then try again.",
+      "{email}"
+    );
+  }
+  state.db.close().await;
+}
+
 #[tokio::test]
 async fn security_headers_are_applied_to_every_response() {
   let (_directory, state, router, _token, _environment_id) = admin_environment().await;
@@ -1257,7 +1363,7 @@ async fn security_headers_are_applied_to_every_response() {
 }
 
 #[tokio::test]
-async fn runner_expiry_is_enforced_and_existing_default_stays_unlimited() {
+async fn runner_tokens_expire_in_90_days_by_default_and_within_a_year() {
   let (_directory, state, router, admin, environment_id) = admin_environment().await;
   let path = format!("/api/v1/environments/{environment_id}/tokens");
   let (status, created, _) = call(
@@ -1292,29 +1398,53 @@ async fn runner_expiry_is_enforced_and_existing_default_stays_unlimited() {
     "POST",
     &path,
     Some(&admin),
-    Some(json!({"name":"unlimited","role":"runner"})),
+    Some(json!({"name":"default","role":"runner"})),
   )
   .await;
   assert_eq!(status, 201);
-  assert!(default["data"]["token"]["expiresAt"].is_null());
+  let expires =
+    chrono::DateTime::parse_from_rfc3339(default["data"]["token"]["expiresAt"].as_str().unwrap())
+      .unwrap();
+  let days = (expires.with_timezone(&chrono::Utc) - chrono::Utc::now()).num_hours() / 24;
+  assert_eq!(days, 89, "a default runner token lives 90 days");
   let (status, _, _) = call(
     &router,
     "POST",
     &path,
     Some(&admin),
-    Some(json!({"name":"limit","role":"runner","expiresIn":"1095d"})),
+    Some(json!({"name":"limit","role":"runner","expiresIn":"365d"})),
   )
   .await;
   assert_eq!(status, 201);
-  let (status, _, _) = call(
+  for (name, expires_in) in [("too-long", "366d"), ("forever", "never")] {
+    let (status, body, _) = call(
+      &router,
+      "POST",
+      &path,
+      Some(&admin),
+      Some(json!({"name":name,"role":"runner","expiresIn":expires_in})),
+    )
+    .await;
+    assert_eq!(status, 400, "{expires_in}");
+    assert!(body["error"]["EXPIRY_INVALID"].is_string(), "{expires_in}");
+  }
+
+  // A session that hasn't confirmed recently can't mint one.
+  sqlx::query("UPDATE sessions SET recent_auth_at = $1")
+    .bind((chrono::Utc::now() - chrono::Duration::hours(2)).to_rfc3339())
+    .execute(state.db.pool())
+    .await
+    .unwrap();
+  let (status, body, _) = call(
     &router,
     "POST",
     &path,
     Some(&admin),
-    Some(json!({"name":"too-long","role":"runner","expiresIn":"1096d"})),
+    Some(json!({"name":"stale","role":"runner"})),
   )
   .await;
-  assert_eq!(status, 400);
+  assert_eq!(status, 403);
+  assert!(body["error"]["RECENT_AUTHENTICATION_REQUIRED"].is_string());
   state.db.close().await;
 }
 
@@ -1486,7 +1616,7 @@ async fn disabled_web_ui_blocks_pages_and_assets_but_keeps_cli_api_and_optional_
       "POST",
       "/api/v1/bootstrap/admin",
       None,
-      Some(json!({"setupToken":setup,"email":"admin@example.com","password":"correct-horse-123"})),
+      Some(json!({"setupToken":setup,"email":"admin@dopbase.com","password":"correct-horse-123"})),
     )
     .await;
     assert_eq!(status, 201);
@@ -1495,7 +1625,7 @@ async fn disabled_web_ui_blocks_pages_and_assets_but_keeps_cli_api_and_optional_
       "POST",
       "/api/v1/auth/login",
       None,
-      Some(json!({"email":"admin@example.com","password":"correct-horse-123","sessionKind":"cli"})),
+      Some(json!({"email":"admin@dopbase.com","password":"correct-horse-123","sessionKind":"cli"})),
     )
     .await;
     assert_eq!(status, 200);
@@ -1513,8 +1643,32 @@ async fn disabled_web_ui_blocks_pages_and_assets_but_keeps_cli_api_and_optional_
   }
 }
 
+#[path = "modules/agents/agents.rs"]
+mod agents;
+#[path = "modules/audit/scope.rs"]
+mod audit_scope;
 #[path = "modules/auth/cli_device.rs"]
 mod auth_cli_device;
+#[path = "modules/auth/launch.rs"]
+mod auth_launch;
+#[path = "modules/bootstrap/setup_token.rs"]
+mod bootstrap_setup_token;
+#[path = "modules/grants/access.rs"]
+mod grants_access;
+#[path = "modules/groups/members.rs"]
+mod groups_members;
+#[path = "modules/instance/status.rs"]
+mod instance_status;
+#[path = "middlewares/cli_version.rs"]
+mod middlewares_cli_version;
+#[path = "modules/roles/custom.rs"]
+mod roles_custom;
+#[path = "modules/runtime/secrets.rs"]
+mod runtime_secrets;
+#[path = "modules/secrets/compare.rs"]
+mod secrets_compare;
+#[path = "modules/secrets/copy.rs"]
+mod secrets_copy;
 #[path = "modules/secrets/import.rs"]
 mod secrets_import;
 #[path = "modules/secrets/versions.rs"]
@@ -1527,6 +1681,14 @@ mod sso_login;
 mod sso_passwords;
 #[path = "modules/sso/presets.rs"]
 mod sso_presets;
+#[path = "modules/tokens/names.rs"]
+mod tokens_names;
+#[path = "modules/tokens/personal/tokens.rs"]
+mod tokens_personal_tokens;
+#[path = "modules/users/lifecycle.rs"]
+mod users_lifecycle;
+#[path = "modules/users/limit.rs"]
+mod users_limit;
 
 #[tokio::test]
 async fn audit_records_store_the_client_ip_through_trusted_proxies_only() {
@@ -1542,6 +1704,7 @@ async fn audit_records_store_the_client_ip_through_trusted_proxies_only() {
       path: directory.path().join("master.key"),
     },
     trusted_proxies: vec!["10.0.0.0/8".parse().unwrap()],
+    features: app::services::features::Features::all(),
     ..ServerConfig::default()
   };
   let state = server::build_setup_state(config).await.unwrap();

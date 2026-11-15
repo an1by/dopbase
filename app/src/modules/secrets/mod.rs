@@ -9,6 +9,7 @@ pub mod error;
 pub mod model;
 pub(crate) mod repository;
 pub mod service;
+pub mod store;
 pub fn routes() -> Router<AppState> {
   Router::new()
     .route(
@@ -52,5 +53,14 @@ pub fn routes() -> Router<AppState> {
     .route(
       crate::constants::api::secrets::ROLLBACK,
       post(controller::rollback),
+    )
+    .route(crate::constants::api::secrets::COPY, post(controller::copy))
+    .route(
+      crate::constants::api::secrets::COPY_MANY,
+      post(controller::copy_many),
+    )
+    .route(
+      crate::constants::api::secrets::COMPARE,
+      get(controller::compare),
     )
 }

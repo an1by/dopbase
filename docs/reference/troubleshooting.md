@@ -18,8 +18,8 @@ Run `dopbase server setup` with the same instance options to finish it. A damage
 database or mismatched master key is an error, not a reason to initialize again.
 
 If setup says the instance is already initialized, do not reset it to recover a
-password. Stop its server and use `dopbase admin reset-password EMAIL` with the
-matching master key. This also recovers credentials lost after initialization
+password. Use `dopbase admin reset-password EMAIL` on the server with the
+matching master key. The server can keep running. This also recovers credentials lost after initialization
 committed. Subsequent startup never generates a replacement password. See
 [server setup](/cli/setup).
 
@@ -34,6 +34,22 @@ For local development, the default is `http://localhost:8840` when no endpoint
 is configured or overridden. If a configured remote endpoint is unavailable,
 Dopbase does not fall back to that local default.
 
+## The CLI and server versions differ
+
+If a command prints `Warning: The server runs Dopbase 0.3.0 and this CLI is
+0.2.0`, the server is a minor or major release ahead. The command still runs,
+but anything the newer server changed may fail. Run `dopbase update` and
+install the release it names. To hide the warning, set
+`DOPBASE_VERSION_WARNING=false`.
+
+If a command fails with `CLI_UPGRADE_REQUIRED`, the server no longer answers
+this CLI's version. The message names the version it needs. Install a newer CLI
+with:
+
+```bash
+curl -fsSL https://dopbase.com/install.sh | sh
+```
+
 ## Authentication fails
 
 Connecting and logging in are separate. Run `dopbase client status` to verify the
@@ -42,8 +58,10 @@ normalized server that issued it. A token issued by one server is not reused on
 another.
 
 If the encrypted session is missing or damaged, run `dopbase logout` and then
-`dopbase login` to create a new `session` and `session-key`. For externally
-managed automation, provide a scoped token through `DOPBASE_TOKEN`.
+`dopbase login` to create a new `session` and `session-key`. Unset
+`DOPBASE_TOKEN` first if it is set: both commands stop while it is, because
+the variable takes priority over a saved login. For externally managed
+automation, provide a scoped token through `DOPBASE_TOKEN`.
 
 If status shows an unknown email for an encrypted session created by an older
 CLI, run `dopbase login` again to refresh the cached identity.

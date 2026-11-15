@@ -5,15 +5,103 @@ use std::{fs, str::FromStr, time::Duration};
 
 use crate::config::database_path;
 
-/// Embedded database migrations, exposed so tests can drive `run`/`undo`.
+/// The 0.2.0 schema: one baseline migration, plus any added after it.
 pub static MIGRATOR: sqlx::migrate::Migrator = sqlx::migrate!("./migrations");
 
-/// TODO: when all user has migrate fully migrate will remove legacy capabilities
-/// to make sure our code is clean
-/// PR: https://github.com/dopbase/dopbase/pull/140
-/// Highest version recorded by the sequential naming scheme that shipped
-/// through 0.1.9.
-const LEGACY_MIGRATION_HEAD: i64 = 18;
+/// What a data directory's database holds, judged before migrating it.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Generation {
+  /// No tables yet.
+  Empty,
+  /// Built by this release's migrations, possibly missing newer ones.
+  Current,
+  /// Built by 0.1.x. It can only come across through `dopbase restore`.
+  Legacy,
+  /// Records migrations this binary doesn't know: a newer release made it.
+  Newer,
+}
+
+/// Said whenever a 0.1.x data directory turns up where a 0.2.0 one belongs.
+pub const LEGACY_DATA_MESSAGE: &str = "This data directory is from Dopbase 0.1.x. Back it up with your 0.1.x binary, then run `dopbase restore` on a fresh 0.2.0.";
+
+/// Reads which release built the database behind `connection`.
+pub async fn generation(
+  connection: &mut sqlx::SqliteConnection
+) -> Result<Generation, sqlx::Error> {
+  let tables: Vec<String> = sqlx::query_scalar(
+    "SELECT name FROM sqlite_master WHERE type = 'table' AND name IN ('_sqlx_migrations', 'admins', 'users')",
+  )
+  .fetch_all(&mut *connection)
+  .await?;
+  if tables.iter().any(|name| name == "admins") {
+    return Ok(Generation::Legacy);
+  }
+  if !tables.iter().any(|name| name == "_sqlx_migrations") {
+    return Ok(if tables.is_empty() {
+      Generation::Empty
+    } else {
+      Generation::Current
+    });
+  }
+  let applied: Vec<i64> = sqlx::query_scalar("SELECT version FROM _sqlx_migrations")
+    .fetch_all(&mut *connection)
+    .await?;
+  let known = |version: &i64| {
+    MIGRATOR
+      .iter()
+      .any(|migration| migration.version == *version)
+  };
+  let newest = MIGRATOR
+    .iter()
+    .map(|migration| migration.version)
+    .max()
+    .unwrap_or(0);
+  if applied.iter().all(known) {
+    return Ok(if applied.is_empty() && tables.len() == 1 {
+      Generation::Empty
+    } else {
+      Generation::Current
+    });
+  }
+  if applied.iter().any(|version| *version > newest) {
+    return Ok(Generation::Newer);
+  }
+  Ok(Generation::Legacy)
+}
+
+/// Refuses a 0.1.x data directory before anything opens its database for
+/// writing, so the directory is left exactly as it was.
+///
+/// The look is read-only and immutable, which creates no `-wal` or `-shm`
+/// file. Immutable reads skip SQLite's locks, so a write happening at the
+/// same moment can make this look fail or miss tables. That is safe here: it
+/// refuses only when it finds the `admins` table or the migration history
+/// only 0.1.x has, and on any error it steps aside for the regular checks
+/// (the read-only startup probe and [`DbClient::migrate`]).
+pub async fn refuse_legacy(url: &str) -> Result<()> {
+  if url.contains(":memory:") {
+    return Ok(());
+  }
+  let path = database_path(url)?;
+  if !path.is_file() {
+    return Ok(());
+  }
+  let options = SqliteConnectOptions::new()
+    .filename(&path)
+    .read_only(true)
+    .immutable(true);
+  // Anything this look can't read (a damaged or foreign file) is left to
+  // the regular checks, which report it in their own words.
+  let Ok(mut connection) = sqlx::ConnectOptions::connect(&options).await else {
+    return Ok(());
+  };
+  let found = generation(&mut connection).await;
+  sqlx::Connection::close(connection).await.ok();
+  if matches!(found, Ok(Generation::Legacy)) {
+    anyhow::bail!(LEGACY_DATA_MESSAGE);
+  }
+  Ok(())
+}
 
 /// SQLite database client backed by an async sqlx connection pool.
 ///
@@ -61,9 +149,16 @@ impl DbClient {
     Ok(Self { pool })
   }
 
-  /// Run the migrations embedded in the Dopbase executable.
+  /// Run the migrations embedded in the Dopbase executable. A 0.1.x
+  /// database is refused untouched: it comes across through a backup and
+  /// `dopbase restore`, never in place.
   pub async fn migrate(&self) -> Result<()> {
-    adopt_legacy_versions(&self.pool).await?;
+    let mut connection = self.pool.acquire().await?;
+    let found = generation(&mut connection).await?;
+    drop(connection);
+    if found == Generation::Legacy {
+      anyhow::bail!(LEGACY_DATA_MESSAGE);
+    }
     MIGRATOR.run(&self.pool).await?;
     Ok(())
   }
@@ -93,49 +188,4 @@ impl DbClient {
   pub async fn close(&self) {
     self.pool.close().await;
   }
-}
-
-/// Carry databases created before migrations switched to timestamped file
-/// names onto the current versions.
-///
-/// 0.1.9 and earlier recorded four-digit versions. The SQL files were only
-/// renamed, so every stale row is matched to its current migration by checksum
-/// and its version and description are rewritten before sqlx validates the
-/// applied set. Rows that match no current migration, or more than one, are
-/// left alone so sqlx still reports them.
-async fn adopt_legacy_versions(pool: &SqlitePool) -> Result<()> {
-  let has_migrations: bool = sqlx::query_scalar(
-    "SELECT EXISTS(SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = '_sqlx_migrations')",
-  )
-  .fetch_one(pool)
-  .await?;
-  if !has_migrations {
-    return Ok(());
-  }
-
-  let mut transaction = pool.begin().await?;
-  let applied: Vec<(i64, Vec<u8>)> = sqlx::query_as(
-    "SELECT version, checksum FROM _sqlx_migrations WHERE version <= ? AND success = 1",
-  )
-  .bind(LEGACY_MIGRATION_HEAD)
-  .fetch_all(&mut *transaction)
-  .await?;
-
-  for (legacy_version, checksum) in applied {
-    let mut matches = MIGRATOR.iter().filter(|migration| {
-      !migration.migration_type.is_down_migration()
-        && migration.checksum.as_ref() == checksum.as_slice()
-    });
-    let (Some(migration), None) = (matches.next(), matches.next()) else {
-      continue;
-    };
-    sqlx::query("UPDATE _sqlx_migrations SET version = ?, description = ? WHERE version = ?")
-      .bind(migration.version)
-      .bind(migration.description.as_ref())
-      .bind(legacy_version)
-      .execute(&mut *transaction)
-      .await?;
-  }
-  transaction.commit().await?;
-  Ok(())
 }

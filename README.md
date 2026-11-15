@@ -1,14 +1,11 @@
 <p align="center">
   <a href="https://dopbase.com">
-    <img src="./public/logo.svg" alt="Dopbase logo" width="180" />
+    <img src="./ui/public/logo-github.svg" alt="Dopbase" width="300" />
   </a>
 </p>
 
-<h1 align="center">Dopbase</h1>
-
 <p align="center">
-  Open-source, self-hosted secrets management in a single file.<br />
-  One binary contains the server, Admin UI, REST API, and command-line client.
+    <b>Dopbase</b>: keep .env secrets away from AI coding agent<br/>Self-hosted, open-source secrets manager for Claude Code, Cursor, and Codex users.
 </p>
 
 <p align="center">
@@ -46,7 +43,14 @@
   <sub>The Admin UI ships inside the Dopbase executable, so there is no separate frontend to deploy.</sub>
 </p>
 
-Dopbase keeps application secrets organized by project and environment on infrastructure you control. Runtime data stays separate from the executable: its SQLite database, configuration, and master key live under `~/.dopbase` by default.
+Delete the .env, run with secrets, and give agents access to only the secrets they need. Dopbase keeps application secrets organized by project and environment on infrastructure you control. Runtime data stays separate from the executable: its SQLite database, configuration, and master key live under `~/.dopbase` by default.
+
+> [!IMPORTANT]
+> **Running 0.1.10 or earlier?** There is no automatic upgrade to 0.2.0.
+> Reinstalling or replacing the binary isn't enough: 0.2.0 won't start on a
+> 0.1.x data directory. Back up on 0.1.x, install 0.2.0 on an empty data
+> directory, and restore the backup there. Follow the
+> [upgrade guide](./docs/self-hosting/upgrade-to-0-2.md) step by step.
 
 Every push to `main` builds and publishes a `linux/amd64` container image to GitHub Container Registry at `ghcr.io/<repository>` with tags `main`, `latest`, the `package.json` version, and the short commit SHA (workflow: `.github/workflows/container.yml`). Optional native `linux/arm64` images use `.github/workflows/container-arm.yml` (manual dispatch).
 
@@ -71,7 +75,7 @@ to create root or restore a backup. The server continues running after setup.
 An initialized instance starts normally.
 
 To create root without browser setup, run
-`DOPBASE_ROOT_EMAIL=admin@example.com dopbase server start`. Save the generated
+`DOPBASE_ROOT_EMAIL=admin@dopbase.com dopbase server start`. Save the generated
 password shown once, then sign in. Later starts ignore this bootstrap input and
 preserve credentials. Background startup returns credentials to the launching
 command; Docker or redirected foreground output can retain them in logs.
@@ -153,7 +157,7 @@ Commands:
   server   Set up, start, stop, inspect, and read logs from a local Dopbase server
   client   Connect the CLI to a Dopbase server (`client connect <url>`)
   login    Authenticate with the active server
-  logout   Remove the saved credential for the active server
+  logout   End the saved login on the server that issued it and remove it
   status   Alias for `dopbase client status`
   init     Create a project, its first environment, and import secrets
   project  Manage projects (create, list, show, rename, delete)
@@ -161,7 +165,8 @@ Commands:
   secret   Manage secrets in an environment (list, set, get, delete, history, rollback)
   import   Bulk-import secrets into an environment from a dotenv, JSON, YAML, or TOML source
   export   Export secrets as dotenv, JSON, YAML, TOML, or a Docker env file
-  token    Manage CI/runner access tokens for an environment
+  token    Manage runner tokens for an environment, and your personal tokens
+  access   Show what you, or the personal token in DOPBASE_TOKEN, can reach
   audit    Verify the integrity of the audit log (administrator only)
   run      Run a command with an environment's secrets injected as env vars
   cache    Inspect and clean the encrypted runtime cache for the active server
@@ -189,33 +194,14 @@ Options:
   -h, --help
           Print help (see a summary with '-h')
 
-Environment variables:
-  DOPBASE_TOKEN                   Bearer token for a machine runner or AI agent. Overrides the saved login
-  DOPBASE_URL                     Server URL for client commands when --server is not set
-  DOPBASE_ENV                     Environment for dopbase run when its argument is omitted
-  DOPBASE_ROOT_EMAIL              Root email for first startup or setup; setup --email overrides it
-  DOPBASE_DATA_DIR                State and configuration directory (default: ~/.dopbase)
-  DOPBASE_HOST                    Server bind host
-  DOPBASE_PORT                    Server port (default: 8840)
-  DOPBASE_PUBLIC_URL              Public URL
-  DOPBASE_DOCS                    Enable or disable Swagger UI (true or false)
-  DOPBASE_WEB_UI                  Enable or disable the web UI (default: true)
-  DOPBASE_MASTER_KEY_PATH         Path to the server master key file `./path/to/your.key`
-  DOPBASE_SHUTDOWN_GRACE_SECONDS  Seconds allowed for graceful shutdown
-  DOPBASE_AUDIT_RETENTION_DAYS    Days to keep audit records (unset keeps the whole log)
-  DOPBASE_SECRET_HISTORY_VERSIONS Versions per secret that can be rolled back to (default: 20)
-  DOPBASE_TRUSTED_PROXIES         Proxies allowed to report the client IP, comma-separated
-
 Quickstart:
   dopbase server setup                     # initialize the local instance once
-  dopbase server start                     # start on http://localhost:8840; fresh instances enter setup
-  dopbase server start --background        # run the server in the background (also -b)
+  dopbase server start                     # start on http://localhost:8840
   dopbase server stop                      # stop the background server
   dopbase server restart                   # restart with saved launch settings
   dopbase login                            # authenticate with the active server
-  dopbase init                             # create a project + environment from ./.env
   dopbase init myapp/dev --from .env       # create a project + environment from a secrets file
-  dopbase secret set myapp/dev API_KEY --stdin
+  dopbase secret set myapp/dev API_KEY     # prompts for the value, the web UI works too
   dopbase run myapp/dev -- node server.js  # run with secrets injected as env vars
 
 Common server options:
@@ -263,16 +249,17 @@ SQLite database, lock files, configuration, and local master key live under
 
 Read the [public documentation](./docs/) for the product model, CLI, self-hosting guidance, security design, and roadmap.
 
-Dopbase 0.1.10 adds single sign-on for the Admin UI through OpenID Connect,
-browser approval for `dopbase login`, and secret version history with rollback.
-The audit log is a hash chain that `dopbase audit verify` checks, and it can be
-listed, exported, and pruned on a schedule. It also includes guided server
-setup, an optional web UI, environment cloning, four roles, user management,
-read-only AI accounts, encrypted backups, and crash-safe factory reset.
+Dopbase 0.2.0 adds roles, grants and groups, so you can give people access per
+project or per environment. Personal tokens let scripts and AI agents act as
+their account, AI agents are accounts with an owner, and protected environments
+stay closed to project-wide grants below project manager. Single sign-on and
+people management are optional features, off by default. The audit log is a
+hash chain that `dopbase audit verify` checks, and backups are encrypted.
 
 See [users and AI agents](./docs/ui/users.md) and [role permissions](./docs/reference/identity.md) for how access works.
-Version 0.1.0 starts with a fresh data directory. Databases and backups from
-earlier releases are not supported.
+To move a 0.1.x instance to 0.2.0, follow
+[Upgrade to 0.2.0](./docs/self-hosting/upgrade-to-0-2.md). Databases and backups
+from before 0.1.0 are not supported.
 
 ## How it works
 
@@ -286,6 +273,55 @@ process without writing a shared `.env` file to the runtime.
 
 See [server and client](./docs/guide/server-client.md) for the full walkthrough.
 
+## How secrets are protected
+
+- Each secret value gets its own random 256-bit data key. XChaCha20-Poly1305
+  encrypts the value with that key and wraps the key with the master key. The
+  environment ID, secret name, and version are authenticated with the
+  ciphertext, so a value moved to another row fails to decrypt.
+- The 256-bit master key lives in a file outside the database. On Unix, a key
+  that Dopbase generates is readable by its owner only. Dopbase doesn't check
+  the permissions of a key file you supply, so restrict that file yourself. A
+  copy of the database alone doesn't reveal any values.
+- `dopbase run` passes one environment to your process as environment
+  variables and writes no `.env` file. `--only` narrows that to the keys you
+  name. The offline cache it keeps is encrypted, and opening it needs the same
+  credential that fetched it.
+- An AI agent token can start at names only. It can list secret names and
+  compare environments, but it is refused when it reads a value or runs a
+  command with secrets. Grants go per project or per environment.
+- Application logs and audit events record what happened, never the values.
+  The audit log is a hash chain. `dopbase audit verify` stops at the first
+  record that was edited, removed, or put out of order and reports where the
+  chain breaks. Deleting the newest records leaves no break; see below.
+
+Some things are outside what Dopbase can protect:
+
+- Once a value is injected, the process holds it in plain text. Anything that
+  can read that process's environment can read the value, including an agent
+  running inside it. Scope what reaches the process with `--only` and
+  per-environment grants. `--only` isn't a security boundary, though: anything
+  that can use your saved login or `DOPBASE_TOKEN` can run `dopbase run` again
+  without it. Keep an untrusted agent away from your Dopbase credentials and
+  data directory.
+- Anyone who has both the database and the master key file can decrypt every
+  value. Guard the master key file as closely as the secrets themselves.
+- Someone who can write the database file can rewrite the whole audit chain or
+  delete its newest records, and the chain still verifies. To catch that, save
+  the head sequence and hash that `dopbase audit verify` prints somewhere off
+  the server and check against them later with `--anchor SEQ:HASH`, or stream
+  `dopbase audit export` to storage the database writer can't change. Export
+  with no filters or limit, as an account with `audit.read_all`, or the copy
+  leaves out events you can't see. Records written after the saved head aren't
+  covered.
+- If the server is down, `dopbase run` can fall back to the cache and inject
+  values that were revoked in the meantime.
+- You run TLS, network access, backups, and master-key storage yourself.
+
+Read the [security model](./docs/reference/security.md) for the full design.
+The [September 2026 review](./docs/security/audits/2026-09.md) was done
+internally; Dopbase has not had an independent security audit yet.
+
 ## Demo
 
 <p align="center">
@@ -298,12 +334,13 @@ See [server and client](./docs/guide/server-client.md) for the full walkthrough.
 
 ## Repository layout
 
-| Path         | Purpose                                         | Current state                  |
-| ------------ | ----------------------------------------------- | ------------------------------ |
-| `app/`       | Rust service and command-line application       | v0.1.10 backend implementation |
-| `app/tests/` | Rust integration tests                          | Backend and CLI test suite     |
-| `src/`       | Vue administration interface and frontend tests | Embedded Admin UI              |
-| `docs/`      | VitePress product documentation                 | Active public specification    |
+| Path         | Purpose                                             | Current state                 |
+| ------------ | --------------------------------------------------- | ----------------------------- |
+| `app/`       | Rust service and command-line application           | v0.2.0 backend implementation |
+| `app/tests/` | Rust integration tests                              | Backend and CLI test suite    |
+| `ui/`        | Vue administration interface and its unit tests     | Embedded Admin UI             |
+| `docs/`      | VitePress product documentation                     | Active public specification   |
+| `e2e/`       | End-to-end tests for the CLI, REST API and Admin UI | Runs the release binary       |
 
 ## Development
 
@@ -318,19 +355,34 @@ bun install
 Scripts use the `action:target` pattern. The targets are `ui`, `app`, and
 `docs`. Run an action without a target for the usual combined workflow.
 
-| Command              | Purpose                                     |
-| -------------------- | ------------------------------------------- |
-| `bun run dev`        | Start the Admin UI and Rust app together    |
-| `bun run dev:ui`     | Start only the Admin UI development server  |
-| `bun run dev:app`    | Start only the Rust API and CLI application |
-| `bun run dev:docs`   | Start the documentation site                |
-| `bun run build`      | Build the application and documentation     |
-| `bun run build:ui`   | Build only the Admin UI                     |
-| `bun run build:app`  | Build the release executable with its UI    |
-| `bun run build:docs` | Build only the documentation site           |
-| `bun run test`       | Run the Admin UI and Rust application tests |
-| `bun run test:ui`    | Run only the Admin UI tests                 |
-| `bun run test:app`   | Run only the Rust application and CLI tests |
+| Command                | Purpose                                     |
+| ---------------------- | ------------------------------------------- |
+| `bun run dev`          | Start the Admin UI and Rust app together    |
+| `bun run dev:ui`       | Start only the Admin UI development server  |
+| `bun run dev:app`      | Start only the Rust API and CLI application |
+| `bun run dev:docs`     | Start the documentation site                |
+| `bun run build`        | Build the application and documentation     |
+| `bun run build:ui`     | Build only the Admin UI                     |
+| `bun run build:app`    | Build the release executable with its UI    |
+| `bun run build:docs`   | Build only the documentation site           |
+| `bun run test`         | Run the Admin UI and Rust application tests |
+| `bun run test:ui`      | Run only the Admin UI tests                 |
+| `bun run test:app`     | Run only the Rust application and CLI tests |
+| `bun run test:e2e`     | Build the release binary and run e2e tests  |
+| `bun run coverage`     | Run UI and app unit test coverage, UI first |
+| `bun run coverage:ui`  | Run Admin UI coverage with Vitest and V8    |
+| `bun run coverage:app` | Run Rust app coverage with cargo-llvm-cov   |
+
+Coverage commands print a summary in the terminal and write an HTML report:
+`ui/coverage/index.html` for the Admin UI and
+`app/target/llvm-cov/html/index.html` for the Rust app. Open them with
+`bun run coverage:ui:open` and `bun run coverage:app:open`. The Rust command
+needs `cargo-llvm-cov` and the `llvm-tools-preview` component:
+
+```bash
+rustup component add llvm-tools-preview
+cargo install cargo-llvm-cov --locked
+```
 
 `bun run dev` and `bun run dev:app` automatically enter setup on fresh storage.
 Use a separate `DOPBASE_DATA_DIR` for development. Open the printed setup link or

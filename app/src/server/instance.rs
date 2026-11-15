@@ -22,7 +22,7 @@ impl fmt::Display for InitializationRequired {
         "Choose a setup method:\n",
         "  dopbase server setup\n",
         "    Guided setup in this terminal.\n\n",
-        "  dopbase server setup --email admin@example.com\n",
+        "  dopbase server setup --email admin@dopbase.com\n",
         "    Set up without prompts. A generated password will be shown once.\n\n",
         "  dopbase server setup --web\n",
         "    Set up through the web interface.\n\n",
@@ -76,6 +76,7 @@ pub(super) async fn initialization_required(config: &ServerConfig) -> Result<boo
   if !database.try_exists()? {
     return Ok(true);
   }
+  crate::services::db::refuse_legacy(&config.database_url).await?;
   // Inspect existing storage without creating files or applying migrations.
   let options = SqliteConnectOptions::from_str(&config.database_url)?
     .read_only(true)
@@ -84,16 +85,26 @@ pub(super) async fn initialization_required(config: &ServerConfig) -> Result<boo
     .connect()
     .await
     .context("failed to inspect SQLite initialization")?;
+  // A 0.1.x database the immutable look missed (its tables still only in
+  // the -wal file) is refused here, still read-only, before setup or a
+  // migration could open it for writing.
+  if matches!(
+    crate::services::db::generation(&mut connection).await,
+    Ok(crate::services::db::Generation::Legacy)
+  ) {
+    connection.close().await.ok();
+    bail!(crate::services::db::LEGACY_DATA_MESSAGE);
+  }
   let result = async {
     let has_admins: bool = sqlx::query_scalar(
-      "SELECT EXISTS(SELECT 1 FROM sqlite_master WHERE type='table' AND name='admins')",
+      "SELECT EXISTS(SELECT 1 FROM sqlite_master WHERE type='table' AND name='users')",
     )
     .fetch_one(&mut connection)
     .await?;
     if !has_admins {
       return Ok::<bool, sqlx::Error>(true);
     }
-    let count: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM admins")
+    let count: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM accounts")
       .fetch_one(&mut connection)
       .await?;
     Ok(count == 0)

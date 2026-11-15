@@ -7,7 +7,7 @@ use axum::{
 
 use super::{model::*, service};
 use crate::{
-  extractors::{self, require_mutation, require_recent_browser_auth},
+  extractors::{self, require_mutation, require_recent_auth},
   http::{HttpError, HttpResponse, HttpResponseFormat},
   models::AuthIdentity,
   modules::common,
@@ -126,22 +126,26 @@ pub async fn download_master_key(
   State(state): State<AppState>,
   identity: AuthIdentity,
 ) -> Result<Response, HttpError> {
-  let (admin_id, email) = extractors::require_root(&identity)?;
-  require_recent_browser_auth(&identity)?;
+  let (admin_id, email) = extractors::require_capability(
+    &identity,
+    crate::services::authx::Capability::InstanceBackup,
+  )?;
+  require_recent_auth(&identity)?;
   let key_bytes = state.crypto.master_key_bytes();
-  let _ = common::audit_standalone(
+  // The master key is handed out only when the download is recorded.
+  common::audit_standalone(
     state.db.pool(),
     identity.audit_actor_type(),
     Some(admin_id),
     Some(email),
-    "master_key.downloaded",
+    crate::services::events::Action::MasterKeyDownloaded,
     None,
     None,
     Some("master_key"),
     None,
     serde_json::json!({}),
   )
-  .await;
+  .await?;
   let mut response = key_bytes.into_response();
   response.headers_mut().insert(
     header::CONTENT_TYPE,
@@ -259,11 +263,12 @@ pub async fn restore(
   } else {
     None
   };
-  service::restore(&state, &identity, &key, key_bytes.as_deref()).await?;
-  Ok(HttpResponse::ok(
-    serde_json::json!({ "restored": true }),
-    "BACKUP_RESTORED",
-  ))
+  let upgrade = service::restore(&state, &identity, &key, key_bytes.as_deref()).await?;
+  let mut body = serde_json::json!({ "restored": true });
+  if let Some(report) = upgrade {
+    body["upgrade"] = serde_json::to_value(report).map_err(|_| HttpError::internal())?;
+  }
+  Ok(HttpResponse::ok(body, "BACKUP_RESTORED"))
 }
 
 /// Delete a backup

@@ -53,7 +53,7 @@ async fn record_at(
     &mut transaction,
     &AuditEntry {
       actor_id: Some("adm_1"),
-      actor_label: Some("admin@example.com"),
+      actor_label: Some("admin@dopbase.com"),
       action,
       project_id: Some("prj_1"),
       environment_id: Some("env_1"),
@@ -79,22 +79,31 @@ async fn drop_guard(db: &DbClient) {
     .unwrap();
 }
 
-async fn insert_unchained(
-  db: &DbClient,
-  id: &str,
-  created_at: &str,
-) {
-  sqlx::query(
-    "INSERT INTO audit_events(id,actor_type,action,metadata,created_at) VALUES(?,?,?,?,?)",
+/// The 0.2.0 schema gives every record a chain position: a record without
+/// one can't be written at all, so nothing outside the chain can be slipped
+/// in to sit next to it. 0.1.x records from before the chain are archived
+/// by the restore upgrade instead.
+#[tokio::test]
+async fn records_without_a_chain_position_are_refused() {
+  let (_directory, db) = database().await;
+  record(&db, "aud_0", "secret.updated").await;
+  let forged = sqlx::query(
+    "INSERT INTO audit_events(id,actor_type,action,metadata,created_at) VALUES($1,$2,$3,$4,$5)",
   )
-  .bind(id)
+  .bind("aud_forged")
   .bind("admin")
   .bind("secret.updated")
   .bind("{}")
-  .bind(created_at)
+  .bind(chrono::Utc::now().to_rfc3339())
   .execute(db.pool())
-  .await
-  .unwrap();
+  .await;
+  assert!(forged.is_err());
+  let report = verify(&db).await;
+  assert!(report.ok);
+  assert_eq!(
+    (report.legacy, report.unsequenced, report.records),
+    (0, 0, 1)
+  );
 }
 
 #[tokio::test]
@@ -197,52 +206,6 @@ async fn removing_a_record_breaks_the_chain_at_the_following_one() {
 }
 
 #[tokio::test]
-async fn records_without_a_chain_position_fail_verification() {
-  let (_directory, db) = database().await;
-  record(&db, "aud_0", "secret.updated").await;
-  // Written after the chain's genesis but outside the chain: forged.
-  insert_unchained(&db, "aud_forged", &chrono::Utc::now().to_rfc3339()).await;
-
-  let report = verify(&db).await;
-  assert!(!report.ok);
-  assert_eq!(report.unsequenced, 1);
-  assert_eq!(report.legacy, 0);
-  assert_eq!(report.records, 1);
-  assert!(report.broken.is_none());
-}
-
-#[tokio::test]
-async fn legacy_records_are_reported_but_never_sealed() {
-  let (_directory, db) = database().await;
-  // Records from before the chain existed: older than its genesis.
-  for index in 0..3 {
-    insert_unchained(
-      &db,
-      &format!("aud_legacy_{index}"),
-      &format!("2000-01-0{}T00:00:00+00:00", index + 1),
-    )
-    .await;
-  }
-  // Startup runs the migration pass again; it must not seal them.
-  db.migrate().await.unwrap();
-  record(&db, "aud_new", "secret.updated").await;
-
-  let report = verify(&db).await;
-  assert!(report.ok, "chain broke: {:?}", report.broken);
-  assert_eq!(report.legacy, 3);
-  assert_eq!(report.unsequenced, 0);
-  assert_eq!(report.records, 1);
-  assert_eq!(report.head_seq, Some(1));
-  let sealed: i64 = sqlx::query_scalar(
-    "SELECT COUNT(*) FROM audit_events WHERE id LIKE 'aud_legacy_%' AND seq IS NOT NULL",
-  )
-  .fetch_one(db.pool())
-  .await
-  .unwrap();
-  assert_eq!(sealed, 0);
-}
-
-#[tokio::test]
 async fn sealed_records_reject_updates() {
   let (_directory, db) = database().await;
   record(&db, "aud_0", "secret.updated").await;
@@ -254,53 +217,6 @@ async fn sealed_records_reject_updates() {
   // Unsequenced rows are not covered by the trigger, and deletes are left
   // to the hash chain, since reset and restore remove records on purpose.
   assert!(verify(&db).await.ok);
-}
-
-#[tokio::test]
-async fn rolling_back_the_chain_leaves_records_as_legacy() {
-  let (_directory, db) = database().await;
-  for index in 0..3 {
-    record(&db, &format!("aud_{index}"), "secret.updated").await;
-  }
-  // The genesis written on reapply must be later than the records.
-  tokio::time::sleep(std::time::Duration::from_millis(5)).await;
-
-  // Reverting the chain migrations drops the chain columns but keeps the
-  // records; reapplying starts a new chain and never seals the old ones.
-  app::services::db::MIGRATOR
-    .undo(db.pool(), crate::db::version_before("audit_chain"))
-    .await
-    .unwrap();
-  db.migrate().await.unwrap();
-
-  let report = verify(&db).await;
-  assert!(report.ok, "chain broke: {:?}", report.broken);
-  assert_eq!(report.records, 0);
-  assert_eq!(report.legacy, 3);
-}
-
-#[tokio::test]
-async fn retention_archives_expired_legacy_records() {
-  let (directory, db) = database().await;
-  insert_unchained(&db, "aud_legacy_0", "2000-01-01T00:00:00+00:00").await;
-  insert_unchained(&db, "aud_legacy_1", "2000-01-02T00:00:00+00:00").await;
-  record(&db, "aud_new", "secret.updated").await;
-
-  let archive = directory.path().join("archive");
-  let retention = Retention::new(archive.clone(), 30);
-  let mut transaction = db.pool().begin_with("BEGIN IMMEDIATE").await.unwrap();
-  assert_eq!(retention.apply(&mut transaction).await.unwrap(), 2);
-  transaction.commit().await.unwrap();
-
-  let archived =
-    std::fs::read_to_string(archive.join("audit-legacy-aud_legacy_0-aud_legacy_1.jsonl")).unwrap();
-  assert_eq!(archived.lines().count(), 2);
-  let report = verify(&db).await;
-  assert!(report.ok, "chain broke: {:?}", report.broken);
-  assert_eq!(report.legacy, 0);
-  // The new record and the audit.pruned record naming the archive.
-  assert_eq!(report.records, 2);
-  assert_eq!(report.pruned_seq, None);
 }
 
 #[tokio::test]

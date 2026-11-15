@@ -78,7 +78,7 @@ the server continues serving. Existing instances skip setup and show Sign in.
 For startup without browser setup:
 
 ```bash
-DOPBASE_ROOT_EMAIL=admin@example.com dopbase server start
+DOPBASE_ROOT_EMAIL=admin@dopbase.com dopbase server start
 ```
 
 This creates root on fresh storage and displays a generated password once. Save
@@ -93,9 +93,8 @@ web UI settings, background credential output, and interrupted-reset recovery.
 The default local server exposes:
 
 ```text
-Dopbase
-Secure, Simple and Private
-Version {{version}}
+Dopbase {{version}}
+Keep control of what they can access.
 
 Public URL: http://localhost:8840
 Bind:       127.0.0.1:8840
@@ -122,8 +121,8 @@ dopbase client status
 Server:          http://localhost:8840
 Server status:   connected (live)
 Server source:   default
-Authentication:  none
-Identity:        none
+Authentication:  none (run dopbase login)
+Role:            none
 Email:           none
 Environment:     none (set with `dopbase env default <ENVIRONMENT_REF>`)
 ```

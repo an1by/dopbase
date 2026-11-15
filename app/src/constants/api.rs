@@ -71,6 +71,9 @@ pub mod bootstrap {
   pub const STATUS: &str = api_path!("/bootstrap/status");
   pub const ADMIN: &str = api_path!("/bootstrap/admin");
   pub const RESTORE: &str = api_path!("/bootstrap/restore");
+  /// Carries the setup token for a restore, so the server can check it
+  /// before reading the upload.
+  pub const SETUP_TOKEN_HEADER: &str = "x-dopbase-setup-token";
 }
 
 pub mod auth {
@@ -92,8 +95,12 @@ pub mod auth {
   pub const SSO_LINK: &str = api_path!("/auth/sso/link");
   pub const SSO_IDENTITY: &str = api_path!("/auth/sso/identity");
   pub const SSO_REAUTH: &str = api_path!("/auth/sso/reauth");
+  pub const LAUNCH: &str = api_path!("/auth/launch");
   /// Admin UI page where a user approves a browser CLI login.
   pub const CLI_APPROVE_PAGE: &str = "/cli/approve";
+  /// Admin UI page that trades a `dopbase admin passcode` passcode for a
+  /// browser session.
+  pub const LAUNCH_PAGE: &str = "/launch";
 }
 
 pub mod workspaces {
@@ -111,6 +118,7 @@ pub mod projects {
   pub const ITEM: &str = api_path!("/projects/{project_ref}");
   pub const ENVIRONMENTS: &str = api_path!("/projects/{project_ref}/environments");
   pub const LOCATION: &str = api_path!("/projects/{project_ref}/location");
+  pub const ACCESS: &str = api_path!("/projects/{project_ref}/access");
 
   pub fn item(project_ref: &str) -> String {
     super::render(
@@ -131,6 +139,10 @@ pub mod projects {
       LOCATION,
       &[("project_ref", &super::encode_project_ref(project_ref))],
     )
+  }
+
+  pub fn access(project_ref: &str) -> String {
+    super::render(ACCESS, &[("project_ref", &super::encode_project_ref(project_ref))])
   }
 }
 
@@ -167,6 +179,11 @@ pub mod secrets {
   pub const VERSION_REVEAL: &str =
     api_path!("/environments/{environment_id}/secrets/{key}/versions/{version}/reveal");
   pub const ROLLBACK: &str = api_path!("/environments/{environment_id}/secrets/{key}/rollback");
+  pub const COPY: &str = api_path!("/environments/{environment_id}/secrets/{key}/copy");
+  /// Outside `/secrets/` so it never shadows a secret named `compare`.
+  pub const COMPARE: &str = api_path!("/environments/{environment_id}/compare");
+  /// Outside `/secrets/` so it never shadows a secret named `copy`.
+  pub const COPY_MANY: &str = api_path!("/environments/{environment_id}/copy-secrets");
 
   pub fn collection(environment_id: &str) -> String {
     super::render(COLLECTION, &[("environment_id", environment_id)])
@@ -260,6 +277,19 @@ pub mod tokens {
   }
 }
 
+/// The runner-only gate. The token decides the environment.
+pub mod runtime {
+  pub const SECRETS: &str = api_path!("/runtime/secrets");
+
+  /// The gate, checking that the token's environment is `reference`.
+  pub fn secrets(reference: Option<&str>) -> String {
+    match reference {
+      Some(reference) => super::with_query(SECRETS, "reference", reference),
+      None => SECRETS.to_owned(),
+    }
+  }
+}
+
 pub mod audit {
   use super::with_params as with_query;
 
@@ -287,6 +317,7 @@ pub mod audit {
 pub mod instance {
   pub const ROOT: &str = api_path!("/instance");
   pub const PUBLIC_STATUS: &str = api_path!("/status");
+  pub const RUN_CHECKS: &str = api_path!("/status/checks/run");
   pub const FACTORY_RESET: &str = api_path!("/instance/factory-reset");
 }
 
@@ -306,34 +337,94 @@ pub mod sso {
 
 pub mod users {
   pub const COLLECTION: &str = api_path!("/users");
+  pub const IDENTITIES: &str = api_path!("/users/identities");
   pub const ITEM: &str = api_path!("/users/{id}");
   pub const SSO: &str = api_path!("/users/{id}/sso");
+  pub const DISABLE: &str = api_path!("/users/{id}/disable");
+  pub const ENABLE: &str = api_path!("/users/{id}/enable");
+  pub const ACCESS: &str = api_path!("/users/{id}/access");
+  pub const TOKENS: &str = api_path!("/users/{id}/tokens");
+  pub const TOKEN_REVOKE: &str = api_path!("/users/{id}/tokens/{token_id}/revoke");
 
   pub fn item(id: &str) -> String {
     super::render(ITEM, &[("id", id)])
   }
-}
 
-pub mod service_accounts {
-  pub const COLLECTION: &str = api_path!("/service-accounts");
-  pub const ITEM: &str = api_path!("/service-accounts/{id}");
-  pub const TOKENS: &str = api_path!("/service-accounts/{id}/tokens");
-  pub const REVOKE_TOKEN: &str = api_path!("/service-accounts/{id}/tokens/{token_id}/revoke");
+  pub fn disable(id: &str) -> String {
+    super::render(DISABLE, &[("id", id)])
+  }
 
-  pub fn item(id: &str) -> String {
-    super::render(ITEM, &[("id", id)])
+  pub fn enable(id: &str) -> String {
+    super::render(ENABLE, &[("id", id)])
+  }
+
+  pub fn access(id: &str) -> String {
+    super::render(ACCESS, &[("id", id)])
   }
 
   pub fn tokens(id: &str) -> String {
     super::render(TOKENS, &[("id", id)])
   }
 
-  pub fn revoke_token(
+  pub fn token_revoke(
     id: &str,
     token_id: &str,
   ) -> String {
-    super::render(REVOKE_TOKEN, &[("id", id), ("token_id", token_id)])
+    super::render(TOKEN_REVOKE, &[("id", id), ("token_id", token_id)])
   }
+}
+
+pub mod agents {
+  pub const COLLECTION: &str = api_path!("/agents");
+  pub const ITEM: &str = api_path!("/agents/{id}");
+  pub const DISABLE: &str = api_path!("/agents/{id}/disable");
+  pub const ENABLE: &str = api_path!("/agents/{id}/enable");
+  pub const ACCESS: &str = api_path!("/agents/{id}/access");
+  pub const TOKENS: &str = api_path!("/agents/{id}/tokens");
+  pub const TOKEN_REVOKE: &str = api_path!("/agents/{id}/tokens/{token_id}/revoke");
+
+  pub fn item(id: &str) -> String {
+    super::render(ITEM, &[("id", id)])
+  }
+
+  pub fn disable(id: &str) -> String {
+    super::render(DISABLE, &[("id", id)])
+  }
+
+  pub fn enable(id: &str) -> String {
+    super::render(ENABLE, &[("id", id)])
+  }
+
+  pub fn access(id: &str) -> String {
+    super::render(ACCESS, &[("id", id)])
+  }
+
+  pub fn tokens(id: &str) -> String {
+    super::render(TOKENS, &[("id", id)])
+  }
+
+  pub fn token_revoke(
+    id: &str,
+    token_id: &str,
+  ) -> String {
+    super::render(TOKEN_REVOKE, &[("id", id), ("token_id", token_id)])
+  }
+}
+
+pub mod roles {
+  pub const COLLECTION: &str = api_path!("/roles");
+  pub const ITEM: &str = api_path!("/roles/{id}");
+}
+
+pub mod grants {
+  pub const COLLECTION: &str = api_path!("/grants");
+  pub const ITEM: &str = api_path!("/grants/{id}");
+}
+
+pub mod groups {
+  pub const COLLECTION: &str = api_path!("/groups");
+  pub const ITEM: &str = api_path!("/groups/{id}");
+  pub const MEMBER: &str = api_path!("/groups/{id}/members/{user_id}");
 }
 
 pub mod backups {

@@ -58,7 +58,11 @@ Authorized users may need to reveal or export a value. These operations should b
 
 ## Failed attempt limits
 
-Password sign-in allows 5 failed attempts per email in 15 minutes. The window starts at the first failure, and a correct password clears the count. Confirming your password for a sensitive action, changing it, and factory reset share one budget per account. The setup wizard has a budget of its own, and so do CLI login codes and single sign-on callbacks.
+Password sign-in allows 5 failed attempts per email in 15 minutes. The window starts at the first failure, and a correct password clears the count. Confirming your password for a sensitive action, changing it, and factory reset share one budget per account. The setup wizard allows 5 wrong setup tokens per client address in 15 minutes, and 50 from all addresses together, so one caller can't keep setup closed for everyone. Behind a reverse proxy, list the proxy in [trusted proxies](../self-hosting/operations.md#network-and-tls); otherwise every client arrives as the proxy and they share one budget. CLI login codes and single sign-on callbacks have budgets of their own.
+
+Each attempt holds its place in the budget before the password is checked, so sending many attempts at once doesn't get more than 5 through. Launch passcodes from `dopbase admin passcode` have their own budget per email and client address, and tries with no live passcode count against the address. IPv6 clients share that budget across their /64.
+
+Restoring a backup during setup checks the setup token before it reads the upload. Send the token in the `X-Dopbase-Setup-Token` header or as the first form field, ahead of the file.
 
 The counts live in server memory, so restarting the server clears every lockout. The server tracks up to 10,000 keys before it starts dropping the ones with the fewest failures. It never drops a key that is locked out, so sending failed attempts for other emails cannot unlock an account. If locked keys reach 100,000, the server refuses new keys until some of them expire.
 
@@ -77,6 +81,11 @@ values.
 Existing sessions require confirmation on every invocation, a login
 completed during the command counts as confirmation. Plaintext export follows
 that confirmation.
+
+The server also holds CLI sessions to a recent sign-in for the actions that
+hand out or replace everything: downloading the master key and restoring a
+backup. A CLI token on its own isn't enough; `dopbase restore` asks you to
+confirm your password first.
 
 Its protected editor profiles disable user and project configuration, plugins,
 language servers, persistent history, backups, and swap files where applicable.

@@ -9,24 +9,27 @@ Audit records answer who performed a sensitive action, where it happened, and wh
 
 ## Audit events in {{version}}
 
-| Area                  | Events                                                                                                                                                                                                                                              |
-| --------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| Secrets               | `secret.created`, `secret.updated`, `secret.deleted`, `secret.revealed`, `secret.version_revealed`, `secret.rolled_back`, `secret.imported`, `secret.import_previewed`, `secret.exported`, `secret.runtime_accessed`                                |
-| Projects              | `project.created`, `project.renamed`, `project.deleted`, `project.initialized`                                                                                                                                                                      |
-| Environments          | `environment.created`, `environment.renamed`, `environment.deleted`                                                                                                                                                                                 |
-| Runner tokens         | `token.created`, `token.revoked`                                                                                                                                                                                                                    |
-| Authentication        | `login.succeeded`, `login.failed`, `logout.succeeded`, `cli_login.approved`, `cli_login.denied`                                                                                                                                                     |
-| Single sign-on        | `sso_provider.created`, `sso_provider.updated`, `sso_provider.verified`, `sso_provider.enabled`, `sso_provider.disabled`, `sso_provider.deleted`, `sso_provider.policy_changed`, `sso_identity.linked`, `sso_identity.unlinked`, `sso_login.failed` |
-| Administrator & users | `admin.bootstrapped`, `admin.created`, `admin.updated`, `admin.deleted`, `admin.reauthenticated`, `admin.password_changed`                                                                                                                          |
-| AI service accounts   | `service_account.created`, `service_account.deleted`, `service_account.token_created`, `service_account.token_revoked`                                                                                                                              |
-| Backups               | `backup.created`, `backup.downloaded`, `backup.uploaded`, `backup.restored`, `backup.deleted`, `master_key.downloaded`, `backup.restored_bootstrap`                                                                                                 |
-| Audit log             | `audit.pruned`                                                                                                                                                                                                                                      |
+| Area                  | Events                                                                                                                                                                                                                                                      |
+| --------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Secrets               | `secret.created`, `secret.updated`, `secret.deleted`, `secret.revealed`, `secret.version_revealed`, `secret.rolled_back`, `secret.imported`, `secret.import_previewed`, `secret.exported`, `secret.runtime_accessed`, `secret.copied`, `secret.bulk_copied` |
+| Projects              | `project.created`, `project.renamed`, `project.deleted`, `project.initialized`                                                                                                                                                                              |
+| Environments          | `environment.created`, `environment.renamed`, `environment.deleted`, `environment.protected`, `environment.unprotected`                                                                                                                                     |
+| Runner tokens         | `token.created`, `token.revoked`                                                                                                                                                                                                                            |
+| Authentication        | `login.succeeded`, `login.failed`, `logout.succeeded`, `cli_login.approved`, `cli_login.denied`                                                                                                                                                             |
+| Single sign-on        | `sso_provider.created`, `sso_provider.updated`, `sso_provider.verified`, `sso_provider.enabled`, `sso_provider.disabled`, `sso_provider.deleted`, `sso_provider.policy_changed`, `sso_identity.linked`, `sso_identity.unlinked`, `sso_login.failed`         |
+| Administrator & users | `admin.bootstrapped`, `admin.created`, `admin.updated`, `admin.deleted`, `admin.reauthenticated`, `admin.password_changed`, `user.disabled`, `user.enabled`                                                                                                 |
+| Access                | `grant.set`, `grant.removed`, `group.created`, `group.updated`, `group.deleted`, `group_member.added`, `group_member.removed`                                                                                                                               |
+| Roles                 | `role.created`, `role.updated`, `role.deleted`                                                                                                                                                                                                              |
+| Personal tokens       | `personal_token.created`, `personal_token.revoked`                                                                                                                                                                                                          |
+| Backups               | `backup.created`, `backup.downloaded`, `backup.uploaded`, `backup.restored`, `backup.deleted`, `master_key.downloaded`, `backup.restored_bootstrap`                                                                                                         |
+| Audit log             | `audit.pruned`                                                                                                                                                                                                                                              |
 
 A successful login records `login.succeeded` with the session kind and, for
 single sign-on and browser CLI logins, a `method` of `sso` or `browser`.
 `sso_identity.linked` records whether the link came from a verified email
 (`auto`) or from a signed-in user (`manual`). `sso_login.failed` records a
-reason such as `account_not_found` or `email_unverified`, never provider output.
+reason such as `account_not_found`, `account_disabled` or `email_unverified`,
+never provider output.
 `admin.reauthenticated` records a `method` of `sso` or `browser` when the
 confirmation came from the provider or from a CLI approval in the Admin UI.
 `login.failed` records `password_login_disabled` when a right password was
@@ -40,6 +43,18 @@ Successful import previews record `secret.import_previewed`. The record
 identifies the actor and environment and includes only the import mode and
 submitted entry count in its metadata. It contains no submitted values or
 comparison results. Applying an import records `secret.imported`.
+
+Copying a value from another environment records `secret.copied` on the
+target environment, with the key, the new `version`, `fromEnvironmentId` and
+`fromVersion`. It stores no value. Comparing environments is not audited, the
+same as listing secrets: it needs Read on both environments and returns only
+whether values match.
+
+Copying several keys from another environment at once records one
+`secret.bulk_copied` event on the target environment. Its metadata has
+`fromEnvironmentId`, `values` (whether values came along), `copied` (each
+created key with the source version it came from), and `skipped` (keys the
+target already had). It stores no value.
 
 Revealing an earlier version records `secret.version_revealed` with the key
 and version. A rollback records `secret.rolled_back` with the key, the
@@ -116,7 +131,7 @@ fields included, for write-once storage.
    edit, or deliberate. Review who could reach the data directory: host logins,
    container exec sessions, and volume access.
 5. If it was deliberate, treat it as a breach of the host. Rotate the secrets
-   Dopbase holds, administrator passwords, runner and service account tokens,
+   Dopbase holds, passwords, runner and personal tokens,
    and consider the master key exposed.
 6. Records before the break can still be trusted; records from the break on
    cannot.
@@ -124,9 +139,8 @@ fields included, for write-once storage.
 ## Retention
 
 `audit_retention_days` in `server.toml`, or `DOPBASE_AUDIT_RETENTION_DAYS`,
-sets how many days audit records are kept. New instances start with
-`audit_retention_days = 365` in `server.toml`. Remove the line to keep the
-whole log. `0` is rejected.
+sets how many days audit records are kept. The default is `365`. Set it to
+`0` to keep the whole log.
 
 When records expire, Dopbase applies one clear rule:
 
@@ -173,7 +187,13 @@ elsewhere with `dopbase audit export`.
 
 ## Record contents
 
-Root and admin can review user, AI account, and backup history in the Audit page.
+What the Audit page and `dopbase audit` list depends on the reader's role:
+every event with `audit.read_all` (Auditor and root), settings events and
+events on the projects they reach with `audit.read` (Admin), and otherwise
+only the reader's own actions. Accounts and AI agents appear as `admin.*`
+events. Requests made with a personal token are recorded with the actor type
+`personal_token` and the account as the actor. Service account events from
+earlier versions keep their `service_account.*` names.
 
 An audit record may contain:
 
@@ -205,7 +225,7 @@ It must never contain the plaintext secret value, a usable authentication token,
 
 ```text
 2026-08-27 14:23
-actor: alice@example.com
+actor: alice@dopbase.com
 action: secret.updated
 project: payment-service
 environment: production

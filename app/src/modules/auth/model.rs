@@ -1,4 +1,7 @@
-use crate::models::{AdminRole, SessionKind};
+use crate::{
+  models::{AdminRole, SessionKind},
+  services::authx::{Capability, Level},
+};
 use serde::{Deserialize, Serialize};
 use utoipa::ToSchema;
 #[derive(Deserialize, ToSchema)]
@@ -7,6 +10,18 @@ pub struct LoginRequest {
   pub email: String,
   pub password: String,
   pub session_kind: SessionKind,
+}
+/// A launch passcode from `dopbase admin passcode`, as the `/launch` page
+/// read it from its link.
+#[derive(Deserialize, ToSchema)]
+#[serde(rename_all = "camelCase")]
+pub struct LaunchRequest {
+  /// Email of the account the passcode was issued for.
+  #[schema(example = "root@dopbase.com")]
+  pub identity: String,
+  /// The passcode. Dashes, spaces and lowercase are accepted.
+  #[schema(example = "GJZG-FLMT")]
+  pub passcode: String,
 }
 #[derive(Serialize, ToSchema)]
 #[serde(rename_all = "camelCase")]
@@ -25,6 +40,22 @@ pub struct SessionResponse {
   pub admin_id: String,
   pub email: String,
   pub role: AdminRole,
+  /// The display name of the account's role, from the role tables.
+  pub role_name: String,
+  /// What the account may do to the instance. Gate UI on these, not on
+  /// `role`.
+  pub capabilities: Vec<Capability>,
+  /// Features this server has on: `sso`, `rbac` and `rbac.roles`. A page
+  /// for a feature that's off has nothing to show.
+  pub features: Vec<crate::services::features::Feature>,
+  /// The most active people the server allows, root and AI agents not
+  /// counted. `null` when there is no limit.
+  pub max_users: Option<u32>,
+  /// The deepest project and environment access any grant can give.
+  pub max_level: Level,
+  /// What the role's personal tokens are for: `data`, `audit`, or `none`.
+  /// Root has none.
+  pub token_scope: String,
   pub session_kind: SessionKind,
   pub recent_authentication: bool,
   pub last_login_at: Option<String>,
@@ -83,6 +114,10 @@ pub enum DevicePurpose {
 pub struct DeviceStartRequest {
   /// Shown to the approver so they can tell which machine asked.
   pub hostname: Option<String>,
+  /// Shown to the approver so they can tell which program asked, such as
+  /// `dopbase 0.2.0 on macOS`. Trimmed to 80 printable characters.
+  #[schema(example = "dopbase 0.2.0 on macOS")]
+  pub client: Option<String>,
   /// `reauth` needs the CLI session's bearer token. Defaults to `login`.
   #[serde(default)]
   pub purpose: Option<DevicePurpose>,
@@ -125,8 +160,15 @@ pub struct UserCodeRequest {
 #[serde(rename_all = "camelCase")]
 pub struct DeviceRequestDetails {
   pub hostname: Option<String>,
+  /// The program that asked, as the CLI reported it. Null for older clients.
+  #[schema(example = "dopbase 0.2.0 on macOS")]
+  pub client: Option<String>,
   pub ip_address: Option<String>,
   pub created_at: String,
   pub expires_at: String,
   pub purpose: DevicePurpose,
+  /// How many days the CLI session that approving a login creates can last
+  /// at most. It also ends after a shorter stretch without use.
+  #[schema(example = 90)]
+  pub session_days: u32,
 }

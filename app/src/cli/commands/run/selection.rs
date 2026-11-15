@@ -1,7 +1,7 @@
 use crate::{
   constants::config::{
-    RUN_CODE_LOADING_NAMES, RUN_RESERVED_NAMES, RUN_SENSITIVE_NAMES, RUN_SHELL_RESERVED_NAMES,
-    RUN_SHELL_RESERVED_PREFIXES,
+    RUN_CODE_LOADING_NAMES, RUN_CODE_LOADING_PREFIXES, RUN_RESERVED_NAMES, RUN_SENSITIVE_NAMES,
+    RUN_SHELL_RESERVED_NAMES, RUN_SHELL_RESERVED_PREFIXES,
   },
   models::SecretInput,
 };
@@ -72,7 +72,8 @@ pub fn select(
       selection.preserved.push(entry.key);
       continue;
     }
-    let code_loading = matches_any(&RUN_CODE_LOADING_NAMES, key);
+    let code_loading =
+      matches_any(&RUN_CODE_LOADING_NAMES, key) || has_prefix(&RUN_CODE_LOADING_PREFIXES, key);
     if code_loading && !only.contains(key) {
       selection.blocked.push(entry.key);
       continue;
@@ -92,16 +93,23 @@ fn matches_any(
   names.iter().any(|name| names_match(name, key))
 }
 
+fn has_prefix(
+  prefixes: &[&str],
+  key: &str,
+) -> bool {
+  prefixes.iter().any(|prefix| {
+    key
+      .get(..prefix.len())
+      .is_some_and(|head| names_match(prefix, head))
+  })
+}
+
 fn is_reserved(key: &str) -> bool {
   RUN_RESERVED_NAMES
     .iter()
     .chain(RUN_SHELL_RESERVED_NAMES.iter())
     .any(|name| names_match(name, key))
-    || RUN_SHELL_RESERVED_PREFIXES.iter().any(|prefix| {
-      key
-        .get(..prefix.len())
-        .is_some_and(|head| names_match(prefix, head))
-    })
+    || has_prefix(&RUN_SHELL_RESERVED_PREFIXES, key)
 }
 
 /// Environment names are case-insensitive on Windows only.

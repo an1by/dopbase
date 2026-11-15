@@ -1,0 +1,198 @@
+use super::model::PersonalTokenResponse;
+use crate::{modules::grants::model::ScopeType, services::authx::Level};
+use sqlx::{SqliteConnection, SqlitePool};
+
+const SELECT: &str = "SELECT t.id, t.account_id AS user_id, t.name, t.scope, t.project_id, t.environment_id, \
+  COALESCE(p.name || '/' || e.name, p.name, '') AS scope_label, \
+  t.level, t.created_by, t.created_at, t.expires_at, t.last_used_at, t.revoked_at \
+  FROM personal_tokens t \
+  LEFT JOIN projects p ON p.id = t.project_id \
+  LEFT JOIN environments e ON e.id = t.environment_id";
+
+#[derive(sqlx::FromRow)]
+struct TokenRow {
+  id: String,
+  user_id: String,
+  name: String,
+  scope: String,
+  project_id: Option<String>,
+  environment_id: Option<String>,
+  scope_label: String,
+  level: String,
+  created_by: Option<String>,
+  created_at: String,
+  expires_at: String,
+  last_used_at: Option<String>,
+  revoked_at: Option<String>,
+}
+
+impl TokenRow {
+  /// Audit tokens are left out until they can be listed as such.
+  fn response(self) -> Option<PersonalTokenResponse> {
+    Some(PersonalTokenResponse {
+      id: self.id,
+      user_id: self.user_id,
+      name: self.name,
+      scope_type: ScopeType::parse(&self.scope)?,
+      scope_id: self.environment_id.or(self.project_id).unwrap_or_default(),
+      scope_label: self.scope_label,
+      level: Level::parse(&self.level)?,
+      created_by: self.created_by,
+      created_at: self.created_at,
+      expires_at: Some(self.expires_at),
+      last_used_at: self.last_used_at,
+      revoked_at: self.revoked_at,
+    })
+  }
+}
+
+pub async fn list(
+  pool: &SqlitePool,
+  user_id: &str,
+) -> Result<Vec<PersonalTokenResponse>, sqlx::Error> {
+  let rows: Vec<TokenRow> = sqlx::query_as(&format!(
+    "{SELECT} WHERE t.account_id = $1 ORDER BY t.created_at DESC"
+  ))
+  .bind(user_id)
+  .fetch_all(pool)
+  .await?;
+  Ok(rows.into_iter().filter_map(TokenRow::response).collect())
+}
+
+pub async fn find(
+  conn: &mut SqliteConnection,
+  user_id: &str,
+  id: &str,
+) -> Result<Option<PersonalTokenResponse>, sqlx::Error> {
+  let row: Option<TokenRow> =
+    sqlx::query_as(&format!("{SELECT} WHERE t.account_id = $1 AND t.id = $2"))
+      .bind(user_id)
+      .bind(id)
+      .fetch_optional(conn)
+      .await?;
+  Ok(row.and_then(TokenRow::response))
+}
+
+pub struct NewToken<'a> {
+  pub id: &'a str,
+  pub user_id: &'a str,
+  pub name: &'a str,
+  pub token_hash: Vec<u8>,
+  pub scope_type: ScopeType,
+  pub scope_id: &'a str,
+  pub level: Level,
+  pub created_by: &'a str,
+  pub created_at: &'a str,
+  pub expires_at: &'a str,
+}
+
+/// Fails with a unique violation when the account has a token by that name.
+pub async fn insert(
+  conn: &mut SqliteConnection,
+  token: NewToken<'_>,
+) -> Result<(), sqlx::Error> {
+  // An environment token also stores its project, so the composite key
+  // keeps it inside that project and deleting either removes it.
+  let (project_id, environment_id) = match token.scope_type {
+    ScopeType::Project => (Some(token.scope_id), None),
+    ScopeType::Environment => (None, Some(token.scope_id)),
+    ScopeType::All | ScopeType::Audit => (None, None),
+  };
+  sqlx::query("INSERT INTO personal_tokens(id, account_id, name, token_hash, scope, project_id, environment_id, level, created_by, created_at, expires_at) VALUES($1, $2, $3, $4, $5, COALESCE($6, (SELECT project_id FROM environments WHERE id = $7)), $7, $8, $9, $10, $11)")
+    .bind(token.id)
+    .bind(token.user_id)
+    .bind(token.name)
+    .bind(token.token_hash)
+    .bind(token.scope_type.as_str())
+    .bind(project_id)
+    .bind(environment_id)
+    .bind(token.level.as_str())
+    .bind(token.created_by)
+    .bind(token.created_at)
+    .bind(token.expires_at)
+    .execute(conn)
+    .await?;
+  Ok(())
+}
+
+/// Returns false when the token was already revoked.
+pub async fn revoke(
+  conn: &mut SqliteConnection,
+  user_id: &str,
+  id: &str,
+  now: &str,
+) -> Result<bool, sqlx::Error> {
+  Ok(
+    sqlx::query("UPDATE personal_tokens SET revoked_at = $1 WHERE account_id = $2 AND id = $3 AND revoked_at IS NULL")
+      .bind(now)
+      .bind(user_id)
+      .bind(id)
+      .execute(conn)
+      .await?
+      .rows_affected()
+      == 1,
+  )
+}
+
+/// Revokes every token of the account that isn't revoked yet and returns
+/// each one as (id, name).
+pub async fn revoke_all(
+  conn: &mut SqliteConnection,
+  user_id: &str,
+  now: &str,
+) -> Result<Vec<(String, String)>, sqlx::Error> {
+  let tokens: Vec<(String, String)> = sqlx::query_as(
+    "SELECT id, name FROM personal_tokens WHERE account_id = $1 AND revoked_at IS NULL ORDER BY created_at",
+  )
+  .bind(user_id)
+  .fetch_all(&mut *conn)
+  .await?;
+  sqlx::query(
+    "UPDATE personal_tokens SET revoked_at = $1 WHERE account_id = $2 AND revoked_at IS NULL",
+  )
+  .bind(now)
+  .bind(user_id)
+  .execute(&mut *conn)
+  .await?;
+  Ok(tokens)
+}
+
+/// The account's tokens other than `except` that are neither revoked nor
+/// expired at `now`, as (id, name).
+pub async fn live_except(
+  conn: &mut SqliteConnection,
+  user_id: &str,
+  except: &str,
+  now: &str,
+) -> Result<Vec<(String, String)>, sqlx::Error> {
+  sqlx::query_as("SELECT id, name FROM personal_tokens WHERE account_id = $1 AND id <> $2 AND revoked_at IS NULL AND expires_at > $3 ORDER BY created_at")
+    .bind(user_id)
+    .bind(except)
+    .bind(now)
+    .fetch_all(conn)
+    .await
+}
+
+/// The account a token would belong to, and its role's token policy.
+#[derive(sqlx::FromRow)]
+pub struct Holder {
+  pub email: String,
+  pub is_root: bool,
+  /// `user` for a person, `agent` for an AI agent.
+  pub kind: String,
+  pub owner_id: Option<String>,
+  pub token_scope: Option<String>,
+  pub token_max_level: Option<String>,
+  pub token_default_ttl_days: Option<i64>,
+  pub token_max_ttl_days: Option<i64>,
+}
+
+pub async fn holder(
+  pool: &SqlitePool,
+  user_id: &str,
+) -> Result<Option<Holder>, sqlx::Error> {
+  sqlx::query_as("SELECT a.label AS email, a.is_root, a.kind, a.owner_id, r.token_scope, r.token_max_level, r.token_default_ttl_days, r.token_max_ttl_days FROM account_profiles a LEFT JOIN roles r ON r.id = a.role_id WHERE a.id = $1")
+    .bind(user_id)
+    .fetch_optional(pool)
+    .await
+}

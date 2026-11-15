@@ -1,0 +1,357 @@
+import { computed, ref } from "vue";
+import { useRoute, useRouter } from "vue-router";
+import { ApiError } from "~/services/http.client";
+import { bootstrapRestore } from "~/services/bootstrap.api";
+import { downloadMasterKeyBlob } from "~/services/backups.api";
+import { errorMessage } from "~/services/api-errors";
+import { copyText } from "~/utils/clipboard";
+import { formatHosting } from "~/utils/format";
+import { useAuthStore } from "~/stores/auth.store";
+import {
+  isValidEmail,
+  MAX_PASSWORD_LENGTH,
+  MIN_PASSWORD_LENGTH,
+  validatePasswordLength,
+} from "~/utils/validation";
+
+import {
+  bytesToHex,
+  groupKey,
+  maskKey,
+  passwordStrength,
+  recoveryKitFileName,
+  recoveryKitText,
+  STRENGTH_LABELS,
+} from "./recovery-kit";
+
+export { MIN_PASSWORD_LENGTH } from "~/utils/validation";
+
+export type SetupMode = "setup" | "restore";
+/** The root account first, then the recovery kit. */
+export type SetupStep = "account" | "recovery";
+
+/**
+ * First-run setup controller: claims the uninitialized server with the
+ * one-time setup token, creates the single admin, and starts the returned
+ * session, or restores the entire instance from an encrypted .dop backup.
+ */
+export function useSetupController() {
+  const router = useRouter();
+  const route = useRoute();
+  const auth = useAuthStore();
+
+  const mode = ref<SetupMode>("setup");
+  const step = ref<SetupStep>("account");
+  const host = window.location.host;
+  /** `Secure cloud` or `Self-hosted`, for the footer. */
+  const hosting = formatHosting(window.location.hostname);
+
+  // Setup form state
+  const setupToken = ref("");
+  const email = ref("");
+  const password = ref("");
+  const confirmPassword = ref("");
+
+  const fieldErrors = ref<{
+    setupToken?: string;
+    email?: string;
+    password?: string;
+    confirmPassword?: string;
+  }>({});
+  const formError = ref<string | null>(null);
+  const submitting = ref(false);
+
+  // Restore form state
+  const selectedFile = ref<File | null>(null);
+  const masterKeyFile = ref<File | null>(null);
+  const masterKeyHex = ref("");
+  const restoring = ref(false);
+  const restoreError = ref<string | null>(null);
+
+  const passwordsMatch = computed(
+    () =>
+      confirmPassword.value === "" || password.value === confirmPassword.value,
+  );
+
+  const strength = computed(() =>
+    passwordStrength(password.value, MIN_PASSWORD_LENGTH),
+  );
+  const strengthLabel = computed(() => STRENGTH_LABELS[strength.value]);
+
+  // Fill the setup link values, then remove them from the address bar.
+  const query = { ...route.query };
+  const tokenParam = route.query.token;
+  const emailParam = route.query.email;
+  let consumedQuery = false;
+  // The page hides the token field when the link already carried it.
+  const tokenFromLink =
+    typeof tokenParam === "string" && tokenParam.trim() !== "";
+  if (tokenFromLink) {
+    setupToken.value = tokenParam.trim();
+    delete query.token;
+    consumedQuery = true;
+  }
+  if (typeof emailParam === "string" && emailParam.trim() !== "") {
+    email.value = emailParam.trim();
+    delete query.email;
+    consumedQuery = true;
+  }
+  if (consumedQuery) {
+    void router.replace({ query });
+  }
+
+  function validate(): boolean {
+    const errors: typeof fieldErrors.value = {};
+    if (setupToken.value.trim() === "") {
+      errors.setupToken = "Paste the setup token printed by the server.";
+    }
+    if (email.value.trim() === "") {
+      errors.email = "Enter an email address.";
+    } else if (!isValidEmail(email.value)) {
+      errors.email = "Enter a valid email address.";
+    }
+    const passwordResult = validatePasswordLength(password.value);
+    if (passwordResult.code === "PASSWORD_TOO_SHORT") {
+      errors.password = `Use at least ${MIN_PASSWORD_LENGTH} characters.`;
+    } else if (passwordResult.code === "PASSWORD_TOO_LONG") {
+      errors.password = `Use at most ${MAX_PASSWORD_LENGTH} characters.`;
+    }
+    if (confirmPassword.value !== password.value) {
+      errors.confirmPassword = "Passwords do not match.";
+    }
+    fieldErrors.value = errors;
+    return Object.keys(errors).length === 0;
+  }
+
+  function mapApiError(error: unknown): void {
+    if (error instanceof ApiError) {
+      if (error.hasCode("EMAIL_INVALID")) {
+        fieldErrors.value.email = "Enter a valid email address.";
+        return;
+      }
+      if (error.hasCode("RATE_LIMITED")) {
+        formError.value = "Too many attempts. Wait a moment and try again.";
+        return;
+      }
+      if (error.firstCode === "SETUP_TOKEN_INVALID") {
+        fieldErrors.value.setupToken =
+          "The setup token is invalid or already used.";
+        return;
+      }
+      if (error.status === 409) {
+        formError.value =
+          "This server has already been set up. Sign in instead.";
+        return;
+      }
+    }
+    formError.value = "Setup failed. Check the token and try again.";
+  }
+
+  async function submit(): Promise<void> {
+    formError.value = null;
+    if (!validate() || submitting.value) return;
+    submitting.value = true;
+    try {
+      await auth.bootstrap({
+        setupToken: setupToken.value.trim(),
+        email: email.value.trim().toLowerCase(),
+        password: password.value,
+      });
+      // Root is signed in now. Before the console, save the recovery kit.
+      step.value = "recovery";
+      void loadRecoveryKey();
+    } catch (error) {
+      mapApiError(error);
+    } finally {
+      submitting.value = false;
+    }
+  }
+
+  // Recovery kit
+  const masterKey = ref<string | null>(null);
+  const keyLoading = ref(false);
+  const keyError = ref<string | null>(null);
+  const keyRevealed = ref(false);
+  const keyCopied = ref(false);
+  const kitDownloaded = ref(false);
+  /** "I've stored the recovery kit outside this server." */
+  const kitStored = ref(false);
+
+  const shownKey = computed(() =>
+    masterKey.value
+      ? keyRevealed.value
+        ? groupKey(masterKey.value)
+        : maskKey(masterKey.value)
+      : "",
+  );
+  const canContinue = computed(
+    () => masterKey.value !== null && kitStored.value,
+  );
+
+  async function loadRecoveryKey(): Promise<void> {
+    keyLoading.value = true;
+    keyError.value = null;
+    try {
+      const blob = await downloadMasterKeyBlob();
+      masterKey.value = bytesToHex(new Uint8Array(await blob.arrayBuffer()));
+    } catch (cause) {
+      keyError.value = errorMessage(
+        cause,
+        "Could not read the master key from the server.",
+      );
+    } finally {
+      keyLoading.value = false;
+    }
+  }
+
+  async function copyKey(): Promise<void> {
+    if (!masterKey.value) return;
+    keyCopied.value = await copyText(masterKey.value);
+  }
+
+  /** Saves the kit as a text file, the way the browser saves downloads. */
+  function downloadKit(): void {
+    if (!masterKey.value) return;
+    const text = recoveryKitText({
+      host,
+      origin: window.location.origin,
+      email: email.value.trim().toLowerCase(),
+      key: masterKey.value,
+      createdAt: new Date(),
+    });
+    const url = URL.createObjectURL(new Blob([text], { type: "text/plain" }));
+    const link = document.createElement("a");
+    link.href = url;
+    link.download = recoveryKitFileName(host);
+    document.body.append(link);
+    link.click();
+    link.remove();
+    URL.revokeObjectURL(url);
+    kitDownloaded.value = true;
+  }
+
+  /** Into the console, once the kit is stored (or skipped after an error). */
+  async function finish(): Promise<void> {
+    await router.push({ name: "projects" });
+  }
+
+  function onFileSelected(file: File | null): void {
+    restoreError.value = null;
+    if (!file) {
+      selectedFile.value = null;
+      return;
+    }
+    if (!file.name.endsWith(".dop")) {
+      restoreError.value = "Please select a valid .dop backup file.";
+      selectedFile.value = null;
+      return;
+    }
+    selectedFile.value = file;
+  }
+
+  function onMasterKeyFileSelected(file: File | null): void {
+    restoreError.value = null;
+    masterKeyFile.value = file;
+    if (file) {
+      masterKeyHex.value = "";
+    }
+  }
+
+  async function submitRestore(): Promise<void> {
+    restoreError.value = null;
+    if (!selectedFile.value) {
+      restoreError.value = "Please select a .dop backup file to restore.";
+      return;
+    }
+    if (!setupToken.value.trim()) {
+      restoreError.value = "Enter the setup token printed by the server.";
+      return;
+    }
+    if (restoring.value) return;
+
+    restoring.value = true;
+    try {
+      const keyInput =
+        masterKeyFile.value ||
+        (masterKeyHex.value.trim() ? masterKeyHex.value.trim() : undefined);
+      const restored = keyInput
+        ? await bootstrapRestore(selectedFile.value, setupToken.value, keyInput)
+        : await bootstrapRestore(selectedFile.value, setupToken.value);
+      await auth.loadBootstrapStatus();
+      router.push({
+        name: "login",
+        query: {
+          notice: restored?.upgrade ? "backup-upgraded" : "backup-restored",
+        },
+      });
+    } catch (error) {
+      if (error instanceof ApiError) {
+        if (error.hasCode("BACKUP_DECRYPT_FAILED")) {
+          restoreError.value =
+            "Failed to decrypt backup. When restoring from another server, provide its master key (master.key file or 64-character hex key).";
+          return;
+        }
+        if (error.hasCode("INVALID_MASTER_KEY")) {
+          restoreError.value =
+            "The provided master key is invalid. It must be a 32-byte master.key file or 64-character hex key.";
+          return;
+        }
+        if (error.status === 409 || error.hasCode("BOOTSTRAP_CLOSED")) {
+          restoreError.value =
+            "This server has already been set up. Please sign in instead.";
+          return;
+        }
+        if (error.hasCode("RATE_LIMITED")) {
+          restoreError.value =
+            "Too many attempts. Wait a moment and try again.";
+          return;
+        }
+        restoreError.value = error.message || "Failed to restore backup.";
+      } else {
+        restoreError.value = "An unexpected error occurred while restoring.";
+      }
+    } finally {
+      restoring.value = false;
+    }
+  }
+
+  return {
+    mode,
+    step,
+    host,
+    hosting,
+    strength,
+    strengthLabel,
+    masterKey,
+    keyLoading,
+    keyError,
+    keyRevealed,
+    keyCopied,
+    kitDownloaded,
+    kitStored,
+    shownKey,
+    canContinue,
+    loadRecoveryKey,
+    copyKey,
+    downloadKit,
+    finish,
+    setupToken,
+    tokenFromLink,
+    email,
+    password,
+    confirmPassword,
+    passwordsMatch,
+    fieldErrors,
+    formError,
+    submitting,
+    submit,
+    selectedFile,
+    masterKeyFile,
+    masterKeyHex,
+    restoring,
+    restoreError,
+    onFileSelected,
+    onMasterKeyFileSelected,
+    submitRestore,
+  };
+}

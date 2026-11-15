@@ -1,6 +1,11 @@
 use super::model::SecretMetadata;
 use crate::services::crypto::EncryptedValue;
-use sqlx::SqlitePool;
+use sqlx::{QueryBuilder, Sqlite, SqlitePool};
+
+/// A secret's current value lives in its newest version row; `secrets`
+/// only points at it.
+const CURRENT: &str = "SELECT s.key, s.current_version AS version, v.ciphertext, v.value_nonce, v.wrapped_key, v.key_nonce, s.created_at, s.updated_at \
+  FROM secrets s JOIN secret_versions v ON v.environment_id = s.environment_id AND v.key = s.key AND v.version = s.current_version";
 #[derive(sqlx::FromRow)]
 pub struct SecretRow {
   pub key: String,
@@ -35,48 +40,118 @@ pub async fn list(
   environment_id: &str,
 ) -> Result<Vec<SecretMetadata>, sqlx::Error> {
   sqlx::query_as(
-    "SELECT key,version,created_at,updated_at FROM secrets WHERE environment_id=? ORDER BY key",
+    "SELECT key, current_version AS version, created_at, updated_at FROM secrets WHERE environment_id = $1 ORDER BY key",
   )
   .bind(environment_id)
   .fetch_all(pool)
   .await
 }
-pub async fn rows(
-  pool: &SqlitePool,
+pub async fn rows<'e>(
+  executor: impl sqlx::SqliteExecutor<'e>,
   environment_id: &str,
 ) -> Result<Vec<SecretRow>, sqlx::Error> {
-  sqlx::query_as("SELECT key,version,ciphertext,value_nonce,wrapped_key,key_nonce,created_at,updated_at FROM secrets WHERE environment_id=? ORDER BY key").bind(environment_id).fetch_all(pool).await
+  sqlx::query_as(&format!(
+    "{CURRENT} WHERE s.environment_id = $1 ORDER BY s.key"
+  ))
+  .bind(environment_id)
+  .fetch_all(executor)
+  .await
 }
-pub async fn find(
-  pool: &SqlitePool,
+/// What an environment's revision is made of: each key's version and
+/// update time, without any ciphertext.
+pub async fn revision_rows<'e>(
+  executor: impl sqlx::SqliteExecutor<'e>,
+  environment_id: &str,
+) -> Result<Vec<(String, i64, String)>, sqlx::Error> {
+  sqlx::query_as(
+    "SELECT key, current_version, updated_at FROM secrets WHERE environment_id = $1 ORDER BY key",
+  )
+  .bind(environment_id)
+  .fetch_all(executor)
+  .await
+}
+/// The version of each of `keys` the environment has. Keys it doesn't have
+/// are left out.
+pub async fn versions_of<'e>(
+  executor: impl sqlx::SqliteExecutor<'e>,
+  environment_id: &str,
+  keys: &[&String],
+) -> Result<Vec<(String, i64)>, sqlx::Error> {
+  if keys.is_empty() {
+    return Ok(Vec::new());
+  }
+  let mut query: QueryBuilder<Sqlite> =
+    QueryBuilder::new("SELECT key, current_version FROM secrets WHERE environment_id = ");
+  query.push_bind(environment_id);
+  push_keys(&mut query, "key", keys);
+  query.build_query_as().fetch_all(executor).await
+}
+/// Like [`rows`], for `keys` only.
+pub async fn rows_of<'e>(
+  executor: impl sqlx::SqliteExecutor<'e>,
+  environment_id: &str,
+  keys: &[&String],
+) -> Result<Vec<SecretRow>, sqlx::Error> {
+  if keys.is_empty() {
+    return Ok(Vec::new());
+  }
+  let mut query: QueryBuilder<Sqlite> = QueryBuilder::new(CURRENT);
+  query.push(" WHERE s.environment_id = ");
+  query.push_bind(environment_id);
+  push_keys(&mut query, "s.key", keys);
+  query.push(" ORDER BY s.key");
+  query.build_query_as().fetch_all(executor).await
+}
+
+/// Appends ` AND column IN ($n, …)` with one placeholder per key, which
+/// both SQLite and Postgres read.
+fn push_keys<'a>(
+  query: &mut QueryBuilder<'a, Sqlite>,
+  column: &str,
+  keys: &'a [&'a String],
+) {
+  query.push(format!(" AND {column} IN ("));
+  let mut list = query.separated(", ");
+  for key in keys {
+    list.push_bind(key.as_str());
+  }
+  list.push_unseparated(")");
+}
+pub async fn find<'e>(
+  executor: impl sqlx::SqliteExecutor<'e>,
   environment_id: &str,
   key: &str,
 ) -> Result<Option<SecretRow>, sqlx::Error> {
-  sqlx::query_as("SELECT key,version,ciphertext,value_nonce,wrapped_key,key_nonce,created_at,updated_at FROM secrets WHERE environment_id=? AND key=?").bind(environment_id).bind(key).fetch_optional(pool).await
+  sqlx::query_as(&format!(
+    "{CURRENT} WHERE s.environment_id = $1 AND s.key = $2"
+  ))
+  .bind(environment_id)
+  .bind(key)
+  .fetch_optional(executor)
+  .await
 }
-pub async fn layout(
-  pool: &SqlitePool,
+/// The environment's `.env` layout: comments and key order.
+pub async fn layout<'e>(
+  executor: impl sqlx::SqliteExecutor<'e>,
   environment_id: &str,
 ) -> Result<Option<String>, sqlx::Error> {
-  let row: Option<(String,)> =
-    sqlx::query_as("SELECT layout FROM environment_env_layout WHERE environment_id=?")
+  let row: Option<Option<String>> =
+    sqlx::query_scalar("SELECT env_layout FROM environments WHERE id = $1")
       .bind(environment_id)
-      .fetch_optional(pool)
+      .fetch_optional(executor)
       .await?;
-  Ok(row.map(|(layout,)| layout))
+  Ok(row.flatten())
 }
 pub async fn upsert_layout(
   tx: &mut sqlx::SqliteConnection,
   environment_id: &str,
   layout: &str,
-  now: &str,
 ) -> Result<(), sqlx::Error> {
-  sqlx::query("INSERT INTO environment_env_layout(environment_id,layout,updated_at)VALUES(?,?,?) ON CONFLICT(environment_id) DO UPDATE SET layout=excluded.layout,updated_at=excluded.updated_at")
-        .bind(environment_id)
-        .bind(layout)
-        .bind(now)
-        .execute(tx)
-        .await?;
+  sqlx::query("UPDATE environments SET env_layout = $1 WHERE id = $2")
+    .bind(layout)
+    .bind(environment_id)
+    .execute(tx)
+    .await?;
   Ok(())
 }
 
@@ -122,31 +197,31 @@ pub struct NewVersion<'a> {
 /// history, then expires ciphertext beyond the retention count. This is the
 /// only write path for secret values.
 ///
-/// The upsert must stay `ON CONFLICT DO UPDATE`. `INSERT OR REPLACE` would
-/// delete the row first and cascade away the whole history.
+/// `secrets` points at its current version through a deferred key, so the
+/// two writes run inside a transaction (a savepoint when the caller already
+/// holds one) and the key is checked at commit. The upsert must stay
+/// `ON CONFLICT DO UPDATE`: deleting the row first would cascade away the
+/// whole history.
 pub async fn write_version(
   conn: &mut sqlx::SqliteConnection,
   new: NewVersion<'_>,
 ) -> Result<(), sqlx::Error> {
+  let mut tx = sqlx::Connection::begin(&mut *conn).await?;
   let EncryptedValue {
     ciphertext,
     value_nonce,
     wrapped_key,
     key_nonce,
   } = new.encrypted;
-  sqlx::query("INSERT INTO secrets(environment_id,key,version,ciphertext,value_nonce,wrapped_key,key_nonce,created_at,updated_at)VALUES(?,?,?,?,?,?,?,?,?) ON CONFLICT(environment_id,key) DO UPDATE SET version=excluded.version,ciphertext=excluded.ciphertext,value_nonce=excluded.value_nonce,wrapped_key=excluded.wrapped_key,key_nonce=excluded.key_nonce,updated_at=excluded.updated_at")
+  sqlx::query("INSERT INTO secrets(environment_id, key, current_version, created_at, updated_at) VALUES($1, $2, $3, $4, $5) ON CONFLICT(environment_id, key) DO UPDATE SET current_version = excluded.current_version, updated_at = excluded.updated_at")
     .bind(new.environment_id)
     .bind(new.key)
     .bind(new.version)
-    .bind(&ciphertext)
-    .bind(&value_nonce)
-    .bind(&wrapped_key)
-    .bind(&key_nonce)
     .bind(new.created_at)
     .bind(new.now)
-    .execute(&mut *conn)
+    .execute(&mut *tx)
     .await?;
-  sqlx::query("INSERT INTO secret_versions(environment_id,key,version,ciphertext,value_nonce,wrapped_key,key_nonce,change_type,source_version,actor_type,actor_id,actor_label,created_at)VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?)")
+  sqlx::query("INSERT INTO secret_versions(environment_id,key,version,ciphertext,value_nonce,wrapped_key,key_nonce,change_type,source_version,actor_type,actor_id,actor_label,created_at)VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13)")
     .bind(new.environment_id)
     .bind(new.key)
     .bind(new.version)
@@ -160,17 +235,18 @@ pub async fn write_version(
     .bind(new.actor.actor_id)
     .bind(new.actor.actor_label)
     .bind(new.now)
-    .execute(&mut *conn)
+    .execute(&mut *tx)
     .await?;
-  sqlx::query("UPDATE secret_versions SET ciphertext=NULL,value_nonce=NULL,wrapped_key=NULL,key_nonce=NULL,expired_at=? WHERE environment_id=? AND key=? AND expired_at IS NULL AND version NOT IN (SELECT version FROM secret_versions WHERE environment_id=? AND key=? ORDER BY version DESC LIMIT ?)")
+  sqlx::query("UPDATE secret_versions SET ciphertext=NULL,value_nonce=NULL,wrapped_key=NULL,key_nonce=NULL,expired_at=$1 WHERE environment_id=$2 AND key=$3 AND expired_at IS NULL AND version NOT IN (SELECT version FROM secret_versions WHERE environment_id=$4 AND key=$5 ORDER BY version DESC LIMIT $6)")
     .bind(new.now)
     .bind(new.environment_id)
     .bind(new.key)
     .bind(new.environment_id)
     .bind(new.key)
-    .bind(i64::from(new.keep))
-    .execute(&mut *conn)
+    .bind(i64::from(new.keep.max(1)))
+    .execute(&mut *tx)
     .await?;
+  tx.commit().await?;
   Ok(())
 }
 #[derive(sqlx::FromRow)]
@@ -191,7 +267,7 @@ pub async fn list_versions(
   before: Option<i64>,
   limit: u32,
 ) -> Result<Vec<VersionRow>, sqlx::Error> {
-  sqlx::query_as("SELECT version,change_type,source_version,actor_type,actor_label,created_at,expired_at FROM secret_versions WHERE environment_id=? AND key=? AND (? IS NULL OR version<?) ORDER BY version DESC LIMIT ?")
+  sqlx::query_as("SELECT version,change_type,source_version,actor_type,actor_label,created_at,expired_at FROM secret_versions WHERE environment_id=$1 AND key=$2 AND ($3 IS NULL OR version<$4) ORDER BY version DESC LIMIT $5")
     .bind(environment_id)
     .bind(key)
     .bind(before)
@@ -225,7 +301,7 @@ pub async fn find_version(
   key: &str,
   version: i64,
 ) -> Result<Option<StoredVersion>, sqlx::Error> {
-  sqlx::query_as("SELECT version,ciphertext,value_nonce,wrapped_key,key_nonce FROM secret_versions WHERE environment_id=? AND key=? AND version=?")
+  sqlx::query_as("SELECT version,ciphertext,value_nonce,wrapped_key,key_nonce FROM secret_versions WHERE environment_id=$1 AND key=$2 AND version=$3")
     .bind(environment_id)
     .bind(key)
     .bind(version)

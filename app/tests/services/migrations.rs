@@ -4,12 +4,17 @@ use std::path::{Path, PathBuf};
 
 use app::config::sqlite_url;
 use app::services::db::{DbClient, MIGRATOR};
+use app::services::legacy_schema::{LEGACY_MIGRATOR, migrate_legacy};
 use chrono::NaiveDateTime;
 use regex::Regex;
 
 /// A timestamped migration a later branch would add after the current set.
 const PROBE_MIGRATION: &str = "20261024091600_upgrade_probe";
 const PROBE_VERSION: i64 = 20_261_024_091_600;
+/// The last version before roles and grants replaced the fixed roles.
+const BEFORE_ROLES: i64 = 20_261_024_132_208;
+/// The last version before service accounts became AI agent accounts.
+const BEFORE_PERSONAL_TOKENS: i64 = 20_261_026_065_132;
 /// Highest version recorded before migrations were renamed.
 const LEGACY_HEAD: i64 = 18;
 
@@ -17,8 +22,17 @@ fn migrations_dir() -> PathBuf {
   Path::new(env!("CARGO_MANIFEST_DIR")).join("migrations")
 }
 
+/// The 0.1.x migrations, kept for the restore upgrade.
+fn legacy_dir() -> PathBuf {
+  Path::new(env!("CARGO_MANIFEST_DIR")).join("migrations-legacy")
+}
+
 fn migration_files() -> Vec<String> {
-  let mut names: Vec<String> = fs::read_dir(migrations_dir())
+  files_in(&migrations_dir())
+}
+
+fn files_in(directory: &Path) -> Vec<String> {
+  let mut names: Vec<String> = fs::read_dir(directory)
     .unwrap()
     .map(|entry| entry.unwrap().file_name().into_string().unwrap())
     .filter(|name| name.ends_with(".sql"))
@@ -28,7 +42,7 @@ fn migration_files() -> Vec<String> {
 }
 
 fn timestamped_ups() -> Vec<String> {
-  let mut names: Vec<String> = migration_files()
+  let mut names: Vec<String> = files_in(&legacy_dir())
     .into_iter()
     .filter(|name| name.ends_with(".up.sql"))
     .collect();
@@ -48,7 +62,7 @@ fn migration_version(name: &str) -> i64 {
 fn database_migration_files_follow_the_naming_convention() {
   let timestamped = Regex::new(r"^([0-9]{14})_([a-z0-9_]+)\.(up|down)\.sql$").unwrap();
 
-  for name in migration_files() {
+  for name in migration_files().into_iter().chain(files_in(&legacy_dir())) {
     let captures = timestamped
       .captures(&name)
       .unwrap_or_else(|| panic!("{name}: expected YYYYMMDDHHMMSS_<name>.up.sql or .down.sql"));
@@ -61,9 +75,38 @@ fn database_migration_files_follow_the_naming_convention() {
 
 #[test]
 fn every_migration_file_has_a_matching_pair() {
-  let directory = migrations_dir();
+  for directory in [migrations_dir(), legacy_dir()] {
+    assert_pairs(&directory);
+  }
+}
+
+/// 0.2.0 starts from one baseline; later changes add pairs after it.
+#[test]
+fn the_schema_starts_from_one_baseline() {
+  let ups: Vec<String> = migration_files()
+    .into_iter()
+    .filter(|name| name.ends_with(".up.sql"))
+    .collect();
+  assert_eq!(
+    ups.first().map(String::as_str),
+    Some("20261108090000_baseline.up.sql")
+  );
+  let newest_legacy = files_in(&legacy_dir())
+    .iter()
+    .map(|name| migration_version(name))
+    .max()
+    .unwrap();
+  assert!(
+    ups
+      .iter()
+      .all(|name| migration_version(name) > newest_legacy),
+    "new migrations sort after every 0.1.x one"
+  );
+}
+
+fn assert_pairs(directory: &Path) {
   let mut pairs = BTreeSet::new();
-  for name in migration_files() {
+  for name in files_in(directory) {
     let pair = name
       .strip_suffix(".up.sql")
       .or_else(|| name.strip_suffix(".down.sql"))
@@ -163,6 +206,95 @@ async fn applies_a_new_migration_to_an_existing_database() {
 }
 
 #[tokio::test]
+async fn upgrading_to_roles_keeps_every_account_s_access() {
+  let database_dir = tempfile::TempDir::new().unwrap();
+  let db = DbClient::connect(&sqlite_url(&database_dir.path().join("roles.db")))
+    .await
+    .unwrap();
+  LEGACY_MIGRATOR.run(db.pool()).await.unwrap();
+  LEGACY_MIGRATOR.undo(db.pool(), BEFORE_ROLES).await.unwrap();
+  assert_table(&db, "roles", false).await;
+  for (id, role) in [
+    ("usr_root", "root"),
+    ("usr_admin", "admin"),
+    ("usr_member", "member"),
+  ] {
+    sqlx::query("INSERT INTO admins(id,email,password_hash,role,created_at,updated_at) VALUES(?,?,'',?,'t','t')")
+      .bind(id)
+      .bind(format!("{id}@dopbase.com"))
+      .bind(role)
+      .execute(db.pool())
+      .await
+      .unwrap();
+  }
+
+  LEGACY_MIGRATOR.run(db.pool()).await.unwrap();
+
+  let accounts: Vec<(String, i64, Option<String>, String)> =
+    sqlx::query_as("SELECT id, is_root, role_id, status FROM admins ORDER BY id")
+      .fetch_all(db.pool())
+      .await
+      .unwrap();
+  assert_eq!(
+    accounts,
+    [
+      (
+        "usr_admin".into(),
+        0,
+        Some("rol_admin".into()),
+        "active".into()
+      ),
+      (
+        "usr_member".into(),
+        0,
+        Some("rol_member".into()),
+        "active".into()
+      ),
+      ("usr_root".into(), 1, None, "active".into()),
+    ]
+  );
+  let grants: Vec<(String, String, String, String)> = sqlx::query_as(
+    "SELECT principal_id, scope_type, scope_id, level FROM grants ORDER BY principal_id",
+  )
+  .fetch_all(db.pool())
+  .await
+  .unwrap();
+  assert_eq!(
+    grants,
+    [
+      (
+        "usr_admin".into(),
+        "all".into(),
+        String::new(),
+        "project_manager".into()
+      ),
+      (
+        "usr_member".into(),
+        "all".into(),
+        String::new(),
+        "write".into()
+      ),
+    ]
+  );
+  let built_in: Vec<String> =
+    sqlx::query_scalar("SELECT id FROM roles WHERE builtin = 1 ORDER BY rank")
+      .fetch_all(db.pool())
+      .await
+      .unwrap();
+  assert_eq!(
+    built_in,
+    ["rol_admin", "rol_member", "rol_auditor", "rol_ai_agent"]
+  );
+  let agent_levels: (String, String) =
+    sqlx::query_as("SELECT max_level, token_max_level FROM roles WHERE id = 'rol_ai_agent'")
+      .fetch_one(db.pool())
+      .await
+      .unwrap();
+  assert_eq!(agent_levels, ("write".into(), "write".into()));
+  db.close().await;
+}
+
+#[tokio::test]
 async fn rewrites_versions_recorded_before_the_timestamped_rename() {
   let database_dir = tempfile::TempDir::new().unwrap();
   let database = database_dir.path().join("legacy.db");
@@ -181,7 +313,7 @@ async fn rewrites_versions_recorded_before_the_timestamped_rename() {
   {
     let version = index + 1;
     fs::copy(
-      migrations_dir().join(name),
+      legacy_dir().join(name),
       legacy.join(format!("{version:04}_legacy.up.sql")),
     )
     .unwrap();
@@ -198,9 +330,10 @@ async fn rewrites_versions_recorded_before_the_timestamped_rename() {
       .unwrap();
   assert_eq!(versions, (1..=LEGACY_HEAD).collect::<Vec<_>>());
 
-  // Startup runs this pass on every launch; a second one must be a no-op.
-  db.migrate().await.unwrap();
-  db.migrate().await.unwrap();
+  // The restore upgrade runs this pass on every 0.1.x backup; a second
+  // run must be a no-op.
+  migrate_legacy(db.pool()).await.unwrap();
+  migrate_legacy(db.pool()).await.unwrap();
 
   let rows: Vec<(i64, String)> =
     sqlx::query_as("SELECT version, description FROM _sqlx_migrations ORDER BY version")
@@ -249,61 +382,78 @@ async fn assert_table(
   assert_eq!(exists, expected, "unexpected state for table {name}");
 }
 
-/// Highest four-digit version a fork database recorded before 0.1.10.
-const FORK_LEGACY_HEAD: i64 = 17;
-
 #[tokio::test]
-async fn rewrites_fork_workspace_legacy_versions() {
+async fn service_accounts_become_ai_agent_accounts_whose_tokens_keep_working() {
   let database_dir = tempfile::TempDir::new().unwrap();
-  let database = database_dir.path().join("fork-legacy.db");
-  let db = DbClient::connect(&sqlite_url(&database)).await.unwrap();
-
-  let directory = tempfile::TempDir::new().unwrap();
-  let legacy = directory.path().join("legacy");
-  fs::create_dir(&legacy).unwrap();
-  let ups = timestamped_ups();
-  for version in 1..=13 {
-    fs::copy(
-      migrations_dir().join(&ups[version - 1]),
-      legacy.join(format!("{version:04}_legacy.up.sql")),
-    )
-    .unwrap();
-    fs::write(legacy.join(format!("{version:04}_legacy.down.sql")), "").unwrap();
-  }
-  let fork_only = [
-    "20261024132209_workspaces.up.sql",
-    "20261024132210_default_workspace.up.sql",
-    "20261024132211_project_names_per_workspace.up.sql",
-    "20261024132212_workspace_tokens.up.sql",
-  ];
-  for (index, name) in fork_only.iter().enumerate() {
-    let version = 14 + index;
-    fs::copy(
-      migrations_dir().join(name),
-      legacy.join(format!("{version:04}_legacy.up.sql")),
-    )
-    .unwrap();
-    fs::write(legacy.join(format!("{version:04}_legacy.down.sql")), "").unwrap();
-  }
-
-  let migrator = sqlx::migrate::Migrator::new(legacy.as_path())
+  let db = DbClient::connect(&sqlite_url(&database_dir.path().join("agents.db")))
     .await
     .unwrap();
-  migrator.run(db.pool()).await.unwrap();
+  LEGACY_MIGRATOR.run(db.pool()).await.unwrap();
+  LEGACY_MIGRATOR
+    .undo(db.pool(), BEFORE_PERSONAL_TOKENS)
+    .await
+    .unwrap();
+  assert_table(&db, "personal_tokens", false).await;
+  sqlx::query("INSERT INTO admins(id,email,password_hash,role,role_id,is_root,created_at,updated_at) VALUES('usr_root','root@dopbase.com','','root',NULL,1,'t','t')")
+    .execute(db.pool())
+    .await
+    .unwrap();
+  sqlx::query("INSERT INTO service_accounts(id,name,role,created_at,updated_at) VALUES('aia_build','build-agent','ai_agent','t','t')")
+    .execute(db.pool())
+    .await
+    .unwrap();
+  let hash = app::services::token::hash("dpa_existing");
+  sqlx::query("INSERT INTO agent_tokens(id,service_account_id,name,token_hash,created_at,expires_at) VALUES('ait_build','aia_build','ci',?,'t',NULL)")
+    .bind(&hash)
+    .execute(db.pool())
+    .await
+    .unwrap();
 
-  db.migrate().await.unwrap();
-  db.migrate().await.unwrap();
+  LEGACY_MIGRATOR.run(db.pool()).await.unwrap();
 
-  assert_table(&db, "workspaces", true).await;
-  assert_table(&db, "workspace_tokens", true).await;
-  assert_table(&db, "sso_providers", true).await;
-
-  let versions: Vec<i64> =
-    sqlx::query_scalar("SELECT version FROM _sqlx_migrations ORDER BY version")
-      .fetch_all(db.pool())
+  assert_table(&db, "service_accounts", false).await;
+  assert_table(&db, "agent_tokens", false).await;
+  let agent: (String, String, Option<String>, String) = sqlx::query_as(
+    "SELECT email, role_id, owner_id, password_hash FROM admins WHERE id = 'aia_build'",
+  )
+  .fetch_one(db.pool())
+  .await
+  .unwrap();
+  assert_eq!(
+    agent,
+    (
+      "build-agent".into(),
+      "rol_ai_agent".into(),
+      Some("usr_root".into()),
+      String::new()
+    )
+  );
+  let grant: (String, String) = sqlx::query_as(
+    "SELECT scope_type, level FROM grants WHERE principal_type = 'user' AND principal_id = 'aia_build'",
+  )
+  .fetch_one(db.pool())
+  .await
+  .unwrap();
+  assert_eq!(grant, ("all".into(), "metadata".into()));
+  let token: (String, String, String) =
+    sqlx::query_as("SELECT user_id, scope_type, level FROM personal_tokens WHERE token_hash = ?")
+      .bind(&hash)
+      .fetch_one(db.pool())
       .await
       .unwrap();
-  assert!(versions.contains(&20261024132212));
-  assert!(versions.iter().all(|version| *version > FORK_LEGACY_HEAD));
+  assert_eq!(token, ("aia_build".into(), "all".into(), "metadata".into()));
+
+  // And back: the agent is a service account again with its token.
+  LEGACY_MIGRATOR
+    .undo(db.pool(), BEFORE_PERSONAL_TOKENS)
+    .await
+    .unwrap();
+  let restored: i64 = sqlx::query_scalar(
+    "SELECT COUNT(*) FROM agent_tokens t JOIN service_accounts s ON s.id = t.service_account_id WHERE s.name = 'build-agent'",
+  )
+  .fetch_one(db.pool())
+  .await
+  .unwrap();
+  assert_eq!(restored, 1);
   db.close().await;
 }

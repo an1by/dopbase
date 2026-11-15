@@ -1,6 +1,6 @@
 //! What an attacker can try against single sign-on, and what stops it.
 
-use super::secrets_import::browser_call;
+use super::secrets_import::{browser_call, expire_confirmation};
 use super::sso_login::{
   CLIENT_ID, CLIENT_SECRET, Grant, MockIdp, SsoFixture, Started, callback, exchange, location,
   provider_body, save_provider, send, set_cookie, sso_fixture, start_link, start_login,
@@ -22,7 +22,7 @@ fn claims(
     "iss": idp.url,
     "aud": CLIENT_ID,
     "sub": "attacker-subject",
-    "email": "member@example.com",
+    "email": "member@dopbase.com",
     "email_verified": true,
     "nonce": started.nonce,
     "iat": now(),
@@ -66,7 +66,7 @@ fn unsigned(
 }
 
 async fn linked_subjects(fixture: &SsoFixture) -> Vec<String> {
-  sqlx::query_scalar("SELECT subject FROM admin_identities ORDER BY subject")
+  sqlx::query_scalar("SELECT subject FROM user_identities ORDER BY subject")
     .fetch_all(fixture.state.db.pool())
     .await
     .unwrap()
@@ -109,7 +109,7 @@ async fn forged_and_tampered_id_tokens_never_sign_anyone_in() {
         let signed = MockIdp::sign(idp.key(), &es256(), &claims(idp, started));
         let mut parts: Vec<String> = signed.split('.').map(str::to_owned).collect();
         let mut forged = claims(idp, started);
-        forged["email"] = json!("admin@example.com");
+        forged["email"] = json!("admin@dopbase.com");
         parts[1] = URL_SAFE_NO_PAD.encode(forged.to_string());
         parts.join(".")
       }),
@@ -278,7 +278,7 @@ async fn sign_ins_never_return_to_a_page_outside_the_admin_ui() {
         code,
         Grant {
           subject: "member-subject",
-          email: "member@example.com",
+          email: "member@dopbase.com",
           email_verified: Some(true),
           nonce: started.nonce.clone(),
           auth_age: None,
@@ -316,7 +316,7 @@ async fn the_handoff_cannot_be_posted_cross_site() {
     "member",
     Grant {
       subject: "member-subject",
-      email: "member@example.com",
+      email: "member@dopbase.com",
       email_verified: Some(true),
       nonce: started.nonce.clone(),
       auth_age: None,
@@ -355,7 +355,7 @@ async fn only_root_controls_single_sign_on_and_root_links() {
     "/api/v1/users",
     &[&fixture.root_cookie],
     Some(&fixture.root_csrf),
-    Some(json!({"email":"second-admin@example.com","password":"correct-horse-789","role":"admin"})),
+    Some(json!({"email":"second-admin@dopbase.com","password":"correct-horse-789","role":"admin"})),
   )
   .await;
   assert_eq!(status, 201, "{created}");
@@ -377,7 +377,7 @@ async fn only_root_controls_single_sign_on_and_root_links() {
       )
     }
   };
-  let (admin_cookie, admin_csrf) = login("second-admin@example.com", "correct-horse-789").await;
+  let (admin_cookie, admin_csrf) = login("second-admin@dopbase.com", "correct-horse-789").await;
   for (method, path, body) in [
     ("GET", "/api/v1/sso/provider", None),
     (
@@ -409,7 +409,7 @@ async fn only_root_controls_single_sign_on_and_root_links() {
     assert_eq!(status, 403, "{method} {path}: {response}");
   }
 
-  let root_id: String = sqlx::query_scalar("SELECT id FROM admins WHERE role='root'")
+  let root_id: String = sqlx::query_scalar("SELECT id FROM accounts WHERE is_root=1")
     .fetch_one(fixture.state.db.pool())
     .await
     .unwrap();
@@ -427,11 +427,11 @@ async fn only_root_controls_single_sign_on_and_root_links() {
 
   // A member cannot unlink anyone.
   let admin_id: String =
-    sqlx::query_scalar("SELECT id FROM admins WHERE email='second-admin@example.com'")
+    sqlx::query_scalar("SELECT id FROM users WHERE email='second-admin@dopbase.com'")
       .fetch_one(fixture.state.db.pool())
       .await
       .unwrap();
-  let (member_cookie, member_csrf) = login("member@example.com", "correct-horse-456").await;
+  let (member_cookie, member_csrf) = login("member@dopbase.com", "correct-horse-456").await;
   let (status, _, _) = send(
     &fixture.router,
     "DELETE",
@@ -455,7 +455,7 @@ async fn requiring_single_sign_on_signs_out_password_sessions() {
       "POST",
       "/api/v1/auth/login",
       None,
-      Some(json!({"email":"member@example.com","password":"correct-horse-456","sessionKind":kind})),
+      Some(json!({"email":"member@dopbase.com","password":"correct-horse-456","sessionKind":kind})),
     )
     .await;
     assert_eq!(status, 200);
@@ -610,7 +610,7 @@ async fn a_link_dies_with_the_session_that_asked_for_it() {
     "/api/v1/auth/login",
     None,
     Some(
-      json!({"email":"member@example.com","password":"correct-horse-456","sessionKind":"browser"}),
+      json!({"email":"member@dopbase.com","password":"correct-horse-456","sessionKind":"browser"}),
     ),
   )
   .await;
@@ -631,7 +631,7 @@ async fn a_link_dies_with_the_session_that_asked_for_it() {
     "late",
     Grant {
       subject: "member-subject",
-      email: "member@example.com",
+      email: "member@dopbase.com",
       email_verified: Some(true),
       nonce: started.nonce.clone(),
       auth_age: None,
@@ -653,7 +653,7 @@ async fn reauthentication_needs_a_linked_identity() {
     "/api/v1/auth/login",
     None,
     Some(
-      json!({"email":"member@example.com","password":"correct-horse-456","sessionKind":"browser"}),
+      json!({"email":"member@dopbase.com","password":"correct-horse-456","sessionKind":"browser"}),
     ),
   )
   .await;
@@ -687,7 +687,7 @@ async fn factory_reset_forgets_single_sign_on() {
   assert_eq!(status, 200, "{body}");
   for table in [
     "sso_providers",
-    "admin_identities",
+    "user_identities",
     "sso_flows",
     "cli_device_requests",
   ] {
@@ -710,6 +710,7 @@ async fn sign_in_cookies_are_secure_behind_https() {
       path: directory.path().join("master.key"),
     },
     public_url: "https://dopbase.example.test".into(),
+    features: app::services::features::Features::all(),
     ..app::config::ServerConfig::default()
   };
   let state = app::server::build_setup_state(config).await.unwrap();
@@ -757,7 +758,7 @@ async fn callbacks_never_echo_the_request_cookie() {
     "member",
     Grant {
       subject: "member-subject",
-      email: "member@example.com",
+      email: "member@dopbase.com",
       email_verified: Some(true),
       nonce: started.nonce.clone(),
       auth_age: None,
@@ -795,4 +796,23 @@ async fn callbacks_never_echo_the_request_cookie() {
     set_cookie(&headers, "dopbase_sso").as_deref(),
     Some("dopbase_sso=")
   );
+}
+
+// Security audit v1 H3: a browser session alone, without a recent sign-in,
+// can't add a new way into the account.
+#[tokio::test]
+async fn linking_needs_a_recent_sign_in() {
+  let fixture = sso_fixture().await;
+  expire_confirmation(&fixture.state).await;
+  let (status, body, _) = send(
+    &fixture.router,
+    "POST",
+    "/api/v1/auth/sso/link",
+    &[&fixture.root_cookie],
+    Some(&fixture.root_csrf),
+    None,
+  )
+  .await;
+  assert_eq!(status, 403, "{body}");
+  assert!(body["error"]["RECENT_AUTHENTICATION_REQUIRED"].is_string());
 }

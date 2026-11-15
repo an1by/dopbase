@@ -787,6 +787,11 @@ pub async fn logs(
 ) -> Result<i32> {
   let data_dir = resolve_data_dir(data_dir)?;
   let path = log_file_path(&data_dir);
+  // Listen before printing anything: a Ctrl+C pressed as soon as output
+  // appears must end the watch with 0, not kill it with SIGINT.
+  let interrupt = (watch && !json_output)
+    .then(listen_for_interrupt)
+    .transpose()?;
   if clean {
     OpenOptions::new()
       .create(true)
@@ -837,14 +842,14 @@ pub async fn logs(
   for line in &lines {
     println!("{line}");
   }
-  if !watch {
+  let Some(mut interrupt) = interrupt else {
     return Ok(0);
-  }
+  };
 
   let mut offset = contents.len();
   loop {
     tokio::select! {
-      _ = tokio::signal::ctrl_c() => return Ok(0),
+      _ = interrupt.recv() => return Ok(0),
       _ = tokio::time::sleep(Duration::from_millis(250)) => {}
     }
     contents =
@@ -858,6 +863,20 @@ pub async fn logs(
       offset = contents.len();
     }
   }
+}
+
+/// Ctrl+C, registered as soon as this returns. `tokio::signal::ctrl_c()`
+/// only registers when first polled, and each call misses presses made
+/// before it, so a loop around it can drop a Ctrl+C.
+#[cfg(unix)]
+fn listen_for_interrupt() -> Result<tokio::signal::unix::Signal> {
+  tokio::signal::unix::signal(tokio::signal::unix::SignalKind::interrupt())
+    .context("failed to listen for Ctrl+C")
+}
+
+#[cfg(windows)]
+fn listen_for_interrupt() -> Result<tokio::signal::windows::CtrlC> {
+  tokio::signal::windows::ctrl_c().context("failed to listen for Ctrl+C")
 }
 
 pub fn tail_lines(

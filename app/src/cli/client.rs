@@ -1,8 +1,8 @@
 use super::{
   local_config::{ResolvedServer, normalize},
-  prompt, session,
+  prompt, session, version_check,
 };
-use crate::constants::{api, config::ENV_TOKEN};
+use crate::constants::{api, client::USER_AGENT, config::ENV_TOKEN};
 use anyhow::{Context, Result, bail};
 use reqwest::Method;
 use serde::Serialize;
@@ -72,6 +72,29 @@ pub(crate) fn is_availability_error(error: &anyhow::Error) -> bool {
   error.downcast_ref::<AvailabilityError>().is_some()
 }
 
+/// Nothing accepted the connection: no server is listening at the address.
+/// Unlike a timeout or a bad response, this says nothing about what would
+/// answer there once a server starts.
+#[derive(Debug)]
+pub(crate) struct UnreachableError {
+  message: String,
+}
+
+impl fmt::Display for UnreachableError {
+  fn fmt(
+    &self,
+    formatter: &mut fmt::Formatter<'_>,
+  ) -> fmt::Result {
+    formatter.write_str(&self.message)
+  }
+}
+
+impl std::error::Error for UnreachableError {}
+
+pub(crate) fn is_unreachable_error(error: &anyhow::Error) -> bool {
+  error.downcast_ref::<UnreachableError>().is_some()
+}
+
 #[derive(Debug)]
 struct ResponseError {
   status: reqwest::StatusCode,
@@ -94,6 +117,34 @@ pub fn is_authentication_error(error: &anyhow::Error) -> bool {
   error
     .downcast_ref::<ResponseError>()
     .is_some_and(|error| error.status == reqwest::StatusCode::UNAUTHORIZED)
+}
+
+/// The 404 a server returns for a route it doesn't have, so the CLI can
+/// tell an older server from a missing resource.
+pub(crate) fn is_missing_route(error: &anyhow::Error) -> bool {
+  error.downcast_ref::<ResponseError>().is_some_and(|error| {
+    error.status == reqwest::StatusCode::NOT_FOUND
+      && error
+        .message
+        .starts_with(crate::constants::errors::REQUEST_INVALID)
+  })
+}
+
+/// The server's message for `code`, when `error` carries that code.
+pub(crate) fn coded_message<'a>(
+  error: &'a anyhow::Error,
+  code: &str,
+) -> Option<&'a str> {
+  error
+    .downcast_ref::<ResponseError>()?
+    .message
+    .lines()
+    .find_map(|line| line.strip_prefix(code)?.strip_prefix(": "))
+}
+
+/// The HTTP status the server answered with, when `error` is its answer.
+pub(crate) fn response_status(error: &anyhow::Error) -> Option<reqwest::StatusCode> {
+  Some(error.downcast_ref::<ResponseError>()?.status)
 }
 
 #[doc(hidden)]
@@ -143,10 +194,15 @@ impl ApiClient {
     let https_only = base_url.starts_with("https://");
     Ok(Self {
       base_url,
+      // Every request goes to `base_url` and redirects are off, so a plain
+      // HTTP server never needs root certificates. Loading them from the
+      // macOS keychain costs about 100 ms per command.
       client: reqwest::Client::builder()
+        .user_agent(USER_AGENT)
         .timeout(std::time::Duration::from_secs(30))
         .redirect(reqwest::redirect::Policy::none())
         .https_only(https_only)
+        .tls_built_in_root_certs(https_only)
         .build()?,
       token,
     })
@@ -214,15 +270,27 @@ impl ApiClient {
     }
   }
 
+  /// Send one request. Every response goes through here so the CLI always
+  /// sees the server's version header.
+  async fn send(
+    &self,
+    request: reqwest::RequestBuilder,
+    classify_availability: bool,
+  ) -> Result<reqwest::Response> {
+    let response = request
+      .send()
+      .await
+      .map_err(|error| transport_error(error, &self.base_url, classify_availability))?;
+    version_check::note(response.headers());
+    Ok(response)
+  }
+
   async fn send_request(
     &self,
     request: reqwest::RequestBuilder,
     classify_availability: bool,
   ) -> Result<Value> {
-    let response = request
-      .send()
-      .await
-      .map_err(|error| transport_error(error, &self.base_url, classify_availability))?;
+    let response = self.send(request, classify_availability).await?;
     let status = response.status();
     if classify_availability && status.is_server_error() {
       return Err(
@@ -295,10 +363,7 @@ impl ApiClient {
     if let Some(token) = &self.token {
       request = request.bearer_auth(token);
     }
-    let response = request
-      .send()
-      .await
-      .map_err(|error| transport_error(error, &self.base_url, false))?;
+    let response = self.send(request, false).await?;
     let status = response.status();
     if !status.is_success() {
       let value: Value = response.json().await.unwrap_or(Value::Null);
@@ -374,27 +439,30 @@ impl ApiClient {
     let part = reqwest::multipart::Part::bytes(bytes)
       .file_name(file_name.to_string())
       .mime_str("application/octet-stream")?;
-    let mut form = reqwest::multipart::Form::new().part("file", part);
+    // The setup token goes first and in a header: the server checks it
+    // before it reads the file.
+    let mut form = reqwest::multipart::Form::new();
+    if let Some(setup_token) = setup_token {
+      form = form.text("setup_token", setup_token.to_owned());
+    }
+    form = form.part("file", part);
     if let Some(key_bytes) = master_key {
       let key_part = reqwest::multipart::Part::bytes(key_bytes)
         .file_name("master.key")
         .mime_str("application/octet-stream")?;
       form = form.part("master_key", key_part);
     }
-    if let Some(setup_token) = setup_token {
-      form = form.text("setup_token", setup_token.to_owned());
-    }
     let mut request = self
       .client
       .request(Method::POST, format!("{}{}", self.base_url, path))
       .multipart(form);
+    if let Some(setup_token) = setup_token {
+      request = request.header(api::bootstrap::SETUP_TOKEN_HEADER, setup_token);
+    }
     if let Some(token) = &self.token {
       request = request.bearer_auth(token);
     }
-    let response = request
-      .send()
-      .await
-      .map_err(|error| transport_error(error, &self.base_url, false))?;
+    let response = self.send(request, false).await?;
     let status = response.status();
     let value: Value = response
       .json()
@@ -451,7 +519,30 @@ Check DNS, TLS, proxy, and network settings, then try again."
   if classify_availability {
     return AvailabilityError::new(message).into();
   }
+  if connection_refused(&error) {
+    return UnreachableError { message }.into();
+  }
   anyhow::anyhow!(message)
+}
+
+/// The address refused the connection, so nothing is listening there.
+/// `is_connect` alone also covers DNS and TLS handshake failures, which say
+/// nothing about whether a server is running.
+fn connection_refused(error: &reqwest::Error) -> bool {
+  if !error.is_connect() {
+    return false;
+  }
+  let mut source = std::error::Error::source(error);
+  while let Some(cause) = source {
+    if cause
+      .downcast_ref::<std::io::Error>()
+      .is_some_and(|io| io.kind() == std::io::ErrorKind::ConnectionRefused)
+    {
+      return true;
+    }
+    source = cause.source();
+  }
+  false
 }
 
 async fn read_limited_response(
@@ -513,26 +604,25 @@ where
   })
 }
 
-pub fn token_uses_runtime_secrets(token: &str) -> bool {
-  use crate::constants::tokens::{RUNNER_TOKEN_PREFIX, WORKSPACE_TOKEN_PREFIX};
-
-  token.starts_with(RUNNER_TOKEN_PREFIX) || token.starts_with(WORKSPACE_TOKEN_PREFIX)
+/// Whether DOPBASE_TOKEN is in use. It takes priority over any saved login,
+/// so login and logout check it first. Empty and non-Unicode values fail the
+/// same way they do in `credential_from_sources`.
+#[doc(hidden)]
+pub fn environment_token_set(environment: Result<String, env::VarError>) -> Result<bool> {
+  match environment {
+    Ok(token) if token.is_empty() => bail!("DOPBASE_TOKEN is set but empty"),
+    Ok(_) => Ok(true),
+    Err(env::VarError::NotUnicode(_)) => bail!("DOPBASE_TOKEN contains invalid Unicode"),
+    Err(env::VarError::NotPresent) => Ok(false),
+  }
 }
 
 pub fn validate_runner_token(token: &str) -> Result<()> {
-  use crate::constants::tokens::{RUNNER_TOKEN_PREFIX, WORKSPACE_TOKEN_PREFIX};
+  use crate::constants::tokens::RUNNER_TOKEN_PREFIX;
 
-  let (prefix, label) = if token.starts_with(RUNNER_TOKEN_PREFIX) {
-    (RUNNER_TOKEN_PREFIX, "dbs_")
-  } else if token.starts_with(WORKSPACE_TOKEN_PREFIX) {
-    (WORKSPACE_TOKEN_PREFIX, "dbw_")
-  } else {
-    anyhow::bail!("Enter a Dopbase runner token beginning with dbs_ or dbw_.");
-  };
-
-  let encoded = token.strip_prefix(prefix).context(format!(
-    "Enter a Dopbase runner token beginning with {label}."
-  ))?;
+  let encoded = token
+    .strip_prefix(RUNNER_TOKEN_PREFIX)
+    .context("Enter a Dopbase runner token beginning with dbs_.")?;
   if encoded.len() != 43
     || encoded
       .bytes()
@@ -674,7 +764,7 @@ async fn browser_approval(
     .request(
       Method::POST,
       api::auth::CLI_DEVICE,
-      Some(json!({"hostname":local_hostname(),"purpose":purpose})),
+      Some(json!({"hostname":local_hostname(),"client":client_name(),"purpose":purpose})),
     )
     .await?;
   let field = |name: &str| {
@@ -771,7 +861,18 @@ async fn poll_device_login(
   }
 }
 
-fn local_hostname() -> Option<String> {
+/// Shown on the approval page, such as `dopbase 0.2.0 on macOS`.
+fn client_name() -> String {
+  let os = match env::consts::OS {
+    "macos" => "macOS",
+    "linux" => "Linux",
+    "windows" => "Windows",
+    other => other,
+  };
+  format!("dopbase {} on {os}", env!("CARGO_PKG_VERSION"))
+}
+
+pub(crate) fn local_hostname() -> Option<String> {
   #[cfg(unix)]
   {
     nix::unistd::gethostname()
@@ -811,6 +912,15 @@ pub fn normalize_login_email(value: &str) -> Result<String> {
 pub(crate) enum HumanClient {
   Existing(ApiClient),
   NewlyAuthenticated(ApiClient),
+  /// A personal token. It has no session to check or confirm; the server
+  /// decides what it reaches.
+  PersonalToken(ApiClient),
+}
+
+/// Personal tokens, and the agent tokens that became personal tokens.
+pub(crate) fn is_personal_token(token: &str) -> bool {
+  use crate::constants::tokens::{AGENT_TOKEN_PREFIX, PERSONAL_TOKEN_PREFIX};
+  token.starts_with(PERSONAL_TOKEN_PREFIX) || token.starts_with(AGENT_TOKEN_PREFIX)
 }
 
 pub(crate) async fn acquire_human_client(server: &ResolvedServer) -> Result<HumanClient> {
@@ -822,6 +932,12 @@ async fn acquire_human_client_with_credential(
   credential: Credential,
 ) -> Result<HumanClient> {
   if let Some(token) = credential.token {
+    if is_personal_token(&token) {
+      return Ok(HumanClient::PersonalToken(ApiClient::new(
+        server,
+        Some(token),
+      )?));
+    }
     let client = ApiClient::new(server, Some(token))?;
     if client
       .request(Method::GET, api::auth::SESSION, None)
@@ -841,36 +957,28 @@ async fn acquire_human_client_with_credential(
 
 pub async fn human_client(server: &ResolvedServer) -> Result<ApiClient> {
   Ok(match acquire_human_client(server).await? {
-    HumanClient::Existing(client) | HumanClient::NewlyAuthenticated(client) => client,
+    HumanClient::Existing(client)
+    | HumanClient::NewlyAuthenticated(client)
+    | HumanClient::PersonalToken(client) => client,
   })
 }
 
 pub(crate) async fn metadata_client(server: &ResolvedServer) -> Result<ApiClient> {
-  let credential = credential(server)?;
-  if credential
-    .token
-    .as_deref()
-    .is_some_and(|token| token.starts_with(crate::constants::tokens::AGENT_TOKEN_PREFIX))
-  {
-    return authenticated_client(server, credential);
-  }
-  Ok(
-    match acquire_human_client_with_credential(server, credential).await? {
-      HumanClient::Existing(client) | HumanClient::NewlyAuthenticated(client) => client,
-    },
-  )
+  human_client(server).await
 }
 
 impl HumanClient {
   pub(crate) fn client(&self) -> &ApiClient {
     match self {
-      Self::Existing(client) | Self::NewlyAuthenticated(client) => client,
+      Self::Existing(client) | Self::NewlyAuthenticated(client) | Self::PersonalToken(client) => {
+        client
+      }
     }
   }
 
   pub(crate) async fn confirm_plaintext_access(self) -> Result<ApiClient> {
     match self {
-      HumanClient::NewlyAuthenticated(client) => Ok(client),
+      HumanClient::NewlyAuthenticated(client) | HumanClient::PersonalToken(client) => Ok(client),
       HumanClient::Existing(client) => {
         // Older servers omit the field; they only know passwords.
         let session = client
@@ -919,6 +1027,10 @@ impl HumanClient {
 }
 
 pub async fn recently_authenticated_client(server: &ResolvedServer) -> Result<ApiClient> {
+  let credential = credential(server)?;
+  if credential.token.as_deref().is_some_and(is_personal_token) {
+    return authenticated_client(server, credential);
+  }
   if !io::stdin().is_terminal() {
     bail!("interactive password confirmation is required for plaintext secret access");
   }
@@ -929,7 +1041,7 @@ pub async fn recently_authenticated_client(server: &ResolvedServer) -> Result<Ap
 }
 
 pub(crate) async fn export_client(server: &ResolvedServer) -> Result<ApiClient> {
-  use crate::constants::tokens::{AGENT_TOKEN_PREFIX, RUNNER_TOKEN_PREFIX};
+  use crate::constants::tokens::RUNNER_TOKEN_PREFIX;
 
   let credential = credential(server)?;
   match credential.token.as_deref() {
@@ -937,8 +1049,9 @@ pub(crate) async fn export_client(server: &ResolvedServer) -> Result<ApiClient> 
       validate_runner_token(token)?;
       return authenticated_client(server, credential);
     }
-    Some(token) if token.starts_with(AGENT_TOKEN_PREFIX) => {
-      bail!("AI agents may access secret metadata but never secret values");
+    // The server checks the token reaches values.
+    Some(token) if is_personal_token(token) => {
+      return authenticated_client(server, credential);
     }
     _ => {}
   }

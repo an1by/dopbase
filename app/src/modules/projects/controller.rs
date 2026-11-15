@@ -20,7 +20,7 @@ pub async fn location(
 ) -> Result<HttpResponse<ProjectResponse>, ProjectError> {
   require_mutation(&identity, &headers)?;
   let (admin_id, email) = crate::extractors::require_project_manager(&identity)?;
-  let project = service::show(&state, &reference).await?;
+  let project = service::authorize(&state, &identity, &reference, crate::services::authx::Level::ProjectManager).await?;
   let mut tx = state
     .db
     .pool()
@@ -69,10 +69,10 @@ pub async fn location(
   }
   crate::modules::common::audit(
     &mut *tx,
-    "admin",
+    identity.audit_actor_type(),
     Some(admin_id),
     Some(email),
-    "project.location_updated",
+    crate::services::events::Action::ProjectLocationUpdated,
     Some(&project.id),
     None,
     Some("project"),
@@ -82,7 +82,7 @@ pub async fn location(
   .await?;
   tx.commit().await.map_err(crate::http::HttpError::from)?;
   Ok(HttpResponse::ok(
-    service::show(&state, &project.id).await?,
+    service::authorize(&state, &identity, &project.id, crate::services::authx::Level::Metadata).await?,
     "PROJECT_LOCATION_UPDATED",
   ))
 }
@@ -105,9 +105,8 @@ pub async fn list(
   State(state): State<AppState>,
   identity: AuthIdentity,
 ) -> Result<HttpResponse<Vec<ProjectResponse>>, ProjectError> {
-  crate::extractors::require_read_access(&identity)?;
   Ok(HttpResponse::ok(
-    service::list(&state).await?,
+    service::list(&state, &identity).await?,
     "PROJECTS_FETCHED",
   ))
 }
@@ -198,9 +197,14 @@ pub async fn show(
   identity: AuthIdentity,
   Path(reference): Path<String>,
 ) -> Result<HttpResponse<ProjectResponse>, ProjectError> {
-  crate::extractors::require_read_access(&identity)?;
   Ok(HttpResponse::ok(
-    service::show(&state, &reference).await?,
+    service::authorize(
+      &state,
+      &identity,
+      &reference,
+      crate::services::authx::Level::Metadata,
+    )
+    .await?,
     "PROJECT_FETCHED",
   ))
 }

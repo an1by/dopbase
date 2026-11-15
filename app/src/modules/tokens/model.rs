@@ -29,6 +29,8 @@ pub struct WorkspaceTokenMetadata {
 pub struct CreateTokenRequest {
   pub name: String,
   pub role: String,
+  /// Hours or days, such as `12h` or `30d`, up to 365 days. Defaults to
+  /// 90 days. Runner tokens always expire.
   #[serde(rename = "expiresIn")]
   pub expires_in: Option<String>,
 }

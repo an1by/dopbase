@@ -20,9 +20,10 @@ pub fn routes() -> Router<AppState> {
       crate::constants::api::bootstrap::ADMIN,
       post(controller::create_admin),
     )
+    // A setup request is a few hundred bytes of JSON.
+    .layer(DefaultBodyLimit::max(64 * 1024))
     .route(
       crate::constants::api::bootstrap::RESTORE,
-      post(controller::restore),
+      post(controller::restore).layer(DefaultBodyLimit::max(250 * 1024 * 1024)),
     )
-    .layer(DefaultBodyLimit::max(250 * 1024 * 1024))
 }

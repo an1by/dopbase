@@ -73,6 +73,16 @@ fn push_command(
             arguments.push("--no-backup".to_string());
           }
         }
+        crate::cli::args::AdminCommand::Passcode { email, ttl, config } => {
+          arguments.push("passcode".to_string());
+          arguments.push(email);
+          arguments.push("--ttl".to_string());
+          arguments.push(ttl.to_string());
+          if let Some(path) = config {
+            arguments.push("--config".to_string());
+            arguments.push(path.display().to_string());
+          }
+        }
       }
     }
     Command::Server { command } => {

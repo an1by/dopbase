@@ -32,7 +32,7 @@ pub(super) async fn browser_login(router: &Router) -> (String, String) {
     "/api/v1/auth/login",
     None,
     Some(
-      json!({"email":"admin@example.com","password":"correct-horse-123","sessionKind":"browser"}),
+      json!({"email":"admin@dopbase.com","password":"correct-horse-123","sessionKind":"browser"}),
     ),
   )
   .await;
@@ -49,6 +49,50 @@ pub(super) async fn browser_login(router: &Router) -> (String, String) {
       .to_owned(),
     body["data"]["csrfToken"].as_str().unwrap().to_owned(),
   )
+}
+
+/// The plaintext of a personal token for a new AI agent account that reads
+/// secret names on `project` and nothing more.
+pub(super) async fn metadata_agent_token(
+  router: &Router,
+  cookie: &str,
+  csrf: &str,
+  name: &str,
+  project: &str,
+) -> String {
+  let send = |method: &str, path: String, body: Value| {
+    let request = Request::builder()
+      .method(method)
+      .uri(path)
+      .header(header::COOKIE, cookie)
+      .header("x-dopbase-csrf", csrf)
+      .header(header::CONTENT_TYPE, "application/json")
+      .body(Body::from(body.to_string()))
+      .unwrap();
+    async move {
+      let response = router.clone().oneshot(request).await.unwrap();
+      let status = response.status().as_u16();
+      let bytes = to_bytes(response.into_body(), usize::MAX).await.unwrap();
+      let body: Value = serde_json::from_slice(&bytes).unwrap();
+      assert!(status < 300, "{body}");
+      body
+    }
+  };
+  let agent = send("POST", "/api/v1/agents".into(), json!({"name":name})).await;
+  let id = agent["data"]["id"].as_str().unwrap();
+  send(
+    "PUT",
+    "/api/v1/grants".into(),
+    json!({"principalType":"agent","principalId":id,"scopeType":"project","scope":project,"level":"metadata"}),
+  )
+  .await;
+  let token = send(
+    "POST",
+    format!("/api/v1/agents/{id}/tokens"),
+    json!({"name":"default","level":"metadata"}),
+  )
+  .await;
+  token["data"]["plaintextToken"].as_str().unwrap().to_owned()
 }
 
 pub(super) async fn expire_confirmation(state: &app::state::AppState) {
@@ -219,10 +263,11 @@ async fn import_preview_audits_metadata_and_fails_closed_when_audit_fails() {
     .await
     .unwrap();
   assert_eq!(secret_count, 0);
-  let layout_count: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM environment_env_layout")
-    .fetch_one(state.db.pool())
-    .await
-    .unwrap();
+  let layout_count: i64 =
+    sqlx::query_scalar("SELECT COUNT(*) FROM environments WHERE env_layout IS NOT NULL")
+      .fetch_one(state.db.pool())
+      .await
+      .unwrap();
   assert_eq!(layout_count, 0);
   sqlx::query("CREATE TRIGGER reject_preview_audit BEFORE INSERT ON audit_events WHEN NEW.action='secret.import_previewed' BEGIN SELECT RAISE(FAIL, 'audit unavailable'); END").execute(state.db.pool()).await.unwrap();
   let (status, body, _) = call(&router, "POST", &path, Some(&token), Some(request)).await;
@@ -246,25 +291,8 @@ async fn import_rejects_nonhuman_credentials_and_invalid_sessions() {
   .await;
   assert_eq!(status, 201);
   let (cookie, csrf) = browser_login(&router).await;
-  let (status, agent) = browser_call(
-    &router,
-    "/api/v1/service-accounts",
-    &cookie,
-    Some(&csrf),
-    json!({"name":"test-agent"}),
-  )
-  .await;
-  assert_eq!(status, 201);
-  let agent_id = agent["data"]["id"].as_str().unwrap();
-  let (status, agent_token) = browser_call(
-    &router,
-    &format!("/api/v1/service-accounts/{agent_id}/tokens"),
-    &cookie,
-    Some(&csrf),
-    json!({"name":"test-token"}),
-  )
-  .await;
-  assert_eq!(status, 201);
+  let agent_token =
+    metadata_agent_token(&router, &cookie, &csrf, "test-agent", "concurrency-test").await;
   for dry_run in [true, false] {
     let request =
       json!({"mode":"merge","dryRun":dry_run,"entries":[{"key":"APP_SECRETS","value":"fixture"}]});
@@ -278,7 +306,7 @@ async fn import_rejects_nonhuman_credentials_and_invalid_sessions() {
     }
     for credential in [
       runner["data"]["plaintextToken"].as_str().unwrap(),
-      agent_token["data"]["plaintextToken"].as_str().unwrap(),
+      agent_token.as_str(),
     ] {
       let (status, body, _) = call(
         &router,
@@ -330,18 +358,17 @@ async fn import_checks_confirmation_before_validation_and_decryption_for_all_hum
   );
   let (cookie, csrf) = browser_login(&router).await;
   // Broken fixture ciphertext would return 500 if import tried to decrypt it.
-  sqlx::query("UPDATE secrets SET ciphertext=X'00' WHERE environment_id=?")
-    .bind(&id)
-    .execute(state.db.pool())
-    .await
-    .unwrap();
+  sqlx::query(
+    "UPDATE secret_versions SET ciphertext=X'00' WHERE environment_id=? AND ciphertext IS NOT NULL",
+  )
+  .bind(&id)
+  .execute(state.db.pool())
+  .await
+  .unwrap();
   expire_confirmation(&state).await;
-  for role in ["root", "admin", "member"] {
-    sqlx::query("UPDATE admins SET role=? WHERE email='admin@example.com'")
-      .bind(role)
-      .execute(state.db.pool())
-      .await
-      .unwrap();
+  // The check reads the session, not the account's role label, so one
+  // account covers every role. (The label column is gone in 0.2.0.)
+  {
     for key in ["APP_SECRETS", "INVALID KEY"] {
       let (status, body) = browser_call(
         &router,

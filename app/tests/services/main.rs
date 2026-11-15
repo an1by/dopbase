@@ -1,7 +1,13 @@
 mod audit_chain;
+mod authx;
 mod cache;
 mod client_ip;
+mod client_version;
 mod crypto;
 mod db;
 mod migrations;
+mod passcodes;
 mod token;
+mod v020_access;
+mod v020_events;
+mod v020_schema;

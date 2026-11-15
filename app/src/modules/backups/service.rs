@@ -1,32 +1,24 @@
-use std::{
-  fs::{self, File},
-  io::{Cursor, Write},
-  path::PathBuf,
-  sync::OnceLock,
-};
+use crate::utils::time::Stamp;
+use std::{fs, path::PathBuf, sync::OnceLock};
 
-use anyhow::Context;
 use chrono::Utc;
 use regex::Regex;
-use sqlx::Connection;
-use zip::{ZipArchive, ZipWriter, write::SimpleFileOptions};
 
 use super::model::*;
 use crate::{
-  constants::config::AUDIT_ARCHIVE_DIRECTORY_NAME,
-  extractors::{require_recent_browser_auth, require_root},
+  extractors::{require_capability, require_recent_auth},
   http::HttpError,
   models::AuthIdentity,
   modules::common,
+  services::authx::Capability,
   state::AppState,
   utils::private_file,
 };
 
 const BACKUP_DIR_NAME: &str = "backups";
 const BACKUP_EXTENSION: &str = ".dop";
-const MANIFEST_MAGIC: &str = "DOPBASE_BACKUP_V2";
-const MAX_BACKUP_FILE_BYTES: usize = 250 * 1024 * 1024; // 250 MB
-const MAX_MANIFEST_BYTES: u64 = 64 * 1024;
+pub use super::snapshot::PreservedAdmin;
+use super::{snapshot, upgrade::UpgradeReport};
 
 pub fn backup_dir(state: &AppState) -> PathBuf {
   let dir = state.config.data_dir.join(BACKUP_DIR_NAME);
@@ -73,7 +65,7 @@ pub async fn list(
   state: &AppState,
   identity: &AuthIdentity,
 ) -> Result<Vec<BackupItem>, HttpError> {
-  require_root(identity)?;
+  require_capability(identity, Capability::InstanceBackup)?;
   let dir = backup_dir(state);
   let mut items = Vec::new();
 
@@ -95,12 +87,13 @@ pub async fn list(
           let created_at = meta
             .modified()
             .or_else(|_| meta.created())
-            .map(|t| chrono::DateTime::<Utc>::from(t).to_rfc3339())
-            .unwrap_or_else(|_| Utc::now().to_rfc3339());
+            .map(|t| chrono::DateTime::<Utc>::from(t).stamp())
+            .unwrap_or_else(|_| Utc::now().stamp());
           items.push(BackupItem {
             key,
             size,
             created_at,
+            upgrade: None,
           });
         }
       }
@@ -117,7 +110,7 @@ pub async fn create(
   identity: &AuthIdentity,
   request: CreateBackupRequest,
 ) -> Result<BackupItem, HttpError> {
-  let (admin_id, email) = require_root(identity)?;
+  let (admin_id, email) = require_capability(identity, Capability::InstanceBackup)?;
   let dir = backup_dir(state);
 
   let key = if let Some(raw_name) = request.name.filter(|n| !n.trim().is_empty()) {
@@ -136,58 +129,7 @@ pub async fn create(
     ));
   }
 
-  // Snapshot database using SQLite VACUUM INTO
-  let temp_dir = tempfile::tempdir().map_err(|_| HttpError::internal())?;
-  let temp_db_path = temp_dir.path().join("snapshot.db");
-  let escaped_path = temp_db_path.to_string_lossy().replace('\'', "''");
-
-  sqlx::query(&format!("VACUUM INTO '{escaped_path}'"))
-    .execute(state.db.pool())
-    .await
-    .map_err(|error| {
-      tracing::error!(%error, "failed to vacuum sqlite database for backup");
-      HttpError::internal()
-    })?;
-
-  let db_bytes = fs::read(&temp_db_path).map_err(|_| HttpError::internal())?;
-
-  // Package snapshot and manifest into a compressed zip archive
-  let mut zip_buffer = Cursor::new(Vec::new());
-  {
-    let mut zip = ZipWriter::new(&mut zip_buffer);
-    let options = SimpleFileOptions::default().compression_method(zip::CompressionMethod::Deflated);
-
-    let manifest = BackupManifest {
-      version: env!("CARGO_PKG_VERSION").into(),
-      created_at: Utc::now().to_rfc3339(),
-      backup_name: key.clone(),
-      magic: MANIFEST_MAGIC.into(),
-    };
-
-    zip
-      .start_file("manifest.json", options)
-      .map_err(|_| HttpError::internal())?;
-    zip
-      .write_all(&serde_json::to_vec_pretty(&manifest).map_err(|_| HttpError::internal())?)
-      .map_err(|_| HttpError::internal())?;
-
-    zip
-      .start_file("dopbase.db", options)
-      .map_err(|_| HttpError::internal())?;
-    zip
-      .write_all(&db_bytes)
-      .map_err(|_| HttpError::internal())?;
-
-    zip.finish().map_err(|_| HttpError::internal())?;
-  }
-
-  let zip_data = zip_buffer.into_inner();
-
-  // Encrypt with Server Master Key
-  let encrypted = state
-    .crypto
-    .encrypt_backup(&zip_data)
-    .map_err(|_| HttpError::internal())?;
+  let encrypted = snapshot::create(state, &key).await?;
 
   // Atomically write file
   private_file::write(&file_path, &encrypted, false).map_err(|error| {
@@ -196,27 +138,32 @@ pub async fn create(
   })?;
 
   let size = encrypted.len() as u64;
-  let created_at = Utc::now().to_rfc3339();
+  let created_at = Utc::now().stamp();
 
-  // Audit
-  let _ = common::audit_standalone(
+  // A backup nobody can see being made doesn't stay.
+  if let Err(error) = common::audit_standalone(
     state.db.pool(),
     identity.audit_actor_type(),
     Some(admin_id),
     Some(email),
-    "backup.created",
+    crate::services::events::Action::BackupCreated,
     None,
     None,
     Some("backup"),
     Some(&key),
     serde_json::json!({ "key": key, "size": size }),
   )
-  .await;
+  .await
+  {
+    let _ = fs::remove_file(&file_path);
+    return Err(error.into());
+  }
 
   Ok(BackupItem {
     key,
     size,
     created_at,
+    upgrade: None,
   })
 }
 
@@ -225,7 +172,7 @@ pub async fn read_for_download(
   identity: &AuthIdentity,
   key: &str,
 ) -> Result<(PathBuf, u64), HttpError> {
-  let (admin_id, email) = require_root(identity)?;
+  let (admin_id, email) = require_capability(identity, Capability::InstanceBackup)?;
   let safe_key = sanitize_key(key)?;
   let file_path = backup_dir(state).join(&safe_key);
 
@@ -240,19 +187,20 @@ pub async fn read_for_download(
     .map_err(|_| HttpError::internal())?
     .len();
 
-  let _ = common::audit_standalone(
+  // Handing out a backup is refused when it can't be recorded.
+  common::audit_standalone(
     state.db.pool(),
     identity.audit_actor_type(),
     Some(admin_id),
     Some(email),
-    "backup.downloaded",
+    crate::services::events::Action::BackupDownloaded,
     None,
     None,
     Some("backup"),
     Some(&safe_key),
     serde_json::json!({ "key": safe_key, "size": size }),
   )
-  .await;
+  .await?;
 
   Ok((file_path, size))
 }
@@ -264,9 +212,9 @@ pub async fn upload(
   bytes: Vec<u8>,
   provided_master_key: Option<&[u8]>,
 ) -> Result<BackupItem, HttpError> {
-  let (admin_id, email) = require_root(identity)?;
+  let (admin_id, email) = require_capability(identity, Capability::InstanceBackup)?;
 
-  if bytes.len() > MAX_BACKUP_FILE_BYTES {
+  if bytes.len() > snapshot::MAX_BACKUP_FILE_BYTES {
     return Err(HttpError::bad_request(
       "BACKUP_FILE_TOO_LARGE",
       "Backup file exceeds the 250 MB limit.",
@@ -274,182 +222,36 @@ pub async fn upload(
   }
 
   // 1. Try decrypting with current system master key first.
-  let (decrypted, needs_rekey) = match state.crypto.decrypt_backup(&bytes) {
-    Ok(data) => (data, false),
-    Err(_) => {
-      if let Some(key) = provided_master_key {
-        let data = crate::services::crypto::CryptoService::decrypt_backup_with_key(&bytes, key)
-          .map_err(|error| {
-            tracing::warn!(%error, "uploaded backup verification failed with provided key");
-            HttpError::bad_request(
-              "BACKUP_INVALID",
-              "Backup could not be decrypted or authenticated with the provided master key.",
-            )
-          })?;
-        (data, true)
-      } else {
-        return Err(HttpError::bad_request(
-          "BACKUP_KEY_REQUIRED",
-          "This backup was created on a different server or with a different master key. Please provide the master key from that server to import it.",
-        ));
-      }
-    }
-  };
-
-  // 2. Verify zip integrity and manifest
-  let temp_dir = tempfile::tempdir().map_err(|_| HttpError::internal())?;
-  let temp_db_path = temp_dir.path().join("dopbase.db");
-  let mut manifest_bytes = Vec::new();
-  {
-    let mut archive = ZipArchive::new(Cursor::new(&decrypted)).map_err(|_| {
-      HttpError::bad_request(
+  // 1. Try decrypting with this server's master key, then the given one.
+  let opened = match snapshot::open_file(state, bytes, provided_master_key).await? {
+    Ok(opened) => opened,
+    Err(snapshot::Unopened::WrongKey) => {
+      tracing::warn!("uploaded backup verification failed with provided key");
+      return Err(HttpError::bad_request(
         "BACKUP_INVALID",
-        "Backup archive payload is invalid or corrupted.",
-      )
-    })?;
-
-    {
-      let mut manifest_entry = archive.by_name("manifest.json").map_err(|_| {
-        HttpError::bad_request("BACKUP_INVALID", "Backup archive is missing manifest.json.")
-      })?;
-      if manifest_entry.size() > MAX_MANIFEST_BYTES {
-        return Err(HttpError::bad_request(
-          "BACKUP_INVALID",
-          "Backup manifest is too large.",
-        ));
-      }
-      std::io::copy(&mut manifest_entry, &mut manifest_bytes).map_err(|_| HttpError::internal())?;
-    }
-
-    {
-      let mut db_entry = archive.by_name("dopbase.db").map_err(|_| {
-        HttpError::bad_request("BACKUP_INVALID", "Backup archive is missing dopbase.db.")
-      })?;
-      if db_entry.size() > MAX_BACKUP_FILE_BYTES as u64 {
-        return Err(HttpError::bad_request(
-          "BACKUP_FILE_TOO_LARGE",
-          "Database payload exceeds the backup size limit.",
-        ));
-      }
-      let mut db_file = File::create(&temp_db_path).map_err(|_| HttpError::internal())?;
-      std::io::copy(&mut db_entry, &mut db_file).map_err(|_| HttpError::internal())?;
-    }
-  }
-
-  let manifest: BackupManifest = serde_json::from_slice(&manifest_bytes)
-    .map_err(|_| HttpError::bad_request("BACKUP_INVALID", "Backup manifest is invalid."))?;
-  if manifest.magic != MANIFEST_MAGIC {
-    return Err(HttpError::bad_request(
-      "BACKUP_VERSION_UNSUPPORTED",
-      "This backup was created by an older Dopbase format and cannot be restored by this release.",
-    ));
-  }
-
-  // 3. If needs_rekey, re-key the database to the server's master key!
-  let final_bytes = if needs_rekey {
-    let restore_url = format!("sqlite://{}", temp_db_path.to_string_lossy());
-    let temp_client = crate::services::db::DbClient::connect(&restore_url)
-      .await
-      .map_err(|e| {
-        tracing::error!(%e, "failed to connect to uploaded sqlite db");
-        HttpError::bad_request("BACKUP_INVALID_DB", "Invalid SQLite database in backup.")
-      })?;
-
-    temp_client.migrate().await.map_err(|_| {
-      HttpError::bad_request(
-        "BACKUP_INVALID_DB",
-        "Backup database schema cannot be migrated.",
-      )
-    })?;
-    let integrity: String = sqlx::query_scalar("PRAGMA quick_check")
-      .fetch_one(temp_client.pool())
-      .await
-      .map_err(|_| HttpError::bad_request("BACKUP_CORRUPT", "Database integrity check failed."))?;
-    if integrity != "ok" {
-      return Err(HttpError::bad_request(
-        "BACKUP_CORRUPT",
-        "Database integrity check failed.",
+        "Backup could not be decrypted or authenticated with the provided master key.",
       ));
     }
-
-    crate::services::crypto::rekey_database(
-      temp_client.pool(),
-      provided_master_key.unwrap(),
-      &state.crypto.master_key_bytes(),
-    )
-    .await
-    .map_err(|e| {
-      tracing::warn!(%e, "rekeying uploaded database failed");
-      HttpError::bad_request(
-        "BACKUP_REKEY_FAILED",
-        &format!("Failed to re-key backup: {e}"),
-      )
-    })?;
-
-    temp_client
-      .checkpoint()
-      .await
-      .map_err(|_| HttpError::internal())?;
-    temp_client.close().await;
-
-    // Read re-keyed db bytes
-    let rekeyed_db_bytes = fs::read(&temp_db_path).map_err(|_| HttpError::internal())?;
-
-    // Re-package zip with manifest and rekeyed dopbase.db
-    let mut zip_buffer = Cursor::new(Vec::new());
-    {
-      let mut zip = ZipWriter::new(&mut zip_buffer);
-      let options =
-        SimpleFileOptions::default().compression_method(zip::CompressionMethod::Deflated);
-      zip
-        .start_file("manifest.json", options)
-        .map_err(|_| HttpError::internal())?;
-      zip
-        .write_all(&manifest_bytes)
-        .map_err(|_| HttpError::internal())?;
-      zip
-        .start_file("dopbase.db", options)
-        .map_err(|_| HttpError::internal())?;
-      zip
-        .write_all(&rekeyed_db_bytes)
-        .map_err(|_| HttpError::internal())?;
-      zip.finish().map_err(|_| HttpError::internal())?;
-    }
-    let zip_data = zip_buffer.into_inner();
-
-    // Encrypt with Server Master Key!
-    state
-      .crypto
-      .encrypt_backup(&zip_data)
-      .map_err(|_| HttpError::internal())?
-  } else {
-    let temp_client = crate::services::db::DbClient::connect(&format!(
-      "sqlite://{}",
-      temp_db_path.to_string_lossy()
-    ))
-    .await
-    .map_err(|_| {
-      HttpError::bad_request("BACKUP_INVALID_DB", "Invalid SQLite database in backup.")
-    })?;
-    temp_client.migrate().await.map_err(|_| {
-      HttpError::bad_request(
-        "BACKUP_INVALID_DB",
-        "Backup database schema cannot be migrated.",
-      )
-    })?;
-    let integrity: String = sqlx::query_scalar("PRAGMA quick_check")
-      .fetch_one(temp_client.pool())
-      .await
-      .map_err(|_| HttpError::bad_request("BACKUP_CORRUPT", "Database integrity check failed."))?;
-    temp_client.close().await;
-    if integrity != "ok" {
+    Err(snapshot::Unopened::KeyRequired) => {
       return Err(HttpError::bad_request(
-        "BACKUP_CORRUPT",
-        "Database integrity check failed.",
+        "BACKUP_KEY_REQUIRED",
+        "This backup was created on a different server or with a different master key. Please provide the master key from that server to import it.",
       ));
     }
-    bytes
   };
+  let needs_rekey = opened.rekey_from.is_some();
+
+  // 2. Check it the way a restore would: unpack, upgrade a 0.1.x backup,
+  // migrate, check integrity, and re-key it to this server. A backup that
+  // needed none of that is kept byte for byte.
+  let prepared = snapshot::prepare(state, opened.archive, opened.rekey_from.as_deref()).await?;
+  let upgrade = prepared.upgrade.clone();
+  let final_bytes = if needs_rekey || upgrade.is_some() {
+    snapshot::seal(state, &prepared, file_name).await?
+  } else {
+    opened.file
+  };
+  drop(prepared);
 
   let dir = backup_dir(state);
   let base_name = file_name
@@ -474,26 +276,36 @@ pub async fn upload(
   })?;
 
   let size = final_bytes.len() as u64;
-  let created_at = Utc::now().to_rfc3339();
+  let created_at = Utc::now().stamp();
 
-  let _ = common::audit_standalone(
+  let recorded = common::audit_standalone(
     state.db.pool(),
     identity.audit_actor_type(),
     Some(admin_id),
     Some(email),
-    "backup.uploaded",
+    crate::services::events::Action::BackupUploaded,
     None,
     None,
     Some("backup"),
     Some(&target_key),
-    serde_json::json!({ "key": target_key, "size": size, "rekeyed": needs_rekey }),
+    serde_json::json!({
+      "key": target_key,
+      "size": size,
+      "rekeyed": needs_rekey,
+      "upgradedFrom": upgrade.as_ref().map(|report| report.upgraded_from.as_str()),
+    }),
   )
   .await;
+  if let Err(error) = recorded {
+    let _ = fs::remove_file(&target_path);
+    return Err(error.into());
+  }
 
   Ok(BackupItem {
     key: target_key,
     size,
     created_at,
+    upgrade,
   })
 }
 
@@ -502,9 +314,9 @@ pub async fn restore(
   identity: &AuthIdentity,
   key: &str,
   provided_master_key: Option<&[u8]>,
-) -> Result<(), HttpError> {
-  require_recent_browser_auth(identity)?;
-  let (admin_id, email) = require_root(identity)?;
+) -> Result<Option<UpgradeReport>, HttpError> {
+  require_recent_auth(identity)?;
+  let (admin_id, email) = require_capability(identity, Capability::InstanceBackup)?;
   let safe_key = sanitize_key(key)?;
   let file_path = backup_dir(state).join(&safe_key);
 
@@ -515,374 +327,56 @@ pub async fn restore(
     ));
   }
 
-  let encrypted = fs::read(&file_path).map_err(|_| HttpError::internal())?;
-
-  // Decrypt backup: try system master key first
-  let (decrypted, source_key_to_rekey) = match state.crypto.decrypt_backup(&encrypted) {
-    Ok(data) => (data, None),
-    Err(_) => {
-      if let Some(k) = provided_master_key {
-        let data = crate::services::crypto::CryptoService::decrypt_backup_with_key(&encrypted, k)
-          .map_err(|_| {
-          HttpError::bad_request(
-            "BACKUP_DECRYPT_FAILED",
-            "Failed to decrypt backup with the provided master key.",
-          )
-        })?;
-        (data, Some(k))
-      } else {
-        return Err(HttpError::bad_request(
-          "BACKUP_DECRYPT_FAILED",
-          "Failed to decrypt backup. Ensure you provided the correct master key for this backup.",
-        ));
-      }
+  let encrypted = tokio::fs::read(&file_path)
+    .await
+    .map_err(|_| HttpError::internal())?;
+  let opened = match snapshot::open_file(state, encrypted, provided_master_key).await? {
+    Ok(opened) => opened,
+    Err(snapshot::Unopened::WrongKey) => {
+      return Err(HttpError::bad_request(
+        "BACKUP_DECRYPT_FAILED",
+        "Failed to decrypt backup with the provided master key.",
+      ));
+    }
+    Err(snapshot::Unopened::KeyRequired) => {
+      return Err(HttpError::bad_request(
+        "BACKUP_DECRYPT_FAILED",
+        "Failed to decrypt backup. Ensure you provided the correct master key for this backup.",
+      ));
     }
   };
 
-  restore_database_from_archive(
+  let prepared = snapshot::prepare(state, opened.archive, opened.rekey_from.as_deref()).await?;
+  let details = match &prepared.upgrade {
+    Some(report) => serde_json::json!({
+      "upgradedFrom": report.upgraded_from,
+      "upgrade": report,
+    }),
+    None => serde_json::json!({}),
+  };
+  snapshot::apply(
     state,
-    decrypted,
-    source_key_to_rekey,
+    &prepared,
     Some(PreservedAdmin {
       admin_id,
       email,
       session_id: session_id_from_identity(identity),
       actor_type: identity.audit_actor_type(),
     }),
-    Some(&safe_key),
+    snapshot::RestoreRecord {
+      key: &safe_key,
+      details,
+    },
   )
-  .await
-}
-
-/// The signed-in administrator a restore keeps: their account and session
-/// survive the restore, and the `backup.restored` record names them.
-#[derive(Clone, Copy, Debug)]
-pub struct PreservedAdmin<'a> {
-  pub admin_id: &'a str,
-  pub email: &'a str,
-  pub session_id: &'a str,
-  /// The actor type the `backup.restored` record stores.
-  pub actor_type: &'a str,
-}
-
-pub async fn restore_database_from_archive(
-  state: &AppState,
-  decrypted: Vec<u8>,
-  source_master_key_to_rekey: Option<&[u8]>,
-  preserve_admin: Option<PreservedAdmin<'_>>,
-  audit_key: Option<&str>,
-) -> Result<(), HttpError> {
-  let temp_dir = tempfile::tempdir().map_err(|_| HttpError::internal())?;
-  let temp_db_path = temp_dir.path().join("restore.db");
-  let mut manifest_bytes = Vec::new();
-  {
-    let mut archive = ZipArchive::new(Cursor::new(decrypted))
-      .map_err(|_| HttpError::bad_request("BACKUP_CORRUPT", "Corrupted archive."))?;
-
-    {
-      let mut manifest_entry = archive
-        .by_name("manifest.json")
-        .map_err(|_| HttpError::bad_request("BACKUP_CORRUPT", "Missing manifest in backup."))?;
-      if manifest_entry.size() > MAX_MANIFEST_BYTES {
-        return Err(HttpError::bad_request(
-          "BACKUP_CORRUPT",
-          "Backup manifest is too large.",
-        ));
-      }
-      std::io::copy(&mut manifest_entry, &mut manifest_bytes).map_err(|_| HttpError::internal())?;
-    }
-    let mut db_entry = archive
-      .by_name("dopbase.db")
-      .map_err(|_| HttpError::bad_request("BACKUP_CORRUPT", "Missing database in backup."))?;
-    if db_entry.size() > MAX_BACKUP_FILE_BYTES as u64 {
-      return Err(HttpError::bad_request(
-        "BACKUP_FILE_TOO_LARGE",
-        "Database payload exceeds the backup size limit.",
-      ));
-    }
-
-    let mut temp_file = File::create(&temp_db_path).map_err(|_| HttpError::internal())?;
-    std::io::copy(&mut db_entry, &mut temp_file).map_err(|_| HttpError::internal())?;
-  }
-  let manifest: BackupManifest = serde_json::from_slice(&manifest_bytes)
-    .map_err(|_| HttpError::bad_request("BACKUP_CORRUPT", "Backup manifest is invalid."))?;
-  if manifest.magic != MANIFEST_MAGIC {
-    return Err(HttpError::bad_request(
-      "BACKUP_VERSION_UNSUPPORTED",
-      "This backup was created by an older Dopbase format and cannot be restored by this release.",
-    ));
-  }
-
-  // Validate database integrity
-  let restore_url = format!("sqlite://{}", temp_db_path.to_string_lossy());
-  let restore_client = crate::services::db::DbClient::connect(&restore_url)
-    .await
-    .map_err(|_| HttpError::bad_request("BACKUP_INVALID_DB", "Invalid SQLite database."))?;
-
-  restore_client.migrate().await.map_err(|_| {
-    HttpError::bad_request(
-      "BACKUP_INVALID_DB",
-      "Backup database schema cannot be migrated.",
-    )
-  })?;
-
-  let integrity: String = sqlx::query_scalar("PRAGMA quick_check")
-    .fetch_one(restore_client.pool())
-    .await
-    .map_err(|_| HttpError::bad_request("BACKUP_CORRUPT", "Database integrity check failed."))?;
-
-  if integrity != "ok" {
-    return Err(HttpError::bad_request(
-      "BACKUP_CORRUPT",
-      "Database integrity check failed.",
-    ));
-  }
-
-  // If source_master_key_to_rekey is provided, re-key the database to this server's master key!
-  if let Some(old_key) = source_master_key_to_rekey {
-    crate::services::crypto::rekey_database(
-      restore_client.pool(),
-      old_key,
-      &state.crypto.master_key_bytes(),
-    )
-    .await
-    .map_err(|e| {
-      tracing::warn!(%e, "rekeying database during restore failed");
-      HttpError::bad_request(
-        "BACKUP_REKEY_FAILED",
-        &format!("Failed to re-key backup: {e}"),
-      )
-    })?;
-  }
-
-  restore_client
-    .checkpoint()
-    .await
-    .map_err(|_| HttpError::internal())?;
-  restore_client.close().await;
-
-  // Restore atomically using ATTACH DATABASE on a disposable connection pool.
-  // If the request is cancelled, dropping this pool prevents connection-level
-  // ATTACH state from being returned to the live request pool.
-  let restore_db = crate::services::db::DbClient::connect(&state.config.database_url)
-    .await
-    .map_err(|_| HttpError::internal())?;
-  let mut conn = restore_db
-    .pool()
-    .acquire()
-    .await
-    .map_err(|_| HttpError::internal())?;
-
-  let escaped_attach = temp_db_path.to_string_lossy().replace('\'', "''");
-  sqlx::query(&format!("ATTACH DATABASE '{escaped_attach}' AS backup_db"))
-    .execute(&mut *conn)
-    .await
-    .map_err(|error| {
-      tracing::error!(%error, "failed to attach backup database");
-      HttpError::internal()
-    })?;
-
-  let restore_result = async {
-    let mut tx = conn.begin().await?;
-
-    // Capture current active admin and session to preserve login if requested
-    type AdminRowTuple = (String, String, String, String, String, String);
-    type SessionRowTuple = (
-      String,
-      String,
-      String,
-      Vec<u8>,
-      Option<Vec<u8>>,
-      String,
-      String,
-      String,
-      String,
-      String,
-    );
-
-    let mut current_admin: Option<AdminRowTuple> = None;
-    let mut current_session: Option<SessionRowTuple> = None;
-
-    if let Some(PreservedAdmin {
-      admin_id,
-      session_id,
-      ..
-    }) = preserve_admin
-    {
-      current_admin = sqlx::query_as(
-        "SELECT id, email, password_hash, role, created_at, updated_at FROM admins WHERE id = ?",
-      )
-      .bind(admin_id)
-      .fetch_optional(&mut *tx)
-      .await?;
-
-      current_session = sqlx::query_as(
-        "SELECT id, admin_id, kind, token_hash, csrf_hash, created_at, last_used_at, recent_auth_at, idle_expires_at, absolute_expires_at FROM sessions WHERE id = ? AND admin_id = ? AND revoked_at IS NULL"
-      )
-      .bind(session_id)
-      .bind(admin_id)
-      .fetch_optional(&mut *tx)
-      .await?;
-    }
-
-    // The restore replaces the audit log with the snapshot's, which would
-    // erase everything written since the snapshot. Keep it on disk first;
-    // without that copy the restore does not go ahead.
-    let archived = crate::services::audit_chain::archive_all(
-      &mut tx,
-      &state.config.data_dir.join(AUDIT_ARCHIVE_DIRECTORY_NAME),
-    )
-    .await
-    .context("failed to archive the audit log before restoring")?;
-
-    // Wipe existing data
-    sqlx::query("DELETE FROM audit_events").execute(&mut *tx).await?;
-    sqlx::query("DELETE FROM audit_chain_anchor").execute(&mut *tx).await?;
-    sqlx::query("DELETE FROM audit_chain_genesis").execute(&mut *tx).await?;
-    sqlx::query("DELETE FROM runner_tokens").execute(&mut *tx).await?;
-    sqlx::query("DELETE FROM workspace_tokens").execute(&mut *tx).await?;
-    sqlx::query("DELETE FROM agent_tokens").execute(&mut *tx).await?;
-    sqlx::query("DELETE FROM service_accounts").execute(&mut *tx).await?;
-    sqlx::query("DELETE FROM secret_versions").execute(&mut *tx).await?;
-    sqlx::query("DELETE FROM secrets").execute(&mut *tx).await?;
-    sqlx::query("DELETE FROM environment_env_layout").execute(&mut *tx).await?;
-    sqlx::query("DELETE FROM environments").execute(&mut *tx).await?;
-    sqlx::query("DELETE FROM projects").execute(&mut *tx).await?;
-    sqlx::query("DELETE FROM cli_device_requests").execute(&mut *tx).await?;
-    sqlx::query("DELETE FROM sso_flows").execute(&mut *tx).await?;
-    sqlx::query("DELETE FROM admin_identities").execute(&mut *tx).await?;
-    sqlx::query("DELETE FROM sso_providers").execute(&mut *tx).await?;
-    sqlx::query("DELETE FROM project_locations").execute(&mut *tx).await?;
-    sqlx::query("DELETE FROM workspaces").execute(&mut *tx).await?;
-    sqlx::query("DELETE FROM sessions").execute(&mut *tx).await?;
-    sqlx::query("DELETE FROM admins").execute(&mut *tx).await?;
-    sqlx::query("DELETE FROM instance_metadata").execute(&mut *tx).await?;
-
-    // Copy snapshot data from backup_db
-    sqlx::query("INSERT INTO instance_metadata SELECT * FROM backup_db.instance_metadata").execute(&mut *tx).await?;
-    if preserve_admin.is_some() {
-      sqlx::query("INSERT INTO admins SELECT * FROM backup_db.admins WHERE role <> 'root'").execute(&mut *tx).await?;
-    } else {
-      sqlx::query("INSERT INTO admins SELECT * FROM backup_db.admins").execute(&mut *tx).await?;
-    }
-    sqlx::query("INSERT INTO service_accounts SELECT * FROM backup_db.service_accounts").execute(&mut *tx).await?;
-    sqlx::query("INSERT INTO agent_tokens SELECT * FROM backup_db.agent_tokens").execute(&mut *tx).await?;
-    sqlx::query("INSERT INTO workspaces SELECT * FROM backup_db.workspaces").execute(&mut *tx).await?;
-    sqlx::query("INSERT INTO projects SELECT * FROM backup_db.projects").execute(&mut *tx).await?;
-    sqlx::query("INSERT INTO project_locations SELECT * FROM backup_db.project_locations").execute(&mut *tx).await?;
-    sqlx::query("INSERT INTO environments SELECT * FROM backup_db.environments").execute(&mut *tx).await?;
-    sqlx::query("INSERT OR REPLACE INTO environment_env_layout SELECT * FROM backup_db.environment_env_layout").execute(&mut *tx).await?;
-    sqlx::query("INSERT INTO secrets SELECT * FROM backup_db.secrets").execute(&mut *tx).await?;
-    sqlx::query("INSERT INTO secret_versions SELECT * FROM backup_db.secret_versions").execute(&mut *tx).await?;
-    sqlx::query("INSERT INTO runner_tokens SELECT * FROM backup_db.runner_tokens").execute(&mut *tx).await?;
-    let _ = sqlx::query("INSERT INTO workspace_tokens SELECT * FROM backup_db.workspace_tokens")
-      .execute(&mut *tx)
-      .await;
-    sqlx::query("INSERT INTO audit_events SELECT * FROM backup_db.audit_events").execute(&mut *tx).await?;
-    // The chain's genesis and pruning anchor belong to the restored records.
-    sqlx::query("INSERT INTO audit_chain_anchor SELECT * FROM backup_db.audit_chain_anchor").execute(&mut *tx).await?;
-    sqlx::query("INSERT INTO audit_chain_genesis SELECT * FROM backup_db.audit_chain_genesis").execute(&mut *tx).await?;
-    // The backup uses this server's master key, or was re-keyed to it
-    // before this point, so its SSO client secret decrypts here. Identities of accounts the restore left
-    // out, such as a replaced root, are dropped.
-    sqlx::query("INSERT INTO sso_providers SELECT * FROM backup_db.sso_providers").execute(&mut *tx).await?;
-    sqlx::query("INSERT INTO admin_identities SELECT * FROM backup_db.admin_identities WHERE admin_id IN (SELECT id FROM admins)").execute(&mut *tx).await?;
-
-    let mut effective_admin_id = preserve_admin.map(|admin| admin.admin_id.to_string());
-
-    // Re-preserve current admin and session if requested
-    if let (Some(admin), Some(mut sess)) = (current_admin, current_session) {
-      // Check if an admin with the same email already exists in the restored database
-      let restored_admin_with_same_email: Option<(String,)> = sqlx::query_as(
-        "SELECT id FROM admins WHERE email = ?",
-      )
-      .bind(&admin.1)
-      .fetch_optional(&mut *tx)
-      .await?;
-
-      if let Some((target_admin_id,)) = restored_admin_with_same_email {
-        sqlx::query("DELETE FROM admins WHERE id = ?")
-          .bind(target_admin_id)
-          .execute(&mut *tx)
-          .await?;
-      }
-
-      sqlx::query("INSERT OR REPLACE INTO admins(id, email, password_hash, role, created_at, updated_at) VALUES(?, ?, ?, ?, ?, ?)")
-        .bind(&admin.0).bind(&admin.1).bind(&admin.2).bind(&admin.3).bind(&admin.4).bind(&admin.5)
-        .execute(&mut *tx).await?;
-      sess.1 = admin.0.clone();
-      effective_admin_id = Some(admin.0.clone());
-
-      sqlx::query("INSERT OR REPLACE INTO sessions(id, admin_id, kind, token_hash, csrf_hash, created_at, last_used_at, recent_auth_at, idle_expires_at, absolute_expires_at) VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?, ?)")
-        .bind(sess.0).bind(sess.1).bind(sess.2).bind(sess.3).bind(sess.4).bind(sess.5).bind(sess.6).bind(sess.7).bind(sess.8).bind(sess.9)
-        .execute(&mut *tx).await?;
-    }
-
-    if let Some(PreservedAdmin {
-      email, actor_type, ..
-    }) = preserve_admin
-    {
-      let key_str = audit_key.unwrap_or("unknown");
-      common::audit(
-        &mut tx,
-        actor_type,
-        effective_admin_id.as_deref(),
-        Some(email),
-        "backup.restored",
-        None,
-        None,
-        Some("backup"),
-        Some(key_str),
-        serde_json::json!({
-          "backup": key_str,
-          "previousHead": archived.head.as_ref().map(|(seq, hash)| serde_json::json!({"seq": seq, "hash": hash})),
-          "archivedRecords": archived.records,
-          "archive": archived.archive,
-        }),
-      )
-      .await?;
-    }
-
-    tx.commit().await?;
-    Ok::<(), anyhow::Error>(())
-  }
-  .await;
-
-  let _ = sqlx::query("DETACH DATABASE backup_db")
-    .execute(&mut *conn)
-    .await;
-
-  drop(conn);
-  restore_db.close().await;
-  restore_result.map_err(|error| {
-    tracing::error!(
-      error = format!("{error:#}"),
-      "failed to apply backup restore"
-    );
-    HttpError::internal()
-  })?;
-
-  // Best-effort scrub: the wiped rows must not linger in the live database
-  // file or WAL after the restore replaced them.
-  if let Err(error) = sqlx::query("PRAGMA wal_checkpoint(TRUNCATE)")
-    .execute(state.db.pool())
-    .await
-  {
-    tracing::warn!(%error, "failed to checkpoint WAL after backup restore");
-  }
-  if let Err(error) = sqlx::query("VACUUM").execute(state.db.pool()).await {
-    tracing::warn!(%error, "failed to vacuum after backup restore");
-  }
-
-  // Run migrations on restored database if needed
-  Ok(())
+  .await?;
+  Ok(prepared.upgrade.clone())
 }
 
 fn session_id_from_identity(identity: &AuthIdentity) -> &str {
   match identity {
     AuthIdentity::Admin { session_id, .. } => session_id,
     AuthIdentity::Runner { .. } => "",
-    AuthIdentity::ServiceAccount { .. } => "",
+    AuthIdentity::Token { .. } => "",
   }
 }
 
@@ -891,7 +385,7 @@ pub async fn delete(
   identity: &AuthIdentity,
   key: &str,
 ) -> Result<(), HttpError> {
-  let (admin_id, email) = require_root(identity)?;
+  let (admin_id, email) = require_capability(identity, Capability::InstanceBackup)?;
   let safe_key = sanitize_key(key)?;
   let file_path = backup_dir(state).join(&safe_key);
 
@@ -907,19 +401,19 @@ pub async fn delete(
     HttpError::internal()
   })?;
 
-  let _ = common::audit_standalone(
+  common::audit_standalone(
     state.db.pool(),
     identity.audit_actor_type(),
     Some(admin_id),
     Some(email),
-    "backup.deleted",
+    crate::services::events::Action::BackupDeleted,
     None,
     None,
     Some("backup"),
     Some(&safe_key),
     serde_json::json!({ "key": safe_key }),
   )
-  .await;
+  .await?;
 
   Ok(())
 }

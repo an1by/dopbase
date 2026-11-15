@@ -26,7 +26,7 @@ sequenceDiagram
   participant B as Browser
   participant D as Dopbase
   participant G as Google
-  B->>D: Select "Sign in with Google"
+  B->>D: Select "Continue with Google"
   D-->>B: Redirect to accounts.google.com
   B->>G: Choose a Google account
   G-->>B: Redirect to the Dopbase callback with a code
@@ -81,6 +81,14 @@ one.
      Dopbase, and the app needs no review.
    - **External** for personal Gmail accounts or people from several
      organizations. Without Google Workspace, this is the only choice.
+
+   Dopbase doesn't check which Google domain an account belongs to. It signs
+   in only emails that have a Dopbase account, so the Users page is your
+   allow list. With **External**, a personal Google account set up with a work
+   address can link to that person's Dopbase account on its first sign-in. If
+   your company uses Google Workspace, choose **Internal**. See
+   [Who can sign in](./single-sign-on#who-can-sign-in).
+
 5. Enter a contact email, accept the user data policy, and select **Create**.
 
 An external app starts in testing. Dopbase asks only for `openid`, `email`, and
@@ -112,13 +120,13 @@ sometimes longer. If the test sign-in in step 5 fails with
 
 Back on the **Single sign-on** page, fill in **2. Provider details**:
 
-| Field         | Value                                                                  |
-| ------------- | ---------------------------------------------------------------------- |
-| Provider      | Google                                                                 |
-| Button label  | `Google`, the default. The sign-in page shows **Sign in with Google**. |
-| Issuer URL    | `https://accounts.google.com`, with no trailing slash                  |
-| Client ID     | The client ID from Google, which ends in `.apps.googleusercontent.com` |
-| Client secret | The client secret from Google                                          |
+| Field         | Value                                                                   |
+| ------------- | ----------------------------------------------------------------------- |
+| Provider      | Google                                                                  |
+| Button label  | `Google`, the default. The sign-in page shows **Continue with Google**. |
+| Issuer URL    | `https://accounts.google.com`, with no trailing slash                   |
+| Client ID     | The client ID from Google, which ends in `.apps.googleusercontent.com`  |
+| Client secret | The client secret from Google                                           |
 
 Select **Save**. Dopbase reads Google's discovery document before it saves, so a
 mistyped issuer URL fails here and not at sign-in. The client secret is
@@ -138,12 +146,12 @@ goes away.
 
 ## 6. Turn it on
 
-Select **Turn on**. The sign-in page now shows **Sign in with Google** next to
+Select **Turn on**. The sign-in page now shows **Continue with Google** next to
 the password form.
 
-To check it, open the sign-in page in a private window, select **Sign in with
-Google**, and pick a Google account whose email matches an admin or member
-account in Dopbase. The first sign-in links that Google identity to the account.
+To check it, open the sign-in page in a private window, select **Continue with
+Google**, and pick a Google account whose email matches a person's account in
+Dopbase, other than root. The first sign-in links that Google identity to the account.
 After that, Dopbase recognizes the person by Google's subject identifier, so the
 link survives an email change at Google.
 
@@ -167,7 +175,7 @@ for the details.
 
 ### Confirming sensitive actions
 
-Revealing or exporting secrets, managing users, and creating agent tokens ask
+Revealing or exporting secrets, managing users, and creating personal tokens ask
 you to confirm it's you. An account linked to Google confirms in a small Google
 window. Google rejects `prompt=login`, so Dopbase sends only `max_age=0` and
 checks the sign-in time Google returns. If Google reuses your session without
@@ -197,6 +205,9 @@ browser and try again.
 
 - **No Dopbase account uses that email.** Create the account on the Users page
   with the email the person uses at Google.
+
+- **Your Dopbase account is disabled.** The account exists but is turned off.
+  Enable it on the Users page.
 
 - **Your identity provider hasn't verified that email…** This is rare with
   Google. It can happen when a Google account uses a non-Gmail address the

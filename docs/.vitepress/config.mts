@@ -25,7 +25,6 @@ const sectionNames: Record<string, string> = {
   cloud: "Cloud",
   reference: "Reference",
   about: "About",
-  adr: "Architecture decisions",
   security: "Security",
 };
 
@@ -237,7 +236,7 @@ const config = defineConfig({
     },
   },
   vite: {
-    publicDir: "../public",
+    publicDir: "../ui/public",
     plugins: [documentationVersionPlugin()],
     optimizeDeps: {
       include: ["mermaid", "fastdom"],
@@ -252,7 +251,7 @@ const config = defineConfig({
     },
   },
   themeConfig: {
-    logo: "/logo.svg",
+    logo: { light: "/logo-violet.svg", dark: "/logo.svg" },
     siteTitle: "Dopbase",
     search: { provider: "local" },
     socialLinks: [{ icon: "github", link: projectUrl }],
@@ -302,10 +301,6 @@ const config = defineConfig({
               text: "Server and client",
               link: "/guide/server-client",
             },
-            {
-              text: "Workspace paths (design)",
-              link: "/guide/workspace-paths",
-            },
           ],
         },
         {
@@ -348,7 +343,6 @@ const config = defineConfig({
             { text: "Server setup", link: "/cli/setup" },
             { text: "Server lifecycle", link: "/cli/serve" },
             { text: "Client connect", link: "/cli/client-connect" },
-            { text: "Docker integration", link: "/cli/docker" },
           ],
         },
       ],
@@ -375,7 +369,11 @@ const config = defineConfig({
         {
           text: "Administration",
           items: [
-            { text: "Users and AI agents", link: "/ui/users" },
+            { text: "Project access", link: "/ui/project-access" },
+            { text: "Users", link: "/ui/users" },
+            { text: "AI agents", link: "/ui/ai-agents" },
+            { text: "Groups", link: "/ui/groups" },
+            { text: "Roles", link: "/ui/roles" },
             { text: "Backups and restoration", link: "/ui/backups" },
             { text: "Audit and instance status", link: "/ui/audit-instance" },
           ],
@@ -386,7 +384,6 @@ const config = defineConfig({
           text: "Deployment & Storage",
           items: [
             { text: "Overview", link: "/self-hosting/" },
-            { text: "Docker", link: "/self-hosting/docker" },
             {
               text: "Storage and backups",
               link: "/self-hosting/storage-backups",
@@ -398,6 +395,7 @@ const config = defineConfig({
           text: "Operations & Maintenance",
           items: [
             { text: "Operations", link: "/self-hosting/operations" },
+            { text: "Upgrade to 0.2.0", link: "/self-hosting/upgrade-to-0-2" },
             { text: "Factory reset", link: "/self-hosting/factory-reset" },
           ],
         },
@@ -425,7 +423,7 @@ const config = defineConfig({
           items: [
             { text: "Security model", link: "/reference/security" },
             { text: "Public security updates", link: "/security/" },
-            { text: "Identity and tokens", link: "/reference/identity" },
+            { text: "Identity and access", link: "/reference/identity" },
             { text: "Audit events", link: "/reference/audit-events" },
           ],
         },
@@ -473,19 +471,6 @@ const config = defineConfig({
             { text: "Open source", link: "/about/open-source" },
             { text: "Roadmap", link: "/about/roadmap" },
             { text: "Product boundaries", link: "/about/product-boundaries" },
-            { text: "Architecture decisions (fork)", link: "/adr/" },
-          ],
-        },
-      ],
-      "/adr/": [
-        {
-          text: "Architecture decisions",
-          items: [
-            { text: "Overview", link: "/adr/" },
-            {
-              text: "ADR 0001 — an1by fork",
-              link: "/adr/0001-an1by-fork",
-            },
           ],
         },
       ],
@@ -502,4 +487,23 @@ const config = defineConfig({
   },
 });
 
-export default withMermaid(config);
+// withMermaid() asks Vite to pre-bundle some of mermaid's own dependencies by
+// bare name. Bun gives docs/ only the packages it declares, so Vite can't find
+// them from here. "mermaid > dayjs" tells Vite to look them up from mermaid's
+// folder, where Bun installs them.
+const mermaidDependencies = new Set([
+  "@braintree/sanitize-url",
+  "dayjs",
+  "cytoscape-cose-bilkent",
+  "cytoscape",
+]);
+
+const docsConfig = withMermaid(config);
+const optimizeDeps = docsConfig.vite?.optimizeDeps;
+if (optimizeDeps?.include) {
+  optimizeDeps.include = optimizeDeps.include.map((name) =>
+    mermaidDependencies.has(name) ? `mermaid > ${name}` : name,
+  );
+}
+
+export default docsConfig;

@@ -1,0 +1,110 @@
+# yaml-language-server: $schema=https://coderabbit.ai/integrations/schema.v2.json
+#
+# CodeRabbit reviews every pull request and only advises: it never approves,
+# requests changes, or blocks a merge. Same-repo branches use the copy of this
+# file on their own branch; pull requests from forks use the target branch's.
+language: en-US
+
+reviews:
+  profile: chill
+  request_changes_workflow: false
+  high_level_summary: true
+  # Keep the summary in CodeRabbit's comment so the PR body the template check
+  # validates is never edited.
+  high_level_summary_in_walkthrough: true
+  poem: false
+  sequence_diagrams: true
+  estimate_code_review_effort: true
+
+  auto_review:
+    enabled: true
+    drafts: false
+    # Every target branch: main, release/*, and the feature branches that
+    # stacked pull requests merge into.
+    base_branches:
+      - ".*"
+    # Roll-up pull requests (a feature branch into release/*, or release/*
+    # into main) bundle work that was already reviewed. Label them skip-review.
+    labels:
+      - "!skip-review"
+    auto_incremental_review: true
+    auto_pause_after_reviewed_commits: 0
+
+  # Excluded files don't count toward the per-review file limit.
+  path_filters:
+    - "!**/Cargo.lock"
+    - "!bun.lock"
+    - "!app/migrations-legacy/**"
+    - "!**/*.{png,jpg,jpeg,gif,webp,ico,woff,woff2,ttf,mp4,mov,webm}"
+    - "!.github/discussion-content/**"
+
+  path_instructions:
+    - path: "app/src/services/{authx,access,credentials,passcodes,token,crypto,oidc}.rs"
+      instructions: &auth |
+        Auth and access code. Look for privilege escalation, decisions made by a
+        role's name instead of its capabilities, grants that reach past the
+        role's level ceiling, personal tokens without an expiry, and root-only
+        capabilities that a role could hold. Use the terms in CONTEXT.md:
+        principal, account, root, role, capability, level, grant.
+    - path: "app/src/modules/{auth,accounts,agents,roles,grants,groups,tokens,sso,users}/**"
+      instructions: *auth
+    - path: "app/migrations/**"
+      instructions: &migrations |
+        Every migration has a matching up and down file with a UTC timestamp
+        version, and the down file reverses exactly that change. A shipped
+        migration must never be edited or renamed. Flag destructive changes
+        that the PR's Compatibility section doesn't mention, and anything that
+        stops a supported older backup from restoring.
+    - path: "app/src/{modules/backups/**,services/legacy_schema.rs,services/db.rs}"
+      instructions: *migrations
+    - path: "ui/src/**/*.{vue,ts}"
+      instructions: |
+        Vue admin console. Text people see goes through i18n
+        (ui/src/i18n/locales), not hard-coded strings. Server reads go through the
+        shared query cache in ui/src/queries. Forms and dialogs need labels,
+        visible focus, and keyboard use.
+    - path: "{docs/**,CHANGELOG.md}"
+      instructions: |
+        Docs must match what the code in this PR does. CHANGELOG.md follows
+        Keep a Changelog. Wording is plain and direct, and example emails use
+        the dopbase.com domain.
+
+  tools:
+    gitleaks:
+      enabled: true
+    actionlint:
+      enabled: true
+
+  pre_merge_checks:
+    docstrings:
+      mode: "off"
+    title:
+      mode: "off"
+    description:
+      mode: "off"
+    custom_checks:
+      - name: "CHANGELOG and docs updated"
+        mode: warning
+        instructions: |
+          Fail when the PR changes public behavior (an HTTP API, a CLI command
+          or flag, an environment variable, a server.toml key, or the database
+          schema) and changes neither CHANGELOG.md nor a file under docs/.
+          Pass for internal-only, test, CI, and refactor changes.
+      - name: "Breaking change has a migration note"
+        mode: warning
+        instructions: |
+          Fail when the PR title contains "!" before the colon, or the diff
+          breaks compatibility for existing users, and the PR description's
+          Compatibility section gives no migration step. Pass otherwise.
+
+knowledge_base:
+  learnings:
+    scope: local
+  code_guidelines:
+    enabled: true
+    filePatterns:
+      - "CONTEXT.md"
+      - "CONTRIBUTING.md"
+
+chat:
+  auto_reply: true

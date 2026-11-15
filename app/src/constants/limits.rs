@@ -3,6 +3,9 @@ pub const BROWSER_SESSION_IDLE_HOURS: i64 = 8;
 pub const CLI_SESSION_ABSOLUTE_DAYS: i64 = 90;
 pub const CLI_SESSION_IDLE_DAYS: i64 = 30;
 pub const RECENT_AUTHENTICATION_MINUTES: i64 = 10;
+/// A runner token's `last_used_at` is written at most this often, so a
+/// polling runner doesn't write on every request.
+pub const RUNNER_LAST_USED_SECONDS: i64 = 60;
 /// How long a browser CLI login stays open for approval.
 pub const CLI_DEVICE_CODE_MINUTES: i64 = 10;
 /// The slowest the CLI may poll; faster polls get `slowDown`.
@@ -19,9 +22,28 @@ pub const SSO_FLOW_MINUTES: i64 = 10;
 pub const SSO_HANDOFF_SECONDS: i64 = 60;
 pub const MAX_PENDING_SSO_FLOWS: i64 = 1_000;
 pub const MAX_PENDING_SSO_FLOWS_PER_CLIENT: i64 = 20;
+/// Lifetime of a `dopbase admin passcode` launch passcode when `--ttl` is
+/// not given, and the range `--ttl` accepts.
+pub const LAUNCH_PASSCODE_DEFAULT_SECONDS: i64 = 60;
+pub const LAUNCH_PASSCODE_MIN_SECONDS: i64 = 15;
+pub const LAUNCH_PASSCODE_MAX_SECONDS: i64 = 600;
+/// Wrong tries that burn a launch passcode.
+pub const LAUNCH_PASSCODE_MAX_FAILURES: i64 = 5;
 
 pub const MAX_SECRETS_PER_ENVIRONMENT: usize = 1_000;
+/// How many environments one comparison reads against its base.
+pub const MAX_COMPARE_ENVIRONMENTS: usize = 3;
 pub const MAX_SECRET_COLLECTION_BYTES: usize = 2 * 1024 * 1024;
 /// Upper bound for a stored `.env` editor layout (comments, ordering, and
 /// empty `KEY=` slots — never secret values).
 pub const MAX_ENV_LAYOUT_BYTES: usize = 64 * 1024;
+/// Lifetime of a runner token created without `expiresIn`, and the longest
+/// one it may ask for. Runner tokens always expire.
+/// The setup-restore form's small fields. They're read before the setup
+/// token is checked (the token) or right after it (the master key), so they
+/// stay small: a setup token is under 100 bytes, and a master key file is
+/// 32 raw bytes or 64 hex characters.
+pub const MAX_SETUP_TOKEN_FIELD_BYTES: usize = 256;
+pub const MAX_MASTER_KEY_FIELD_BYTES: usize = 1024;
+pub const RUNNER_TOKEN_DEFAULT_DAYS: i64 = 90;
+pub const RUNNER_TOKEN_MAX_DAYS: i64 = 365;

@@ -30,4 +30,7 @@ pub struct BootstrapRestoreResponse {
   pub restored: bool,
   pub key: String,
   pub size: u64,
+  /// What upgrading a 0.1.x backup did, when it was one.
+  #[serde(skip_serializing_if = "Option::is_none")]
+  pub upgrade: Option<crate::modules::backups::upgrade::UpgradeReport>,
 }

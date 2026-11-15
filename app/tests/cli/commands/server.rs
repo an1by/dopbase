@@ -265,7 +265,7 @@ mod background {
           "server",
           "setup",
           "--email",
-          "root@example.com",
+          "root@dopbase.com",
           "--config",
           "custom.toml",
         ])
@@ -409,7 +409,7 @@ mod background {
     );
     let key = fs::read(server.directory.path().join("custom.key")).unwrap();
     assert!(!metadata.contains(std::str::from_utf8(&key).unwrap_or("not-a-key")));
-    let client = reqwest::Client::new();
+    let client = crate::commands::support::http();
     let endpoint = format!("http://127.0.0.1:{cli_port}");
     assert!(
       client
@@ -463,7 +463,7 @@ mod background {
     assert_ne!(restart["pid"], before.pid);
     assert_eq!(server.pid().bind_address, before.bind_address);
     // Restart closes existing HTTP connections; use a fresh connection to the replacement.
-    let client = reqwest::Client::new();
+    let client = crate::commands::support::http();
     assert!(
       client
         .get(format!("{endpoint}/api/v1/openapi.json"))
@@ -494,7 +494,7 @@ mod background {
     server.config(&format!("port = {original_port}\n"));
     server.start(&[]);
     let original = server.pid().pid;
-    let client = reqwest::Client::new();
+    let client = crate::commands::support::http();
     let endpoint = format!("http://127.0.0.1:{original_port}/api/v1/health");
     let pid_path = daemon::pid_file_path(&server.data());
     let original_metadata = fs::read(&pid_path).unwrap();
@@ -647,7 +647,7 @@ mod background {
       }
       success(start.output().unwrap());
       let base = format!("http://127.0.0.1:{selected}");
-      let client = reqwest::Client::new();
+      let client = crate::commands::support::http();
       assert_eq!(
         client.get(&base).send().await.unwrap().status().as_u16(),
         if source == "file" { 200 } else { 404 }
@@ -678,7 +678,7 @@ mod background {
           .output()
           .unwrap(),
       );
-      let client = reqwest::Client::new();
+      let client = crate::commands::support::http();
       assert_eq!(
         client.get(&base).send().await.unwrap().status().as_u16(),
         404
@@ -834,4 +834,46 @@ async fn logs_command_tails_cleans_and_watches_until_interrupted() {
       .unwrap()
       .success()
   );
+}
+
+#[cfg(unix)]
+#[tokio::test(flavor = "multi_thread")]
+async fn logs_watch_exits_cleanly_on_an_immediate_interrupt() {
+  use std::process::Stdio;
+  // SIGINT goes out as soon as the waiting line shows, the moment someone
+  // pressing Ctrl+C would hit. A watch that registers its handler later is
+  // killed by the default action instead of exiting 0.
+  for attempt in 0..5 {
+    let directory = TempDir::new().unwrap();
+    let capture = directory.path().join("watch.out");
+    let mut watch = tokio::process::Command::from(command(directory.path()));
+    watch
+      .args(["server", "logs", "--clean", "--watch"])
+      .kill_on_drop(true)
+      .stdin(Stdio::null())
+      .stdout(Stdio::from(fs::File::create(&capture).unwrap()))
+      .stderr(Stdio::null());
+    let mut child = watch.spawn().unwrap();
+    let deadline = tokio::time::Instant::now() + std::time::Duration::from_secs(5);
+    while !fs::read_to_string(&capture)
+      .unwrap()
+      .contains("Waiting for new output.")
+    {
+      assert!(
+        tokio::time::Instant::now() < deadline,
+        "logs watch did not start (attempt {attempt})"
+      );
+      tokio::time::sleep(std::time::Duration::from_millis(5)).await;
+    }
+    nix::sys::signal::kill(
+      nix::unistd::Pid::from_raw(child.id().unwrap() as i32),
+      nix::sys::signal::Signal::SIGINT,
+    )
+    .unwrap();
+    let status = tokio::time::timeout(std::time::Duration::from_secs(5), child.wait())
+      .await
+      .unwrap()
+      .unwrap();
+    assert!(status.success(), "attempt {attempt}: {status:?}");
+  }
 }

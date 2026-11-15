@@ -80,3 +80,25 @@ fn networks_match_ipv4_ipv6_and_mapped_addresses() {
   }
   assert!(client_ip::parse_list(" , ").is_err());
 }
+
+#[test]
+fn rate_limit_buckets_group_ipv6_by_64_and_unmap_ipv4() {
+  assert_eq!(client_ip::bucket(Some(ip("198.51.100.7"))), "198.51.100.7");
+  assert_eq!(
+    client_ip::bucket(Some(ip("::ffff:198.51.100.7"))),
+    "198.51.100.7"
+  );
+  assert_eq!(
+    client_ip::bucket(Some(ip("2001:db8:1:2::1"))),
+    client_ip::bucket(Some(ip("2001:db8:1:2:aaaa:bbbb:cccc:dddd")))
+  );
+  assert_eq!(
+    client_ip::bucket(Some(ip("2001:db8:1:2::1"))),
+    "2001:db8:1:2::/64"
+  );
+  assert_ne!(
+    client_ip::bucket(Some(ip("2001:db8:1:2::1"))),
+    client_ip::bucket(Some(ip("2001:db8:1:3::1")))
+  );
+  assert_eq!(client_ip::bucket(None), "unknown");
+}

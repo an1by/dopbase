@@ -48,23 +48,9 @@ pub fn update_message(status: &UpdateStatus) -> String {
      Latest version   {VERSION}{}{VERSION:#}\n\
      Release notes    {}\n\n\
      {HEADING}Stop every running Dopbase server before updating.{HEADING:#}\n\
-     Then run:\n\n  {COMMAND}{}{COMMAND:#}",
-    status.current_version,
-    status.latest_version,
-    status.release_url,
-    install_command_hint()
+     Then run:\n\n  {COMMAND}curl -fsSL https://dopbase.com/install.sh | sh{COMMAND:#}",
+    status.current_version, status.latest_version, status.release_url
   )
-}
-
-fn install_command_hint() -> &'static str {
-  #[cfg(windows)]
-  {
-    "irm https://dopbase.com/install.ps1 | iex"
-  }
-  #[cfg(not(windows))]
-  {
-    "curl -fsSL https://dopbase.com/install.sh | sh"
-  }
 }
 
 #[doc(hidden)]
@@ -73,9 +59,12 @@ pub async fn check_release(
   endpoint: &str,
 ) -> Result<UpdateStatus> {
   let current_version = parse_version(current).context("invalid CARGO_PKG_VERSION")?;
+  // The real endpoint is HTTPS. Skipping root certificates for a plain-HTTP
+  // endpoint saves about 100 ms on macOS.
   let client = reqwest::Client::builder()
     .user_agent(format!("dopbase/{current}"))
     .timeout(REQUEST_TIMEOUT)
+    .tls_built_in_root_certs(endpoint.starts_with("https://"))
     .build()
     .context("failed to build an HTTP client")?;
   let response = client
@@ -139,26 +128,7 @@ pub fn parse_release(payload: &Value) -> Result<ReleaseInfo> {
 }
 
 pub fn parse_version(value: &str) -> Option<(u64, u64, u64)> {
-  let value = value.trim().strip_prefix('v').unwrap_or(value.trim());
-  let mut components = value.split('.');
-  let major = components.next()?;
-  let minor = components.next()?;
-  let patch = components.next()?;
-  if components.next().is_some()
-    || major.is_empty()
-    || minor.is_empty()
-    || patch.is_empty()
-    || major.bytes().any(|byte| !byte.is_ascii_digit())
-    || minor.bytes().any(|byte| !byte.is_ascii_digit())
-    || patch.bytes().any(|byte| !byte.is_ascii_digit())
-  {
-    return None;
-  }
-  Some((
-    major.parse().ok()?,
-    minor.parse().ok()?,
-    patch.parse().ok()?,
-  ))
+  crate::utils::version::parse(value)
 }
 
 pub fn is_newer(

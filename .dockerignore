@@ -2,9 +2,11 @@
 .codegraph
 .DS_Store
 .vscode
-node_modules
-dist
+**/node_modules
+**/dist
 app/target
 docs/.vitepress/cache
 docs/.vitepress/dist
-coverage
+**/coverage
+!e2e/coverage
+.e2e

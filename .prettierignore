@@ -10,3 +10,5 @@ docs/.vitepress/cache/
 docs/.vitepress/dist/
 node_modules/
 coverage/
+!e2e/coverage/
+.e2e/

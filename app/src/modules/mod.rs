@@ -3,23 +3,28 @@ use utoipa::openapi::OpenApi;
 
 use crate::state::AppState;
 
+pub mod accounts;
+pub mod agents;
 pub mod audit;
 pub mod auth;
 pub mod backups;
 pub mod bootstrap;
 pub(crate) mod common;
 pub mod environments;
+pub mod grants;
+pub mod groups;
 pub mod health;
 pub mod instance;
 pub mod projects;
+pub mod roles;
+pub mod runtime;
 pub mod secrets;
-pub mod service_accounts;
 pub mod sso;
 pub mod tokens;
 pub mod users;
 pub mod workspaces;
 
-pub fn routes() -> Router<AppState> {
+pub fn routes(state: &AppState) -> Router<AppState> {
   Router::new()
     .merge(health::routes())
     .merge(bootstrap::routes())
@@ -28,13 +33,18 @@ pub fn routes() -> Router<AppState> {
     .merge(workspaces::routes())
     .merge(environments::routes())
     .merge(secrets::routes())
-    .merge(service_accounts::routes())
+    .merge(runtime::routes())
     .merge(tokens::routes())
     .merge(audit::routes())
     .merge(instance::routes())
     .merge(backups::routes())
     .merge(users::routes())
-    .merge(sso::routes())
+    .merge(agents::routes())
+    .merge(sso::routes(state))
+    .merge(grants::routes())
+    .merge(groups::routes())
+    .merge(tokens::personal::routes())
+    .merge(roles::routes())
 }
 
 pub fn openapi() -> OpenApi {
@@ -45,12 +55,17 @@ pub fn openapi() -> OpenApi {
   doc.merge(workspaces::openapi());
   doc.merge(environments::doc::build());
   doc.merge(secrets::doc::build());
-  doc.merge(service_accounts::doc::build());
+  doc.merge(runtime::doc::build());
   doc.merge(tokens::doc::build());
   doc.merge(audit::doc::build());
   doc.merge(instance::doc::build());
   doc.merge(backups::doc::build());
   doc.merge(users::doc::build());
+  doc.merge(agents::doc::build());
   doc.merge(sso::doc::build());
+  doc.merge(grants::doc::build());
+  doc.merge(groups::doc::build());
+  doc.merge(tokens::personal::doc::build());
+  doc.merge(roles::doc::build());
   doc
 }

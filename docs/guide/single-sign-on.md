@@ -13,6 +13,10 @@ who already have a Dopbase account; it never creates one.
 
 ## Before you start
 
+Single sign-on is off until the server starts with `DOPBASE_SSO=true`, or
+`sso = true` in `server.toml`. See
+[optional features](/self-hosting/operations#optional-features).
+
 Only the root account can configure single sign-on, and the server needs an
 HTTPS public URL.
 
@@ -51,7 +55,8 @@ reverse proxy that terminates TLS, use the URL people open in their browser.
 4. Select **Test sign-in**. You sign in at the provider and return to the
    settings page. This links your root account to that identity and proves the
    settings work.
-5. Select **Turn on**. The sign-in page now shows a **Sign in with …** button.
+5. Select **Turn on**. The sign-in page now shows a **Continue with …** button
+   above the password form.
 
 [Sign in with Google](./sso-google) walks through these steps for Google,
 including the Google Cloud console side.
@@ -100,8 +105,9 @@ people sign in with Google through Firebase, choose the Google preset.
 
 The first time someone signs in, Dopbase looks for an account with the same
 email. It links the provider identity to that account only if the provider
-marks the email as verified and the account is an admin or member. The root
-account is never linked by email; it is linked by the test sign-in.
+marks the email as verified and the account is an active person. Root is never
+linked by email; it is linked by the test sign-in. AI agents never sign in, so
+they never link.
 
 After the first link, Dopbase recognizes the person by the provider's subject
 identifier and ignores the email. If the email changes at the provider, the
@@ -112,6 +118,38 @@ Dopbase refuses a sign-in whose email has no account. Create the account on the
 Users page first. When a provider does not verify emails, the person can sign
 in with their password and link single sign-on from the Account page. Do this
 before you require single sign-on, which turns that password off.
+
+### Who can sign in
+
+The Users page decides who can sign in. Dopbase has no sign-up page and sends
+no invitations. An administrator adds each person by email, and only those
+emails get through. Signing in at the provider never creates an account, so
+Dopbase has no setting to limit sign-in by email domain: the list of accounts
+is already narrower than any domain rule. An address outside your company's
+domain also works, as long as an administrator added it.
+
+The provider still decides who can reach the Dopbase sign-in at all. To turn
+away everyone outside your organization before they get to Dopbase, set it up
+there:
+
+- Google: set the app's audience to **Internal**. See
+  [Sign in with Google](./sso-google#_2-set-up-google-auth-platform).
+- Microsoft Entra ID: the issuer URL with your tenant ID already limits sign-in
+  to your tenant.
+- Okta, Keycloak, and most other providers: assign the application only to the
+  users or groups who need Dopbase.
+
+This matters for the first sign-in, which links by email. Dopbase trusts the
+provider's word that the email belongs to the person. With Google's
+**External** audience, a personal Google account set up with a work address
+counts as verified, so it can link to the Dopbase account with that address if
+nothing is linked to it yet. If your company uses Google Workspace, choose
+**Internal** so only accounts your organization manages can link.
+
+Removing someone at the provider stops new sign-ins through it, but their
+Dopbase sessions and personal tokens keep working, and so does their password
+if they have one. When someone leaves, disable or delete their account on the
+Users page too.
 
 ### Microsoft Entra ID
 
@@ -140,14 +178,16 @@ Turning single sign-on off lifts the requirement as well.
 ### Hide the password form
 
 With single sign-on on, root can turn on **Hide the password form**. The
-sign-in page then shows only the single sign-on button. Nothing else changes:
+sign-in page then says the server uses that provider and shows only its
+button. Nothing else changes:
 passwords still work in the CLI and the API, and **Require single sign-on**
-is the setting that turns them off. Root can still open the form at
-`/login?password`, which is how you get in when the provider is down.
+is the setting that turns them off. Root can still choose **Signing in as
+root? Use your password**, or open `/login?password`, which is how you get in
+when the provider is down.
 
 ### Confirming sensitive actions
 
-Revealing or exporting secrets, managing users, and creating agent tokens ask
+Revealing or exporting secrets, managing users, and creating personal tokens ask
 you to confirm it's you. An account linked to single sign-on can confirm at the
 provider: Dopbase opens a small window that asks the provider for a fresh
 sign-in and checks the `auth_time` it returns. If the provider reuses an older
@@ -197,7 +237,11 @@ they can sign in and link from the Account page.
 ## Turn it off or remove it
 
 **Turn off** keeps the settings and linked identities, and everyone signs in
-with a password. **Remove** deletes the provider and every linked identity.
+with a password. **Remove provider**, in its own card at the bottom of the
+page, deletes the provider and every linked identity.
+
+Turning off `DOPBASE_SSO` on the server has the same effect as **Turn off**:
+the settings stay, and they come back when you turn it on again.
 
 Accounts without a password cannot sign in while single sign-on is off or
 removed. The settings page shows how many there are; set them a password on the

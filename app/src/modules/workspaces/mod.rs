@@ -135,10 +135,10 @@ pub async fn create(
   .map_err(database_error)?;
   common::audit(
     &mut *tx,
-    "admin",
+    identity.audit_actor_type(),
     Some(admin_id),
     Some(email),
-    "workspace.created",
+    crate::services::events::Action::WorkspaceCreated,
     None,
     None,
     Some("workspace"),
@@ -175,10 +175,10 @@ pub async fn update(
       .ok_or_else(|| HttpError::not_found("WORKSPACE_NOT_FOUND", "Workspace not found."))?;
   common::audit(
     &mut *tx,
-    "admin",
+    identity.audit_actor_type(),
     Some(admin_id),
     Some(email),
-    "workspace.updated",
+    crate::services::events::Action::WorkspaceUpdated,
     None,
     None,
     Some("workspace"),
@@ -225,10 +225,10 @@ pub async fn delete(
   }
   common::audit(
     &mut *tx,
-    "admin",
+    identity.audit_actor_type(),
     Some(admin_id),
     Some(email),
-    "workspace.deleted",
+    crate::services::events::Action::WorkspaceDeleted,
     None,
     None,
     Some("workspace"),

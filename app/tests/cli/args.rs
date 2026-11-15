@@ -3,7 +3,6 @@ use app::cli::args::{
   RunArgs, SecretCommand, ServerCommand,
 };
 use app::cli::secret_format::{ExportFormat, SecretFormat};
-use app::constants::config::executable_environment_names;
 use clap::{CommandFactory, Parser, error::ErrorKind};
 use std::process::Command as ProcessCommand;
 
@@ -29,6 +28,26 @@ fn factory_reset_parses_no_backup() {
     panic!("expected factory-reset command");
   };
   assert!(no_backup);
+}
+
+#[test]
+fn passcode_ttl_defaults_to_a_minute_and_stays_in_range() {
+  let ttl = |arguments: &[&str]| {
+    let mut all = vec!["dopbase", "admin", "passcode", "root@dopbase.com"];
+    all.extend_from_slice(arguments);
+    Cli::try_parse_from(all).map(|cli| match cli.command {
+      Command::Admin {
+        command: AdminCommand::Passcode { ttl, .. },
+      } => ttl,
+      other => panic!("expected passcode command, got {other:?}"),
+    })
+  };
+  assert_eq!(ttl(&[]).unwrap(), 60);
+  assert_eq!(ttl(&["--ttl", "15"]).unwrap(), 15);
+  assert_eq!(ttl(&["--ttl", "600"]).unwrap(), 600);
+  for refused in ["14", "601", "0", "-5", "soon"] {
+    assert!(ttl(&["--ttl", refused]).is_err(), "{refused}");
+  }
 }
 
 #[test]
@@ -455,12 +474,7 @@ fn secret_commands_parse_format_options() {
 
 #[test]
 fn validates_qualified_environment_creation_targets() {
-  for target in [
-    "storefront/development",
-    "prj_01JTEST/development",
-    "workspace1/api/staging",
-    "/api/staging",
-  ] {
+  for target in ["storefront/development", "prj_01JTEST/development"] {
     Cli::try_parse_from(["dopbase", "env", "create", target]).unwrap();
   }
 
@@ -468,6 +482,7 @@ fn validates_qualified_environment_creation_targets() {
     "storefront",
     "/development",
     "storefront/",
+    "storefront/dev/extra",
     "storefront/Development",
   ] {
     let error = Cli::try_parse_from(["dopbase", "env", "create", target]).unwrap_err();
@@ -505,30 +520,21 @@ fn top_level_help_lists_common_server_options() {
   assert!(help.contains("Common server options:"), "{help}");
   assert!(help.contains("--host <HOST>"), "{help}");
   assert!(help.contains("--port <PORT>"), "{help}");
-  assert!(help.contains("--background"), "{help}");
 }
 
 #[test]
-fn top_level_help_lists_every_executable_environment_variable() {
+fn top_level_help_keeps_to_the_quickstart_and_common_options() {
   let help = Cli::command().render_long_help().to_string();
-  assert!(help.contains("Environment variables:"), "{help}");
-  let environment_help = help
-    .split_once("Environment variables:")
-    .unwrap()
-    .1
-    .split_once("Run 'dopbase help <command>'")
-    .unwrap()
-    .0;
-  for name in executable_environment_names() {
-    assert!(
-      environment_help.contains(name),
-      "missing {name} from environment variable help:\n{help}"
-    );
-  }
+  assert!(help.contains("Quickstart:"), "{help}");
   assert!(
-    environment_help.contains("Bearer token for a machine runner or AI agent"),
+    help.contains(
+      "dopbase secret set myapp/dev API_KEY     # prompts for the value, the web UI works too"
+    ),
     "{help}"
   );
+  // Environment variables are documented in the guides, not in --help.
+  assert!(!help.contains("Environment variables:"), "{help}");
+  assert!(help.contains("Run 'dopbase help <command>'"), "{help}");
 }
 
 #[test]
@@ -604,7 +610,7 @@ fn missing_subcommands_show_contextual_help() {
     (&["dopbase", "cache"], "dopbase cache clean --all --yes"),
     (
       &["dopbase", "admin"],
-      "dopbase admin reset-password admin@example.com",
+      "dopbase admin reset-password admin@dopbase.com",
     ),
   ];
 
@@ -616,8 +622,8 @@ fn missing_subcommands_show_contextual_help() {
 }
 
 #[test]
-fn token_create_expiry_flag_accepts_hours_days_and_never() {
-  for value in ["1h", "1d", "never"] {
+fn token_create_expiry_flag_accepts_hours_and_days_up_to_a_year() {
+  for value in ["1h", "1d", "365d"] {
     assert!(
       Cli::try_parse_from([
         "dopbase",
@@ -633,19 +639,39 @@ fn token_create_expiry_flag_accepts_hours_days_and_never() {
       "rejected {value}"
     );
   }
-  assert!(
-    Cli::try_parse_from([
-      "dopbase",
-      "token",
-      "create",
-      "env_123456",
-      "--name",
-      "deploy",
-      "--expires-in",
-      "30m"
-    ])
-    .is_err()
-  );
+  // Runner tokens always expire, within a year.
+  for value in ["30m", "never", "366d", "8761h"] {
+    assert!(
+      Cli::try_parse_from([
+        "dopbase",
+        "token",
+        "create",
+        "env_123456",
+        "--name",
+        "deploy",
+        "--expires-in",
+        value
+      ])
+      .is_err(),
+      "accepted {value}"
+    );
+  }
+  // A malformed value gets the runner rule, not the shared one that
+  // offers `never` and three years.
+  let error = Cli::try_parse_from([
+    "dopbase",
+    "token",
+    "create",
+    "env_123456",
+    "--name",
+    "deploy",
+    "--expires-in",
+    "30m",
+  ])
+  .unwrap_err()
+  .to_string();
+  assert!(error.contains("up to 365d"), "{error}");
+  assert!(!error.contains("Use never"), "{error}");
 }
 
 #[test]
@@ -731,7 +757,7 @@ fn audit_list_parses_filters_limit_and_cursor() {
     "--environment",
     "storefront/production",
     "--actor",
-    "admin@example.com",
+    "admin@dopbase.com",
     "--limit",
     "200",
     "--cursor",
@@ -755,7 +781,7 @@ fn audit_list_parses_filters_limit_and_cursor() {
     filters.environment.as_deref(),
     Some("storefront/production")
   );
-  assert_eq!(filters.actor.as_deref(), Some("admin@example.com"));
+  assert_eq!(filters.actor.as_deref(), Some("admin@dopbase.com"));
   assert_eq!(limit, 200);
   assert_eq!(cursor.as_deref(), Some("MjAyNi0xMC0yM3xhdWRfMQ"));
 
@@ -885,7 +911,7 @@ fn audit_export_parses_its_filters_and_output() {
     "--environment",
     "fixture/local",
     "--actor",
-    "admin@example.com",
+    "admin@dopbase.com",
     "--limit",
     "10",
   ])
@@ -912,7 +938,7 @@ fn audit_export_parses_its_filters_and_output() {
       assert_eq!(action.unwrap(), "secret.updated");
       assert_eq!(project.unwrap(), "fixture");
       assert_eq!(environment.unwrap(), "fixture/local");
-      assert_eq!(actor.unwrap(), "admin@example.com");
+      assert_eq!(actor.unwrap(), "admin@dopbase.com");
       assert_eq!(limit, Some(10));
     }
     unexpected => {
@@ -983,7 +1009,7 @@ fn incomplete_secret_commands_show_examples_and_environment_help() {
     let help = contextual_help(arguments);
     assert!(help.contains("Examples:"), "{arguments:?}: {help}");
     assert!(
-      help.contains("WORKSPACE/PROJECT/ENVIRONMENT") || help.contains("PROJECT/ENVIRONMENT"),
+      help.contains("PROJECT_REF/ENVIRONMENT_NAME"),
       "{arguments:?}: {help}"
     );
     for text in *expected {
@@ -1049,9 +1075,9 @@ fn resource_parameters_use_consistent_value_names() {
     (&["dopbase", "export", "--help"], "<ENVIRONMENT_REF>"),
     (
       &["dopbase", "token", "create", "--help"],
-      "[ENVIRONMENT_REF]",
+      "<ENVIRONMENT_REF>",
     ),
-    (&["dopbase", "token", "list", "--help"], "[ENVIRONMENT_REF]"),
+    (&["dopbase", "token", "list", "--help"], "<ENVIRONMENT_REF>"),
     (&["dopbase", "run", "--help"], "[ENVIRONMENT_REF]"),
   ];
 
@@ -1074,6 +1100,7 @@ fn other_incomplete_commands_show_full_help() {
     &["dopbase", "run"],
     &["dopbase", "run", "--"],
     &["dopbase", "admin", "reset-password"],
+    &["dopbase", "admin", "passcode"],
     &["dopbase", "restore"],
   ];
 
@@ -1147,16 +1174,13 @@ fn binary_prints_contextual_help_and_keeps_the_usage_error_exit_code() {
     .unwrap();
 
   assert_eq!(output.status.code(), Some(2));
-  let help = format!(
-    "{}{}",
-    String::from_utf8_lossy(&output.stdout),
-    String::from_utf8_lossy(&output.stderr)
-  );
-  assert!(help.contains("secret list"), "{help}");
+  let help = String::from_utf8(output.stdout).unwrap();
+  assert!(help.contains("Usage: dopbase secret list"), "{help}");
   assert!(
-    help.contains("payment-service/production") || help.contains("WORKSPACE/PROJECT/ENVIRONMENT"),
+    help.contains("dopbase secret list payment-service/production"),
     "{help}"
   );
+  assert!(output.stderr.is_empty());
 }
 
 #[test]
@@ -1206,24 +1230,9 @@ fn parses_each_public_command_and_detects_missing_cases() {
     &["dopbase", "init", "billing/local", "--from", ".env"],
     &["dopbase", "project", "create", "billing"],
     &["dopbase", "project", "list"],
-    &["dopbase", "project", "current"],
     &["dopbase", "project", "show", "billing"],
     &["dopbase", "project", "rename", "billing", "payments"],
     &["dopbase", "project", "delete", "billing"],
-    &["dopbase", "workspace", "create", "blipsu"],
-    &["dopbase", "workspace", "list"],
-    &["dopbase", "workspace", "show", "blipsu"],
-    &[
-      "dopbase",
-      "workspace",
-      "update",
-      "blipsu",
-      "--name",
-      "blipsu",
-      "--root-path",
-      "/srv/blipsu",
-    ],
-    &["dopbase", "workspace", "delete", "blipsu", "--yes"],
     &["dopbase", "env", "default", "billing/local"],
     &["dopbase", "env", "create", "billing/local"],
     &["dopbase", "env", "clone", "billing/local", "production"],
@@ -1258,44 +1267,25 @@ fn parses_each_public_command_and_detects_missing_cases() {
     ],
     &["dopbase", "token", "list", "billing/local"],
     &["dopbase", "token", "revoke", "tok_01"],
-    &["dopbase", "docker", "env-file", "billing/local"],
     &[
       "dopbase",
-      "docker",
-      "run",
-      "billing/local",
-      "--",
-      "docker",
-      "run",
-      "app",
+      "token",
+      "personal",
+      "create",
+      "--name",
+      "laptop-agent",
     ],
-    &[
-      "dopbase",
-      "docker",
-      "compose",
-      "billing/local",
-      "--",
-      "docker",
-      "compose",
-      "up",
-    ],
-    &[
-      "dopbase",
-      "docker",
-      "exec",
-      "billing/local",
-      "--",
-      "admin",
-      "reset-password",
-      "admin@example.com",
-    ],
+    &["dopbase", "token", "personal", "list"],
+    &["dopbase", "token", "personal", "revoke", "ptk_01"],
+    &["dopbase", "access"],
     &["dopbase", "audit", "list"],
     &["dopbase", "audit", "verify"],
     &["dopbase", "audit", "export"],
     &["dopbase", "run", "--", "true"],
     &["dopbase", "cache", "list"],
     &["dopbase", "cache", "clean"],
-    &["dopbase", "admin", "reset-password", "admin@example.com"],
+    &["dopbase", "admin", "reset-password", "admin@dopbase.com"],
+    &["dopbase", "admin", "passcode", "root@dopbase.com"],
     &["dopbase", "admin", "factory-reset"],
     &["dopbase", "update"],
     &["dopbase", "backup"],

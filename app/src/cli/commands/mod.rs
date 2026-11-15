@@ -4,6 +4,7 @@
 //! support code together. This file only routes parsed commands and re-exports
 //! the small set of helpers used outside their owning module.
 
+pub mod access;
 pub mod admin;
 pub mod audit;
 pub mod auth;
@@ -29,11 +30,13 @@ pub use super::output::{render_fields, render_table};
 #[doc(hidden)]
 pub use super::prompt::remove_one_line_ending;
 pub use admin::{
-  complete_factory_reset, factory_reset_archive_path, factory_reset_confirmation_matches,
-  factory_reset_quarantine_path, validate_factory_reset_target,
+  complete_factory_reset, connection_is_local, factory_reset_archive_path,
+  factory_reset_confirmation_matches, factory_reset_quarantine_path, validate_factory_reset_target,
 };
 pub use client::{insecure_transport_warning, server_switch_confirmed, status_document};
-pub use run::{RunEnvironment, Selection, SelectionOptions, run_environment, select};
+pub use run::{
+  RunEnvironment, Selection, SelectionOptions, run_environment, runner_environment, select,
+};
 
 use super::{args::*, local_config};
 use anyhow::{Result, bail};
@@ -76,7 +79,11 @@ pub async fn execute(cli: Cli) -> Result<i32> {
     }
     Command::Logout => {
       let server = local_config::resolve(server_argument.as_deref(), data_dir.as_deref())?;
-      auth::logout(&server, json_output)
+      let flags = auth::LogoutFlags {
+        server: server_argument.as_deref(),
+        data_dir: data_dir.as_deref(),
+      };
+      auth::logout(&server, flags, json_output).await
     }
     Command::Admin { command } => {
       if server_argument.is_some() {
@@ -107,6 +114,7 @@ async fn execute_client(
     Command::Import(args) => import::execute(server, args, json_output).await,
     Command::Export(args) => export::execute(server, args, json_output).await,
     Command::Token { command } => token::execute(command, server, json_output).await,
+    Command::Access(args) => access::execute(server, args, json_output).await,
     Command::Run(args) => run::execute(server, args).await,
     Command::Cache { command } => cache::execute(command, server, json_output),
     Command::Backup(args) => backup::execute(server, args, json_output).await,

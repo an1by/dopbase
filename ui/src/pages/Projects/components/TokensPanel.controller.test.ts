@@ -1,0 +1,237 @@
+import { describe, expect, it, vi } from "vitest";
+import { nextTick, ref } from "vue";
+import {
+  describeExpiry,
+  useTokensPanelController,
+} from "./TokensPanel.controller";
+import * as tokensApi from "~/services/tokens.api";
+import { ApiError } from "~/services/http.client";
+import { mountController } from "~/tests/mount-controller";
+import { cacheContents } from "~/tests/pinia";
+import { useRunDialogController } from "./RunDialog.controller";
+import type { Environment } from "~/services";
+
+vi.mock("~/services/tokens.api");
+
+const token = {
+  id: "tok_1",
+  environmentId: "env_1",
+  name: "deploy",
+  createdAt: "2026-08-28T00:00:00Z",
+  expiresAt: null,
+  lastUsedAt: null,
+  revokedAt: null,
+};
+
+function makeController() {
+  return mountController(() => useTokensPanelController(ref("env_1")))
+    .controller;
+}
+
+describe("useTokensPanelController", () => {
+  it("ignores an older environment response that resolves last", async () => {
+    let resolveFirst!: (value: (typeof token)[]) => void;
+    let resolveSecond!: (value: (typeof token)[]) => void;
+    vi.mocked(tokensApi.listTokens)
+      .mockReturnValueOnce(new Promise((resolve) => (resolveFirst = resolve)))
+      .mockReturnValueOnce(new Promise((resolve) => (resolveSecond = resolve)));
+    const environmentId = ref("env_1");
+    const c = mountController(() =>
+      useTokensPanelController(environmentId),
+    ).controller;
+    environmentId.value = "env_2";
+    await nextTick();
+    const current = { ...token, id: "tok_current", environmentId: "env_2" };
+    resolveSecond([current]);
+    await vi.waitFor(() => expect(c.tokens.value).toEqual([current]));
+    resolveFirst([{ ...token, id: "tok_stale" }]);
+    await nextTick();
+    expect(c.tokens.value).toEqual([current]);
+    expect(c.loading.value).toBe(false);
+  });
+
+  it("creates a token and exposes the plaintext exactly once", async () => {
+    vi.mocked(tokensApi.listTokens).mockResolvedValue([]);
+    vi.mocked(tokensApi.createToken).mockResolvedValueOnce({
+      token,
+      plaintextToken: "dbs_secret",
+    });
+    const c = makeController();
+    await c.create("deploy");
+    expect(tokensApi.createToken).toHaveBeenCalledWith("env_1", {
+      name: "deploy",
+      role: "runner",
+      expiresIn: "90d",
+    });
+    expect(c.created.value?.plaintextToken).toBe("dbs_secret");
+    expect(cacheContents()).not.toContain("dbs_secret");
+    c.acknowledgeCreated();
+    expect(c.created.value).toBeNull();
+  });
+
+  it("still shows the plaintext when the environment changes mid-create", async () => {
+    vi.mocked(tokensApi.listTokens).mockResolvedValue([]);
+    let finish!: (value: {
+      token: typeof token;
+      plaintextToken: string;
+    }) => void;
+    vi.mocked(tokensApi.createToken).mockReturnValueOnce(
+      new Promise((resolve) => (finish = resolve)),
+    );
+    const environmentId = ref("env_1");
+    const c = mountController(() =>
+      useTokensPanelController(environmentId),
+    ).controller;
+    const pending = c.create("deploy");
+    environmentId.value = "env_2";
+    await nextTick();
+
+    finish({ token, plaintextToken: "dbs_secret" });
+    await pending;
+
+    // The token exists either way; this is the only chance to copy it.
+    expect(c.created.value?.plaintextToken).toBe("dbs_secret");
+    expect(c.creating.value).toBe(false);
+  });
+
+  it("discards the plaintext when the panel unmounts", async () => {
+    vi.mocked(tokensApi.listTokens).mockResolvedValue([]);
+    vi.mocked(tokensApi.createToken).mockResolvedValueOnce({
+      token,
+      plaintextToken: "dbs_secret",
+    });
+    const { controller, unmount } = mountController(() =>
+      useTokensPanelController(ref("env_1")),
+    );
+    await controller.create("deploy");
+    expect(controller.created.value?.plaintextToken).toBe("dbs_secret");
+
+    unmount();
+
+    expect(controller.created.value).toBeNull();
+  });
+
+  it("maps name conflicts to a friendly message", async () => {
+    vi.mocked(tokensApi.listTokens).mockResolvedValue([]);
+    vi.mocked(tokensApi.createToken).mockRejectedValueOnce(
+      new ApiError(409, { TOKEN_NAME_TAKEN: "taken" }),
+    );
+    const c = makeController();
+    await expect(c.create("deploy")).rejects.toBeDefined();
+    expect(c.actionError.value).toBe("A token with this name already exists.");
+  });
+
+  it("passes a selected custom expiry to the API", async () => {
+    vi.mocked(tokensApi.listTokens).mockResolvedValue([]);
+    vi.mocked(tokensApi.createToken).mockResolvedValueOnce({
+      token,
+      plaintextToken: "dbs_secret",
+    });
+    const c = makeController();
+    await c.create("deploy", "12h");
+    expect(tokensApi.createToken).toHaveBeenCalledWith("env_1", {
+      name: "deploy",
+      role: "runner",
+      expiresIn: "12h",
+    });
+  });
+
+  it("revokes and reloads", async () => {
+    vi.mocked(tokensApi.listTokens).mockResolvedValue([]);
+    vi.mocked(tokensApi.revokeToken).mockResolvedValueOnce({
+      ...token,
+      revokedAt: "2026-08-28T01:00:00Z",
+    });
+    const c = makeController();
+    await c.revoke(token);
+    expect(tokensApi.revokeToken).toHaveBeenCalledWith("tok_1");
+    await vi.waitFor(() => expect(c.tokens.value).toEqual([]));
+  });
+
+  it("still refreshes after a revoke once the Run dialog that shared its list closed", async () => {
+    vi.mocked(tokensApi.listTokens).mockResolvedValue([token]);
+    vi.mocked(tokensApi.revokeToken).mockResolvedValueOnce({
+      ...token,
+      revokedAt: "2026-08-28T01:00:00Z",
+    });
+    const c = makeController();
+    const open = ref(true);
+    const environment = ref({ id: "env_1", name: "prod" } as Environment);
+    mountController(() =>
+      useRunDialogController(ref("payments"), environment, ref(true), open),
+    );
+    await vi.waitFor(() => expect(c.tokens.value).toEqual([token]));
+    open.value = false;
+    await nextTick();
+    vi.mocked(tokensApi.listTokens).mockResolvedValue([]);
+
+    await c.revoke(token);
+
+    expect(c.tokens.value).toEqual([]);
+  });
+});
+
+describe("describeExpiry", () => {
+  const now = new Date("2026-10-01T00:00:00Z").getTime();
+
+  it.each([
+    [{ revokedAt: "2026-09-30T00:00:00Z" }, "Revoked", "crit", false],
+    [{ expiresAt: null }, "Never", "default", true],
+    [{ expiresAt: "2026-09-30T00:00:00Z" }, "Expired", "crit", false],
+    [{ expiresAt: "2026-10-01T12:00:00Z" }, "Expires in 1 day", "warn", true],
+    [{ expiresAt: "2026-10-04T00:00:00Z" }, "Expires in 3 days", "warn", true],
+  ] as const)("%j reads %s", (overrides, expires, tone, active) => {
+    expect(describeExpiry({ ...token, ...overrides }, now)).toEqual({
+      expires,
+      expiresTone: tone,
+      active,
+    });
+  });
+
+  it("shows the date when expiry is more than a week away", () => {
+    const result = describeExpiry(
+      { ...token, expiresAt: "2027-01-25T00:00:00Z" },
+      now,
+    );
+    expect(result.expiresTone).toBe("default");
+    expect(result.expires).toMatch(/2027/);
+  });
+});
+
+describe("useTokensPanelController rows", () => {
+  it("filters by name and says when a token was last used", async () => {
+    vi.mocked(tokensApi.listTokens).mockResolvedValue([
+      { ...token, id: "tok_1", name: "deploy-prod" },
+      {
+        ...token,
+        id: "tok_2",
+        name: "ci-staging",
+        lastUsedAt: new Date().toISOString(),
+      },
+    ]);
+    const c = makeController();
+    await vi.waitFor(() => expect(c.rows.value).toHaveLength(2));
+
+    expect(c.rows.value?.map((row) => row.lastUsed)).toEqual([
+      "Never",
+      "just now",
+    ]);
+    c.filter.value = "CI";
+    expect(c.rows.value?.map((row) => row.token.name)).toEqual(["ci-staging"]);
+  });
+
+  it("copies a token's name", async () => {
+    const writeText = vi.fn(async () => undefined);
+    Object.defineProperty(navigator, "clipboard", {
+      value: { writeText },
+      configurable: true,
+    });
+    vi.mocked(tokensApi.listTokens).mockResolvedValue([token]);
+    const c = makeController();
+
+    await c.copyName(token);
+
+    expect(writeText).toHaveBeenCalledWith("deploy");
+    expect(c.copiedId.value).toBe("tok_1");
+  });
+});

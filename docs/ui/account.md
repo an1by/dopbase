@@ -1,55 +1,79 @@
 ---
 title: "Admin UI: account settings"
-description: "Manage your profile, update passwords, view session status, and understand offline password recovery in the Dopbase Admin UI."
+description: "Manage your profile, password, and personal tokens, view session status, and understand offline password recovery in the Dopbase Admin UI."
 ---
 
 # Account settings
 
-The Account page lets you manage your personal profile, update your password,
-and view your active session details.
+Click your email at the bottom of the sidebar to open the account menu, then
+choose **Account**. **Personal tokens** in the same menu opens that tab
+directly.
 
-Open **Account** from the user menu in the sidebar or navigation bar.
+The page has two tabs, each with its own address:
 
-## Profile overview
+- **Profile & sign-in** (`/account`)
+- **Personal tokens** (`/account/tokens`), or **Audit tokens**
+  (`/account/audit-tokens`) when your role's tokens read the audit log, as an
+  auditor's do
 
-The profile card displays your identity details:
+Root, which has no personal tokens, and roles without `tokens.personal` see
+the profile only.
 
-- **Email**: Your account email address.
-- **Role**: Your assigned permission level (`root`, `admin`, or `member`).
-- **Last login**: The timestamp and relative time of your last successful sign-in.
+## Profile & sign-in
 
-## Session security
+The **Profile** card shows your email, your role, the groups you belong to,
+and when you last signed in.
 
-Dopbase tracks your authentication freshness to protect sensitive operations:
+The **Single sign-on** card links your account to the provider, or unlinks
+it, when single sign-on is on.
 
-- **Active session**: Standard signed-in state.
-- **Recently authenticated**: When you have re-entered your password within the
-  re-authentication window. This badge indicates that you can perform sensitive
-  actions like revealing secret values or exporting environments without an
-  immediate password challenge.
+The **Password** card opens a dialog to change your password: your current
+password, then a new one of 12 to 128 characters, twice. Changing it signs you
+out everywhere, this browser too, and you sign back in with the new one. If you
+only ever signed in with single sign-on, the button sets a password instead.
 
-## Changing your password
+## Personal tokens
 
-To update your password:
+A personal token lets a script or an AI agent on your machine act as you,
+through `DOPBASE_TOKEN`. It never reaches more than you do: if you lose access
+to a project, your tokens lose it too.
 
-1. Enter your **Current password**.
-2. Enter a **New password** (minimum 12 characters, maximum 128 characters).
-3. Confirm the new password.
-4. Click **Update password**.
+Root has no personal tokens, since it's the account you fall back on. Its
+profile has a **Tokens** card that points to **AI agents**: create an agent
+there and give it a token for scripts and AI tools.
 
-Changing your password invalidates your existing sessions across other browsers
-and updates your credentials immediately.
+The tab lists your tokens with what each can do, where, when it was last used,
+and when it expires. A row's **⋯** menu revokes it.
 
-## Offline password recovery
+Choose **New token**:
 
-If an administrator or user forgets their password and cannot sign in, passwords
-can be reset offline directly on the machine running the Dopbase server:
+- **Start from**: **AI agent** picks Names only for 30 days, **Script** picks
+  Read for 90 days. Change anything and it becomes **Custom**.
+- **Name**: lowercase letters, numbers, and hyphens, such as `claude-laptop`.
+- **Can**: Names only, Read, or Write. Levels above what your role allows are
+  shown but can't be picked.
+- **Where**: every project you reach, one project, or one environment.
+- **Expires**: 7, 30, or 90 days, or a custom number of days, up to your role's
+  limit. Personal tokens always expire.
 
-```bash
-dopbase admin reset-password user@example.com
-```
+A line at the bottom sums it up, for example "claude-laptop can list names in
+payments until Nov 26, 2026, and never more than you can." Dopbase shows the
+token once, so copy it straight into a secret store.
 
-This command interacts directly with the local SQLite database and server
-configuration. For security, it requires terminal access to the host machine and
-revokes active sessions for that account. See the
-[command reference](/cli/commands#server-administration) for details.
+## Audit tokens
+
+Auditors' tokens read the audit log only, for a SIEM or another log collector.
+They can't see projects or secrets. The tab lists them with when each was last
+used and when it expires. A row's **⋯** menu copies the name, opens its
+activity in the audit log, or revokes it. A **Pull events** snippet shows the
+`curl` command to read the log with the token.
+
+You can also use `dopbase token personal` in the CLI. See
+[AI agent access](/guide/ai-agent-access) for handing a token to an agent.
+
+## Forgot your password?
+
+Ask an admin to set a new one from Users. Root resets a password on the
+server with `dopbase admin reset-password <email>`; see the
+[command reference](/cli/commands#server-administration). The sign-in page's
+**Forgot password?** link says the same.

@@ -408,7 +408,7 @@ pub(super) async fn sso_fixture() -> SsoFixture {
     "/api/v1/users",
     &[&root_cookie],
     Some(&root_csrf),
-    Some(json!({"email":"member@example.com","password":"correct-horse-456","role":"member"})),
+    Some(json!({"email":"member@dopbase.com","password":"correct-horse-456","role":"member"})),
   )
   .await;
   assert_eq!(status, 201, "{created}");
@@ -419,7 +419,7 @@ pub(super) async fn sso_fixture() -> SsoFixture {
     "root-code",
     Grant {
       subject: "root-subject",
-      email: "admin@example.com",
+      email: "admin@dopbase.com",
       email_verified: Some(true),
       nonce: started.nonce.clone(),
       auth_age: None,
@@ -490,7 +490,7 @@ async fn root_must_pass_a_test_sign_in_before_enabling() {
     "root-code",
     Grant {
       subject: "root-subject",
-      email: "someone-else@example.com",
+      email: "someone-else@dopbase.com",
       email_verified: None,
       nonce: started.nonce.clone(),
       auth_age: None,
@@ -603,7 +603,7 @@ async fn bootstrap_cli_token(router: &Router) -> String {
     "POST",
     "/api/v1/auth/login",
     None,
-    Some(json!({"email":"admin@example.com","password":"correct-horse-123","sessionKind":"cli"})),
+    Some(json!({"email":"admin@dopbase.com","password":"correct-horse-123","sessionKind":"cli"})),
   )
   .await;
   assert_eq!(status, 200);
@@ -619,7 +619,7 @@ async fn verified_email_links_once_then_the_subject_signs_in() {
     "member-1",
     Grant {
       subject: "member-subject",
-      email: "Member@Example.com",
+      email: "Member@Dopbase.com",
       email_verified: Some(true),
       nonce: started.nonce.clone(),
       auth_age: None,
@@ -628,7 +628,7 @@ async fn verified_email_links_once_then_the_subject_signs_in() {
   let handoff = callback(router, &started, "member-1").await;
   let (status, body, headers) = exchange(router, &started.binding, &handoff).await;
   assert_eq!(status, 200, "{body}");
-  assert_eq!(body["data"]["session"]["email"], "member@example.com");
+  assert_eq!(body["data"]["session"]["email"], "member@dopbase.com");
   assert_eq!(body["data"]["session"]["sessionKind"], "browser");
   assert!(body["data"]["session"]["token"].is_null());
   assert!(body["data"]["session"]["csrfToken"].is_string());
@@ -645,7 +645,7 @@ async fn verified_email_links_once_then_the_subject_signs_in() {
   )
   .await;
   assert_eq!(status, 200);
-  assert_eq!(current["data"]["email"], "member@example.com");
+  assert_eq!(current["data"]["email"], "member@dopbase.com");
 
   // The handoff works once.
   let (status, body, _) = exchange(router, &started.binding, &handoff).await;
@@ -659,7 +659,7 @@ async fn verified_email_links_once_then_the_subject_signs_in() {
     "member-2",
     Grant {
       subject: "member-subject",
-      email: "renamed@example.com",
+      email: "renamed@dopbase.com",
       email_verified: Some(false),
       nonce: started.nonce.clone(),
       auth_age: None,
@@ -668,7 +668,7 @@ async fn verified_email_links_once_then_the_subject_signs_in() {
   let handoff = callback(router, &started, "member-2").await;
   let (status, body, _) = exchange(router, &started.binding, &handoff).await;
   assert_eq!(status, 200, "{body}");
-  assert_eq!(body["data"]["session"]["email"], "member@example.com");
+  assert_eq!(body["data"]["session"]["email"], "member@dopbase.com");
 
   let methods: Vec<String> = sqlx::query_scalar(
     "SELECT json_extract(metadata,'$.method') FROM audit_events WHERE action='login.succeeded' AND json_extract(metadata,'$.method') IS NOT NULL",
@@ -694,15 +694,15 @@ async fn unverified_unknown_and_root_emails_are_refused() {
     (
       "c1",
       "s1",
-      "member@example.com",
+      "member@dopbase.com",
       Some(false),
       "email_unverified",
     ),
-    ("c2", "s2", "member@example.com", None, "email_unverified"),
+    ("c2", "s2", "member@dopbase.com", None, "email_unverified"),
     (
       "c3",
       "s3",
-      "stranger@example.com",
+      "stranger@dopbase.com",
       Some(true),
       "account_not_found",
     ),
@@ -710,7 +710,7 @@ async fn unverified_unknown_and_root_emails_are_refused() {
     (
       "c4",
       "s4",
-      "admin@example.com",
+      "admin@dopbase.com",
       Some(true),
       "root_not_linked",
     ),
@@ -731,7 +731,7 @@ async fn unverified_unknown_and_root_emails_are_refused() {
       format!("/login?sso_error={reason}")
     );
   }
-  let linked: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM admin_identities")
+  let linked: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM user_identities")
     .fetch_one(fixture.state.db.pool())
     .await
     .unwrap();
@@ -754,6 +754,69 @@ async fn unverified_unknown_and_root_emails_are_refused() {
 }
 
 #[tokio::test]
+async fn a_disabled_account_is_told_it_is_disabled() {
+  let fixture = sso_fixture().await;
+  let router = &fixture.router;
+  // The member signs in once, which links their subject.
+  let started = start_login(router).await;
+  fixture.idp.grant(
+    "d1",
+    Grant {
+      subject: "member-subject",
+      email: "member@dopbase.com",
+      email_verified: Some(true),
+      nonce: started.nonce.clone(),
+      auth_age: None,
+    },
+  );
+  let handoff = callback(router, &started, "d1").await;
+  let (status, body, _) = exchange(router, &started.binding, &handoff).await;
+  assert_eq!(status, 200, "{body}");
+
+  let member: String = sqlx::query_scalar("SELECT id FROM users WHERE email = $1")
+    .bind("member@dopbase.com")
+    .fetch_one(fixture.state.db.pool())
+    .await
+    .unwrap();
+  let (status, body, _) = send(
+    router,
+    "POST",
+    &format!("/api/v1/users/{member}/disable"),
+    &[&fixture.root_cookie],
+    Some(&fixture.root_csrf),
+    None,
+  )
+  .await;
+  assert_eq!(status, 200, "{body}");
+
+  // By the linked subject, then by a verified email under a new subject.
+  for (code, subject) in [("d2", "member-subject"), ("d3", "another-subject")] {
+    let started = start_login(router).await;
+    fixture.idp.grant(
+      code,
+      Grant {
+        subject,
+        email: "member@dopbase.com",
+        email_verified: Some(true),
+        nonce: started.nonce.clone(),
+        auth_age: None,
+      },
+    );
+    assert_eq!(
+      callback(router, &started, code).await,
+      "/login?sso_error=account_disabled"
+    );
+  }
+  let reasons: Vec<String> = sqlx::query_scalar(
+    "SELECT json_extract(metadata,'$.reason') FROM audit_events WHERE action='sso_login.failed' ORDER BY seq",
+  )
+  .fetch_all(fixture.state.db.pool())
+  .await
+  .unwrap();
+  assert_eq!(reasons, ["account_disabled", "account_disabled"]);
+}
+
+#[tokio::test]
 async fn a_callback_works_only_in_the_browser_that_started_it() {
   let fixture = sso_fixture().await;
   let router = &fixture.router;
@@ -762,7 +825,7 @@ async fn a_callback_works_only_in_the_browser_that_started_it() {
     "member-1",
     Grant {
       subject: "member-subject",
-      email: "member@example.com",
+      email: "member@dopbase.com",
       email_verified: Some(true),
       nonce: started.nonce.clone(),
       auth_age: None,
@@ -818,7 +881,7 @@ async fn provider_errors_and_bad_tokens_fail_the_sign_in() {
     "wrong-nonce",
     Grant {
       subject: "member-subject",
-      email: "member@example.com",
+      email: "member@dopbase.com",
       email_verified: Some(true),
       nonce: "some-other-nonce".into(),
       auth_age: None,
@@ -847,7 +910,7 @@ async fn an_identity_links_to_one_account_only() {
     "/api/v1/auth/login",
     None,
     Some(
-      json!({"email":"member@example.com","password":"correct-horse-456","sessionKind":"browser"}),
+      json!({"email":"member@dopbase.com","password":"correct-horse-456","sessionKind":"browser"}),
     ),
   )
   .await;
@@ -880,7 +943,7 @@ async fn an_identity_links_to_one_account_only() {
     "taken",
     Grant {
       subject: "root-subject",
-      email: "member@example.com",
+      email: "member@dopbase.com",
       email_verified: Some(true),
       nonce: started.nonce.clone(),
       auth_age: None,
@@ -898,7 +961,7 @@ async fn an_identity_links_to_one_account_only() {
     "mine",
     Grant {
       subject: "member-subject",
-      email: "personal@example.org",
+      email: "personal@dopbase.com",
       email_verified: Some(false),
       nonce: started.nonce.clone(),
       auth_age: None,
@@ -918,7 +981,7 @@ async fn an_identity_links_to_one_account_only() {
   )
   .await;
   assert_eq!(status_after["data"]["linked"], true);
-  assert_eq!(status_after["data"]["emailAtLink"], "personal@example.org");
+  assert_eq!(status_after["data"]["emailAtLink"], "personal@dopbase.com");
 
   // Root deleting the provider removes every link.
   let (status, _, _) = send(
@@ -931,7 +994,7 @@ async fn an_identity_links_to_one_account_only() {
   )
   .await;
   assert_eq!(status, 200);
-  let linked: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM admin_identities")
+  let linked: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM user_identities")
     .fetch_one(fixture.state.db.pool())
     .await
     .unwrap();
@@ -949,6 +1012,7 @@ async fn single_sign_on_needs_an_https_public_url() {
       path: directory.path().join("master.key"),
     },
     public_url: "http://dopbase.example.test".into(),
+    features: app::services::features::Features::all(),
     ..app::config::ServerConfig::default()
   };
   let state = app::server::build_setup_state(config).await.unwrap();
@@ -1041,7 +1105,7 @@ async fn switching_providers_relinks_people_by_verified_email() {
     "google-member",
     Grant {
       subject: "google-subject",
-      email: "member@example.com",
+      email: "member@dopbase.com",
       email_verified: Some(true),
       nonce: started.nonce.clone(),
       auth_age: None,
@@ -1093,7 +1157,7 @@ async fn switching_providers_relinks_people_by_verified_email() {
     "keycloak-root",
     Grant {
       subject: "keycloak-root-subject",
-      email: "admin@example.com",
+      email: "admin@dopbase.com",
       email_verified: Some(true),
       nonce: started.nonce.clone(),
       auth_age: None,
@@ -1121,7 +1185,7 @@ async fn switching_providers_relinks_people_by_verified_email() {
     "keycloak-member",
     Grant {
       subject: "keycloak-subject",
-      email: "member@example.com",
+      email: "member@dopbase.com",
       email_verified: Some(true),
       nonce: started.nonce.clone(),
       auth_age: None,
@@ -1130,11 +1194,102 @@ async fn switching_providers_relinks_people_by_verified_email() {
   let handoff = callback(router, &started, "keycloak-member").await;
   let (status, body, _) = exchange(router, &started.binding, &handoff).await;
   assert_eq!(status, 200, "{body}");
-  assert_eq!(body["data"]["session"]["email"], "member@example.com");
+  assert_eq!(body["data"]["session"]["email"], "member@dopbase.com");
   let subjects: Vec<String> =
-    sqlx::query_scalar("SELECT subject FROM admin_identities ORDER BY subject")
+    sqlx::query_scalar("SELECT subject FROM user_identities ORDER BY subject")
       .fetch_all(fixture.state.db.pool())
       .await
       .unwrap();
   assert_eq!(subjects, ["keycloak-root-subject", "keycloak-subject"]);
+}
+
+#[tokio::test]
+async fn turning_sso_off_hides_it_and_brings_password_sign_in_back() {
+  use app::services::features::Features;
+  let fixture = sso_fixture().await;
+  let root = (&fixture.root_cookie, fixture.root_csrf.as_str());
+  let (status, body, _) = send(
+    &fixture.router,
+    "PUT",
+    "/api/v1/sso/provider/required",
+    &[root.0],
+    Some(root.1),
+    Some(json!({"required":true})),
+  )
+  .await;
+  assert_eq!(status, 200, "{body}");
+  let member_login = json!({
+    "email":"member@dopbase.com","password":"correct-horse-456","sessionKind":"cli"
+  });
+  let (status, _, _) = call(
+    &fixture.router,
+    "POST",
+    "/api/v1/auth/login",
+    None,
+    Some(member_login.clone()),
+  )
+  .await;
+  assert_eq!(status, 403, "required single sign-on blocks the password");
+
+  let off = with_features(
+    &fixture.state,
+    Features {
+      sso: false,
+      ..Features::all()
+    },
+  );
+  // The login page offers the password form and no provider button.
+  let (status, methods, _) = send(&off, "GET", "/api/v1/auth/methods", &[], None, None).await;
+  assert_eq!(status, 200);
+  assert_eq!(methods["data"]["sso"], Value::Null);
+  assert_eq!(methods["data"]["password"], true);
+  assert_eq!(methods["data"]["passwordForm"], true);
+  // A stored "required" no longer blocks password sign-in.
+  let (status, body, _) = call(&off, "POST", "/api/v1/auth/login", None, Some(member_login)).await;
+  assert_eq!(status, 200, "{body}");
+
+  // Every single sign-on route answers the same way, root included.
+  for (method, path) in [
+    ("GET", "/api/v1/auth/sso/start"),
+    ("GET", "/api/v1/sso/provider"),
+    ("PUT", "/api/v1/sso/provider/enabled"),
+    ("GET", "/api/v1/auth/sso/identity"),
+  ] {
+    let (status, body, _) = send(
+      &off,
+      method,
+      path,
+      &[root.0],
+      Some(root.1),
+      Some(json!({"enabled":false})),
+    )
+    .await;
+    assert_eq!(status, 403, "{method} {path}: {body}");
+    let message = body["error"]["FEATURE_DISABLED"].as_str();
+    assert!(
+      message.is_some_and(|message| message.contains("DOPBASE_SSO=true")),
+      "{method} {path}: {body}"
+    );
+  }
+  let (status, session, _) = send(&off, "GET", "/api/v1/auth/session", &[root.0], None, None).await;
+  assert_eq!(status, 200, "{session}");
+  assert_eq!(session["data"]["features"], json!(["rbac", "rbac.roles"]));
+  assert_eq!(session["data"]["ssoConfirmation"], Value::Null);
+  let capabilities = session["data"]["capabilities"].as_array().unwrap();
+  assert!(!capabilities.contains(&json!("sso.manage")), "{session}");
+  assert!(capabilities.contains(&json!("users.manage")), "{session}");
+
+  // Nothing was lost: turned back on, the provider is still set up.
+  let (status, body, _) = send(
+    &fixture.router,
+    "GET",
+    "/api/v1/sso/provider",
+    &[root.0],
+    None,
+    None,
+  )
+  .await;
+  assert_eq!(status, 200, "{body}");
+  assert_eq!(body["data"]["provider"]["enabled"], true);
+  assert_eq!(body["data"]["provider"]["requireSso"], true);
 }

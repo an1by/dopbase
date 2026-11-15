@@ -2,6 +2,8 @@ use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 use utoipa::ToSchema;
 
+use crate::services::authx::{Access, Level, Scope};
+
 #[derive(Clone, Debug)]
 pub enum AuthIdentity {
   Admin {
@@ -13,16 +15,32 @@ pub enum AuthIdentity {
     recent_auth_at: DateTime<Utc>,
     created_at: DateTime<Utc>,
     csrf_hash: Option<Vec<u8>>,
+    /// The account's capabilities and level ceiling, from its role.
+    access: Access,
   },
   Runner {
     token_id: String,
     environment_id: Option<String>,
     workspace_id: Option<String>,
   },
-  ServiceAccount {
-    service_account_id: String,
-    name: String,
+  /// A personal token. It acts for its account, within the token's scope
+  /// and level, and never holds the account's instance capabilities.
+  Token {
+    admin_id: String,
+    /// The account's email, or an AI agent's name.
+    email: String,
     token_id: String,
+    token_name: String,
+    /// The account's role, for its level ceiling.
+    access: Access,
+    scope: Scope,
+    level: Level,
+    /// The accountable owner of an AI agent account. The agent never
+    /// reaches more than its owner does.
+    owner_id: Option<String>,
+    /// An audit token reads the audit log as its account would, and no
+    /// project data.
+    audit: bool,
   },
 }
 
@@ -34,7 +52,7 @@ impl AuthIdentity {
     match self {
       Self::Admin { role, .. } => role.audit_actor_type(),
       Self::Runner { .. } => "runner",
-      Self::ServiceAccount { .. } => "service_account",
+      Self::Token { .. } => "personal_token",
     }
   }
 }
@@ -45,6 +63,7 @@ pub enum AdminRole {
   Root,
   Admin,
   Member,
+  #[serde(rename = "ai_agent")]
   AiAgent,
 }
 
@@ -67,15 +86,15 @@ impl AdminRole {
     }
   }
 
-  /// The role of a person who signs in, read from `admins.role`. AI agents
-  /// never sign in, so they and unknown values give `None`.
-  // TODO(rbac): maps the fixed role names. Load the account's roles from
-  // the role tables instead once roles are configurable.
-  pub fn parse_human(value: &str) -> Option<Self> {
+  /// The legacy label stored in `admins.role`. Authorization never reads
+  /// it: an account's role and capabilities come from the role tables, and
+  /// this label only keeps older API clients working.
+  pub fn parse(value: &str) -> Option<Self> {
     match value {
       "root" => Some(Self::Root),
       "admin" => Some(Self::Admin),
       "member" => Some(Self::Member),
+      "ai_agent" => Some(Self::AiAgent),
       _ => None,
     }
   }
@@ -95,4 +114,23 @@ impl SessionKind {
       Self::Cli => "cli",
     }
   }
+}
+
+/// SQL for an account's legacy role label (`root`, `admin`, `member` or
+/// `ai_agent`), read from `is_root`, the role id and the account's kind.
+/// The column it was stored in is gone; API responses still carry the
+/// label. Takes the alias of the `accounts` table in the query.
+#[macro_export]
+macro_rules! legacy_role_sql {
+  ($accounts:literal) => {
+    concat!(
+      "(CASE WHEN ",
+      $accounts,
+      ".is_root = 1 THEN 'root' WHEN ",
+      $accounts,
+      ".kind = 'agent' THEN 'ai_agent' WHEN ",
+      $accounts,
+      ".role_id = 'rol_admin' THEN 'admin' ELSE 'member' END)"
+    )
+  };
 }

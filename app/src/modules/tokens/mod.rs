@@ -8,8 +8,10 @@ pub mod controller;
 pub mod doc;
 pub mod error;
 pub mod model;
+pub mod personal;
 mod repository;
 pub mod service;
+pub mod workspace;
 pub fn routes() -> Router<AppState> {
   Router::new()
     .route(

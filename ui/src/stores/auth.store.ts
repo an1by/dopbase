@@ -1,0 +1,328 @@
+import { computed, ref } from "vue";
+import { defineStore } from "pinia";
+import { bootstrapAdmin, fetchBootstrapStatus } from "~/services/bootstrap.api";
+import * as authApi from "~/services/auth.api";
+import type { AccountRole, SessionKind } from "~/services/auth.api";
+import type { Capability, Feature, Level } from "~/services/access.api";
+import {
+  onSessionExpired,
+  onUnauthorized,
+  registerCsrfProvider,
+} from "~/services/http.client";
+import { clearQueryCache, refetchActiveQueries } from "~/queries/session-cache";
+
+export interface AdminSession {
+  adminId: string;
+  email: string;
+  sessionKind: SessionKind;
+  /** True when the password was confirmed within the last ten minutes. */
+  recentAuthentication: boolean;
+  role: AccountRole;
+  roleName?: string;
+  /** Unknown (undefined or empty) until the session is fetched. */
+  capabilities?: Capability[];
+  /** Features the server has on. Unknown (undefined) until fetched. */
+  features?: Feature[];
+  /** The most active people allowed, root and AI agents not counted. */
+  maxUsers?: number | null;
+  maxLevel?: Level;
+  tokenScope?: "none" | "data" | "audit";
+  lastLoginAt?: string | null;
+  /** Unknown (undefined) until the session is fetched from the server. */
+  hasPassword?: boolean;
+  passwordConfirmation?: boolean;
+  ssoConfirmation?: string | null;
+}
+
+export type BootstrapState = "unknown" | "setupRequired" | "ready";
+
+const CSRF_STORAGE_KEY = "dopbase.csrf";
+
+/**
+ * CSRF persistence: `sessionStorage` only. It is not secret material — the
+ * server stores its hash — and surviving a reload avoids dead sessions, but
+ * it must never leak into localStorage or cookies.
+ */
+function restoreCsrf(): string | null {
+  try {
+    return sessionStorage.getItem(CSRF_STORAGE_KEY);
+  } catch {
+    return null;
+  }
+}
+
+function persistCsrf(token: string | null): void {
+  try {
+    if (token) sessionStorage.setItem(CSRF_STORAGE_KEY, token);
+    else sessionStorage.removeItem(CSRF_STORAGE_KEY);
+  } catch {
+    // Storage is unavailable, so keep the token in memory only.
+  }
+}
+
+/**
+ * Single-admin session state for the whole Admin UI.
+ *
+ * Owns the browser session object, the CSRF token backing the
+ * `X-Dopbase-CSRF` header, and the public bootstrap state that decides
+ * whether new visitors land on `/setup` or `/login`. Registering the CSRF
+ * provider and session listeners here keeps `services/` store-free.
+ *
+ * Every session change goes through {@link startSession} or
+ * {@link endSession}, which empty the query cache, so no data read as one
+ * account is ever shown to the next.
+ */
+export const useAuthStore = defineStore("auth", () => {
+  const session = ref<AdminSession | null>(null);
+  const bootstrapState = ref<BootstrapState>("unknown");
+  const csrfToken = ref<string | null>(restoreCsrf());
+  const sessionExpired = ref(false);
+
+  registerCsrfProvider(() => csrfToken.value);
+
+  /** Takes on a new session, starting from an empty query cache. */
+  function startSession(next: AdminSession): void {
+    clearQueryCache();
+    session.value = next;
+  }
+
+  /** Drops the local session together with everything read as it. */
+  function endSession(): void {
+    clearQueryCache();
+    session.value = null;
+    setCsrf(null);
+  }
+
+  function expireSession(): void {
+    endSession();
+    sessionExpired.value = true;
+  }
+  onUnauthorized(expireSession);
+  onSessionExpired(expireSession);
+
+  const isAuthenticated = computed(() => session.value !== null);
+  const isRoot = computed(() => session.value?.role === "root");
+  const isAdmin = computed(
+    () => session.value?.role === "root" || session.value?.role === "admin",
+  );
+
+  /**
+   * Whether the account holds any of `capabilities`. Root holds them all
+   * until the session says otherwise: a feature the server has off takes
+   * its capabilities from root too.
+   */
+  function can(...capabilities: Capability[]): boolean {
+    const held = session.value?.capabilities;
+    if (isRoot.value && !held?.length) return true;
+    return capabilities.some((capability) => held?.includes(capability));
+  }
+
+  /**
+   * Whether the server has `feature` on. Unknown counts as on, so nothing
+   * flickers away before the session loads; the server refuses either way.
+   */
+  function hasFeature(feature: Feature): boolean {
+    const features = session.value?.features;
+    return features === undefined || features.includes(feature);
+  }
+
+  function setCsrf(token: string | null): void {
+    csrfToken.value = token;
+    persistCsrf(token);
+  }
+
+  /**
+   * Resolves the public bootstrap status once. Network failures leave the
+   * state `"unknown"` so guards can retry instead of hard-redirecting.
+   */
+  async function loadBootstrapStatus(): Promise<BootstrapState> {
+    try {
+      const status = await fetchBootstrapStatus();
+      bootstrapState.value =
+        status.state === "setupRequired" ? "setupRequired" : "ready";
+    } catch {
+      bootstrapState.value = "unknown";
+    }
+    return bootstrapState.value;
+  }
+
+  /** Claims an uninitialized server with the one-time setup token. */
+  async function bootstrap(request: {
+    setupToken: string;
+    email: string;
+    password: string;
+  }): Promise<void> {
+    const response = await bootstrapAdmin(request);
+    startSession({
+      adminId: response.adminId,
+      email: response.email,
+      sessionKind: "browser",
+      recentAuthentication: true,
+      role: response.role ?? "root",
+      lastLoginAt: response.lastLoginAt ?? null,
+    });
+    setCsrf(response.csrfToken);
+    sessionExpired.value = false;
+    bootstrapState.value = "ready";
+    // The setup response has no role name or capabilities; the session
+    // endpoint does.
+    await fetchSession().catch(() => undefined);
+  }
+
+  /** Signs in with email + password and stores the browser session. */
+  async function login(email: string, password: string): Promise<void> {
+    adopt(
+      await authApi.login({
+        email,
+        password,
+        sessionKind: "browser",
+      }),
+    );
+    // The login response has no capabilities; the session endpoint does.
+    await fetchSession().catch(() => undefined);
+  }
+
+  /**
+   * Finishes a single sign-on login by trading the handoff code for a
+   * browser session. Returns the path the sign-in started from, if any.
+   */
+  async function completeSso(code: string): Promise<string | null> {
+    const response = await authApi.exchangeSso(code);
+    adopt(response.session);
+    // The exchange does not say whether the account has a password; the
+    // session endpoint does, and the Account page needs it.
+    await fetchSession().catch(() => undefined);
+    return response.redirectTo;
+  }
+
+  /**
+   * Signs in with a launch passcode from `dopbase admin passcode`. Any
+   * account this browser was signed in as is replaced.
+   */
+  async function completeLaunch(
+    identity: string,
+    passcode: string,
+  ): Promise<void> {
+    adopt(await authApi.launch(identity, passcode));
+    // The launch response has no capabilities; the session endpoint does.
+    await fetchSession().catch(() => undefined);
+  }
+
+  function adopt(response: authApi.LoginResponse): void {
+    startSession({
+      adminId: response.adminId,
+      email: response.email,
+      sessionKind: response.sessionKind,
+      recentAuthentication: true,
+      role: response.role ?? "admin",
+      lastLoginAt: response.lastLoginAt ?? null,
+    });
+    if (response.csrfToken) setCsrf(response.csrfToken);
+    sessionExpired.value = false;
+  }
+
+  /**
+   * Re-checks the cookie session and throws ApiError(401) when absent.
+   * `quiet` skips the global "session expired" handling for that 401.
+   *
+   * The same account keeps its cached reads. A different one, such as after
+   * signing in as someone else in another tab, starts from an empty cache and
+   * refetches whatever is on screen.
+   */
+  async function fetchSession(
+    options: { quiet?: boolean } = {},
+  ): Promise<void> {
+    const response = await authApi.fetchSession(
+      options.quiet ? { notifyAuthEvents: false } : {},
+    );
+    const next: AdminSession = {
+      adminId: response.adminId,
+      email: response.email,
+      sessionKind: response.sessionKind,
+      recentAuthentication: response.recentAuthentication,
+      role: response.role ?? "admin",
+      roleName: response.roleName,
+      capabilities: response.capabilities,
+      features: response.features,
+      maxUsers: response.maxUsers ?? null,
+      maxLevel: response.maxLevel,
+      tokenScope: response.tokenScope,
+      lastLoginAt: response.lastLoginAt ?? null,
+      hasPassword: response.hasPassword,
+      passwordConfirmation: response.passwordConfirmation,
+      ssoConfirmation: response.ssoConfirmation,
+    };
+    const previous = session.value;
+    if (previous?.adminId === next.adminId) {
+      session.value = next;
+    } else {
+      startSession(next);
+      if (previous) void refetchActiveQueries();
+    }
+    // A tab opened after sign-in, such as a CLI approval link, has no token
+    // yet, and one left from an earlier session no longer matches.
+    if (response.csrfToken) setCsrf(response.csrfToken);
+    sessionExpired.value = false;
+  }
+
+  /** Revokes the session server-side and clears all local state. */
+  async function logout(): Promise<void> {
+    try {
+      await authApi.logout();
+    } finally {
+      endSession();
+      sessionExpired.value = false;
+    }
+  }
+
+  function clearLocalSession(): void {
+    endSession();
+    bootstrapState.value = "unknown";
+    sessionExpired.value = false;
+  }
+
+  /** Confirms the password, enabling reveal/export for ten minutes. */
+  async function reauthenticate(password: string): Promise<void> {
+    await authApi.reauthenticate(password);
+    if (session.value) {
+      session.value = { ...session.value, recentAuthentication: true };
+    }
+  }
+
+  /**
+   * Rotates the password. The server revokes every human session, so the
+   * local session and CSRF token are cleared and the admin must sign in
+   * again.
+   */
+  async function changePassword(
+    currentPassword: string,
+    newPassword: string,
+  ): Promise<void> {
+    await authApi.changePassword(currentPassword, newPassword);
+    endSession();
+    sessionExpired.value = false;
+  }
+
+  return {
+    session,
+    bootstrapState,
+    csrfToken,
+    sessionExpired,
+    isAuthenticated,
+    isRoot,
+    isAdmin,
+    can,
+    hasFeature,
+    setCsrf,
+    loadBootstrapStatus,
+    completeSso,
+    completeLaunch,
+    bootstrap,
+    login,
+    fetchSession,
+    logout,
+    clearLocalSession,
+    reauthenticate,
+    changePassword,
+  };
+});
