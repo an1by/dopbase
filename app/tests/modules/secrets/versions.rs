@@ -1,4 +1,6 @@
-use super::secrets_import::{browser_call, browser_login, expire_confirmation};
+use super::secrets_import::{
+  browser_call, browser_login, expire_confirmation, metadata_agent_token,
+};
 use super::*;
 
 async fn put_secret(
@@ -115,7 +117,7 @@ async fn every_write_records_a_version_with_its_change_and_actor() {
   assert_eq!(changes, ["imported", "updated", "created"]);
   for item in page["items"].as_array().unwrap() {
     assert_eq!(item["actorType"], "root");
-    assert_eq!(item["actorLabel"], "admin@example.com");
+    assert_eq!(item["actorLabel"], "admin@dopbase.com");
     assert_eq!(item["restorable"], true);
     assert_eq!(item["current"], item["version"] == 3);
     assert!(item.get("value").is_none(), "history never returns values");
@@ -447,26 +449,9 @@ async fn rollback_and_version_reveal_need_a_confirmed_project_manager() {
     .or_else(|| runner["data"]["token"]["plaintextToken"].as_str())
     .map(str::to_owned)
     .unwrap_or_else(|| panic!("runner token: {runner}"));
-  let (status, agent) = browser_call(
-    &router,
-    "/api/v1/service-accounts",
-    &cookie,
-    Some(&csrf),
-    json!({"name":"history-agent"}),
-  )
-  .await;
-  assert_eq!(status, 201, "{agent}");
-  let agent_id = agent["data"]["id"].as_str().unwrap();
-  let (status, agent_token) = browser_call(
-    &router,
-    &format!("/api/v1/service-accounts/{agent_id}/tokens"),
-    &cookie,
-    Some(&csrf),
-    json!({"name":"default"}),
-  )
-  .await;
-  assert_eq!(status, 201, "{agent_token}");
-  let agent_token = agent_token["data"]["plaintextToken"].as_str().unwrap();
+  let agent_token =
+    metadata_agent_token(&router, &cookie, &csrf, "history-agent", "concurrency-test").await;
+  let agent_token = agent_token.as_str();
 
   history(&router, agent_token, &id, "API_KEY", "").await;
   for credential in [runner.as_str(), agent_token] {

@@ -17,7 +17,6 @@ env:
   BUN_VERSION: "1.4.0"
   CARGO_TERM_COLOR: always
   RUST_VERSION: "1.98.0"
-  SMOKE_PORT: "18376"
 
 jobs:
   prepare:
@@ -33,13 +32,12 @@ jobs:
           fetch-depth: 0
           persist-credentials: false
 
+      # Only for `cargo metadata` in validate-source.sh. The unit tests, lints
+      # and format checks ran in CI on the release pull request.
       - name: Install Rust
         shell: bash
         run: |
-          rustup toolchain install "${RUST_VERSION}" \
-            --profile minimal \
-            --component rustfmt \
-            --component clippy
+          rustup toolchain install "${RUST_VERSION}" --profile minimal
           rustup default "${RUST_VERSION}"
 
       - name: Validate release version
@@ -56,6 +54,19 @@ jobs:
           bash scripts/release/validate-source.sh "$version"
           echo "version=$version" >> "$GITHUB_OUTPUT"
 
+      # main only moves through pull requests that passed CI, so a tag on any
+      # other commit would publish code that was never tested.
+      - name: Check the tag is on main
+        if: github.event_name == 'push'
+        shell: bash
+        run: |
+          set -euo pipefail
+          git fetch --quiet origin "+refs/heads/main:refs/remotes/origin/main"
+          if ! git merge-base --is-ancestor "$GITHUB_SHA" origin/main; then
+            echo "Tag $GITHUB_REF_NAME is not a commit on main" >&2
+            exit 1
+          fi
+
       - name: Install Bun
         uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2.2.0
         with:
@@ -68,43 +79,17 @@ jobs:
           key: bun-${{ runner.os }}-${{ env.BUN_VERSION }}-${{ hashFiles('bun.lock') }}
           restore-keys: bun-${{ runner.os }}-${{ env.BUN_VERSION }}-
 
-      - name: Cache Rust dependencies
-        uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
-        with:
-          workspaces: app -> target
-          key: prepare
-          cache-workspace-crates: false
-
-      - name: Check release scripts
-        run: |
-          sudo apt-get update
-          sudo apt-get install --yes shellcheck
-          curl --fail --silent --show-error --location https://raw.githubusercontent.com/rhysd/actionlint/914e7df21a07ef503a81201c76d2b11c789d3fca/scripts/download-actionlint.bash -o "$RUNNER_TEMP/download-actionlint.bash"
-          bash "$RUNNER_TEMP/download-actionlint.bash" 1.7.12 "$RUNNER_TEMP"
-          "$RUNNER_TEMP/actionlint" .github/workflows/release.yml
-          shellcheck scripts/release/*.sh
-
       - name: Install frontend dependencies
         run: bun install --frozen-lockfile
 
-      - name: Test and build frontend
-        run: |
-          bun run test:github
-          bun run test:ui
-          bun run test:docs
-          bun run build:ui
-
-      - name: Verify Rust application
-        run: |
-          bun run format:app:check
-          bun run lint:app
-          bun run test:app
+      - name: Build Admin UI
+        run: bun run build:ui
 
       - name: Upload Admin UI
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
           name: release-ui
-          path: dist/
+          path: ui/dist/
           if-no-files-found: error
           retention-days: 1
 
@@ -147,7 +132,9 @@ jobs:
             target: aarch64-unknown-linux-musl
             asset_os: linux
             asset_arch: arm64
-          - runner: macos-15-intel
+          # Cross-compiled on Apple Silicon, which builds about three times
+          # faster than the Intel runner. The binary then runs under Rosetta.
+          - runner: macos-15
             target: x86_64-apple-darwin
             asset_os: darwin
             asset_arch: amd64
@@ -174,13 +161,8 @@ jobs:
           rustup toolchain install "${RUST_VERSION}" --profile minimal --target "${{ matrix.target }}"
           rustup default "${RUST_VERSION}"
 
-      - name: Cache Rust dependencies
-        uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
-        with:
-          workspaces: app -> target
-          key: release-${{ matrix.target }}
-          cache-workspace-crates: false
-
+      # No Cargo cache here: a tag run can only read caches saved on its own
+      # tag or on main, and nothing saves a release build there.
       - name: Install musl compiler
         if: matrix.asset_os == 'linux'
         run: |
@@ -191,15 +173,24 @@ jobs:
         uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
         with:
           name: release-ui
-          path: dist/
+          path: ui/dist/
 
       - name: Build release binary
         shell: bash
         run: bash scripts/release/build-binary.sh "$RELEASE_TARGET"
 
-      - name: Smoke-test release binary
+      # Only linux amd64 runs the e2e suites, so check that every binary at
+      # least starts and reports the release version. darwin amd64 runs under
+      # Rosetta here; the others run on their own platform.
+      - name: Check the binary runs
         shell: bash
-        run: bash scripts/release/smoke-test.sh "app/target/$RELEASE_TARGET/release/dopbase" "$RELEASE_VERSION"
+        run: |
+          set -euo pipefail
+          actual=$("app/target/$RELEASE_TARGET/release/dopbase" --version)
+          if [[ "$actual" != "v$RELEASE_VERSION" ]]; then
+            echo "Expected v$RELEASE_VERSION, got: $actual" >&2
+            exit 1
+          fi
 
       - name: Package release archive
         shell: bash
@@ -214,9 +205,65 @@ jobs:
           if-no-files-found: error
           retention-days: 1
 
+  e2e:
+    name: E2E on the linux amd64 binary
+    needs: [prepare, build]
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    env:
+      CI: "1"
+    steps:
+      - name: Check out release source
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Install Bun
+        uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2.2.0
+        with:
+          bun-version: ${{ env.BUN_VERSION }}
+
+      - name: Download linux amd64 archive
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          name: release-linux-amd64
+          path: release/
+
+      - name: Extract release binary
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p dist
+          tar -xzf release/dopbase_*_linux_amd64.tar.gz -C dist dopbase
+          dist/dopbase --version
+
+      - name: Install e2e dependencies
+        run: |
+          bun install --frozen-lockfile
+          bun run --cwd e2e install:browsers --with-deps
+
+      # The release binary under test, not a fresh build. Unit tests ran in CI
+      # on the release pull request.
+      - name: Run e2e suites
+        env:
+          GIT_BRANCH: ${{ github.ref_name }}
+          GIT_COMMIT: ${{ github.sha }}
+        run: DOPBASE_BIN="$PWD/dist/dopbase" bun run test:e2e --skip-build --agent
+
+      # The HTML report plus traces, screenshots and videos of failed tests.
+      - name: Upload e2e report
+        if: failure()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: e2e-report
+          path: .e2e/
+          include-hidden-files: true
+          if-no-files-found: ignore
+          retention-days: 14
+
   verify:
     name: Verify release assets
-    needs: [prepare, build]
+    needs: [prepare, build, e2e]
     runs-on: ubuntu-24.04
     timeout-minutes: 10
     steps:

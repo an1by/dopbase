@@ -9,9 +9,8 @@ import { documentationVersion } from "../../version";
       local secrets workflow
     </div>
     <pre><span class="prompt">$</span> dopbase server start
-<span class="success">Dopbase</span>
-Secure, Simple and Private
-Version {{ documentationVersion }}
+<span class="success">Dopbase {{ documentationVersion }}</span>
+Keep control of what they can access.
 
 <span class="quiet">Admin UI:</span>   http://localhost:8840
 <span class="quiet">API:</span>        http://localhost:8840/api/v1

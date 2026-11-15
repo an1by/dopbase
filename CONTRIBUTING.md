@@ -28,11 +28,18 @@ there.
 
 ## Repository layout
 
-| Path    | Purpose                                           |
-| ------- | ------------------------------------------------- |
-| `app/`  | Rust service, command-line application, and tests |
-| `src/`  | Vue application, frontend tests, and shared setup |
-| `docs/` | Public VitePress documentation                    |
+| Path       | Purpose                                           |
+| ---------- | ------------------------------------------------- |
+| `app/`     | Rust service, command-line application, and tests |
+| `ui/`      | Vue application, frontend tests, and shared setup |
+| `docs/`    | Public VitePress documentation                    |
+| `e2e/`     | End-to-end tests that drive the release binary    |
+| `config/`  | Build settings shared by `ui/` and `docs/`        |
+| `scripts/` | Development, release, and GitHub template scripts |
+
+`ui/`, `docs/`, and `e2e/` are Bun workspaces. Each declares its own packages
+in its `package.json`, and `bun install` at the root installs all of them. Run
+every command from the root; the root scripts hand off to the right folder.
 
 The Rust service and Vue application are still scaffolding. Product behavior should stay consistent with the public documentation, but implementation findings may require the documentation to change.
 
@@ -42,6 +49,7 @@ You need:
 
 - [Bun](https://bun.sh/) for the frontend and documentation
 - A Rust toolchain with Rust 2024 edition support
+- [cargo-nextest](https://nexte.st/) if you use `bun run test:app:fast`
 
 Install the JavaScript dependencies:
 
@@ -69,10 +77,10 @@ when you need only one part of the repository.
 Keep each pull request focused on one problem. Match the surrounding code, add tests where behavior changes, and update public documentation when a user-facing interface changes.
 
 GitHub fills new pull requests with the repository template. Complete every
-section and check each checklist item. The template check must pass before the
-pull request can merge.
+section and check each checklist item. The template check runs on every pull
+request once it leaves draft, and must pass before the pull request can merge.
 
-Do not commit generated output from `dist/`, `docs/.vitepress/dist/`, coverage reports, editor settings, local databases, credentials, or `.env` files.
+Do not commit generated output from `ui/dist/`, `docs/.vitepress/dist/`, `.e2e/`, coverage reports, editor settings, local databases, credentials, or `.env` files.
 
 Use commit messages that explain the change in plain language. A pull request should explain:
 
@@ -119,9 +127,9 @@ Use a lowercase `snake_case` name, keep one logical change per pair, and make
 the down file reverse exactly that change.
 
 Do not edit or rename a migration after it ships in a release: sqlx checksums
-applied migrations and refuses to start when one changes. Databases created by
-0.1.9 or earlier are moved onto the timestamped versions automatically at
-startup; see [`app/migrations/README.md`](./app/migrations/README.md).
+applied migrations and refuses to start when one changes. The 0.1.x migrations
+live in `app/migrations-legacy/` and only run when a 0.1.x backup is restored;
+see [Upgrade to 0.2.0](./docs/self-hosting/upgrade-to-0-2.md).
 
 ### Add a single sign-on preset
 
@@ -164,22 +172,26 @@ was removed from the file keeps working and behaves like `generic`. Run
 `cargo test sso_presets` from `app/` to check the file, then rebuild: the file
 is compiled into the binary.
 
-### Mark code that RBAC will replace
+### Check capabilities and levels, never role names
 
-Dopbase has four fixed roles: root, admin, member, and ai_agent. Role-based
-access control (RBAC) will replace them. Until then, mark code that hard-codes a
-role with a `TODO(rbac):` comment. That covers role names, labels for roles,
-and rules about which role may do something.
+Roles are data, so code never asks which role an account has. Ask what it may
+do instead, through `app/src/services/authx.rs`:
+
+- An instance action, such as managing people or reading the audit log,
+  checks a capability with `require_capability` or `Access::has`.
+- An action on a project or environment checks the caller's level with
+  `projects::service::authorize` or `environments::service::authorize`. They
+  answer 404 for anything the caller can't see, so its existence doesn't leak.
 
 ```rust
-// TODO(rbac): only the fixed admin and member roles link by email. Decide by
-// permission once roles are configurable.
+let (admin_id, email) = require_account(identity)?;
+let env = environments::service::authorize(state, identity, id, Level::Write).await?;
 ```
 
-Use the same marker in Rust, TypeScript, SQL, and Vue templates
-(`<!-- TODO(rbac): ... -->`). Put it directly above the code and say what is
-hard-coded and what should replace it. `rg "TODO\(rbac\)"` lists every place
-the RBAC work has to touch, so keep other planned work under a different tag.
+A new kind of power is a new `Capability` variant, given to the built-in roles
+that should have it in a migration. If only root should ever hold it, add it to
+`Capability::ROOT_ONLY`. In the Admin UI, gate on `auth.can(...)` and the
+`level` that project and environment responses carry, never on `role`.
 
 ## Check your work
 
@@ -193,8 +205,10 @@ bun run test
 bun run build
 ```
 
-`test` covers the Admin UI and Rust app. Documentation, installer, and GitHub
-template tests have separate commands.
+`test` runs every layer: format, lint, typecheck, unit tests, then end-to-end.
+`test:unit` covers only the Admin UI, Rust app and docs. Installer and GitHub
+template tests have separate commands. `bun run test:e2e:help` lists every
+test script with what it does.
 
 Frontend:
 
@@ -220,20 +234,87 @@ bun run typecheck:app
 bun run test:app
 ```
 
-Changes that affect migrations or multiple backend modules must also pass the
-isolated Docker verification:
+`bun run test:app:fast` runs the same tests with cargo-nextest, which runs the
+tests from all test binaries in parallel. Install it first:
 
 ```bash
-docker build -f app/Dockerfile.test -t dopbase-backend-test .
-docker run --rm --name dopbase-backend-test-run dopbase-backend-test
-docker image rm dopbase-backend-test
-docker image prune -f --filter label=dopbase.test=true
+cargo install cargo-nextest --locked
 ```
 
-The container builds the real Vue Admin UI, embeds it in the release binary,
-then launches that binary from a clean temporary directory. It verifies the UI,
-health API, OpenAPI document, Swagger UI, and default storage layout without
-mounting or modifying a host database.
+Unit test coverage:
+
+```bash
+bun run coverage       # both, UI first
+bun run coverage:ui    # Vitest with V8 coverage
+bun run coverage:app   # cargo-llvm-cov
+```
+
+Each command prints a summary in the terminal. The UI writes an HTML report
+to `ui/coverage/index.html`, and the Rust app writes one to
+`app/target/llvm-cov/html/index.html`. The Rust command needs
+`cargo-llvm-cov` and the `llvm-tools-preview` component:
+
+```bash
+rustup component add llvm-tools-preview
+cargo install cargo-llvm-cov --locked
+```
+
+End-to-end:
+
+```bash
+bun run --cwd e2e install:browsers
+bun run typecheck:e2e
+bun run test:e2e
+```
+
+The e2e suites drive the release binary the way people use Dopbase: the CLI,
+the HTTP API, the Admin UI in Chromium, and journeys that cross all three.
+Every CLI command, API route and UI page has a test, so they catch changes
+that break something you didn't touch. Each spec file starts its own server on
+a temporary data directory and claims root with the setup token, so a run
+never touches your development data.
+
+`test:e2e` rebuilds the release binary first when `app/src`, `app/migrations`
+or `ui/src` changed, runs the suites, checks coverage and writes an HTML
+report. Useful variations:
+
+```bash
+bun run test:e2e --agent           # short summary: one line per suite, then each failure
+bun run test:e2e:api               # one suite: test:e2e:cli, :api, :ui or :journeys
+bun run test:e2e --grep @secrets   # one area, by tag
+bun run test:e2e:report            # open the last report
+bun run test:e2e:sandbox           # a server with sample data, to test by hand
+bun run test:e2e --keep            # keep a failed test's server to look around
+bun run clean:test                 # delete test output and leftover servers
+```
+
+Set `DOPBASE_BIN` to test another build, or pass `--skip-build`. Everything a
+run writes goes to `.e2e/`, which git ignores; the report is
+`.e2e/report/index.html`. A new CLI command, API route or UI page needs an e2e
+test in its suite, or an entry with the reason in `e2e/coverage/skips/`. See
+`e2e/README.md` for how to write one.
+
+Before a large change, or when your local state is in doubt, run every layer:
+
+```bash
+bun run test              # format, lint, typecheck, UI and Rust unit tests, then e2e
+bun run test:e2e:docker   # the same, inside a clean Docker image
+```
+
+`test` stops at the first failing layer. `test:e2e:docker` builds
+`e2e/docker/Dockerfile` and keeps Cargo's cache in Docker volumes, so only the
+first run builds everything.
+
+On GitHub, the `CI` workflow runs on every pull request, including one stacked
+on another feature branch. Prettier runs every time. The Rust, Admin UI and documentation
+checks run when their files changed, and a change under `ui/` also runs the
+Rust checks because the binary embeds the Admin UI. A release pull request
+into `main` then runs the e2e suites, and a release tag runs them again
+against the linux amd64 release binary before publishing.
+
+When the branch under a stacked pull request merges and GitHub moves the pull
+request onto the release branch, `CI` doesn't run again by itself. Push a
+commit or close and reopen the pull request to get a fresh `CI passed` result.
 
 Documentation:
 
@@ -246,7 +327,7 @@ Repository utilities:
 
 ```bash
 bun run test:github
-actionlint .github/workflows/release.yml
+actionlint
 shellcheck scripts/release/*.sh
 ```
 
@@ -276,8 +357,11 @@ git push origin "$version"
 ```
 
 Pushing the tag starts the GitHub release workflow. It verifies that the tag
-matches both package versions, builds the Linux and macOS tar.gz archives, creates
-`checksums.txt`, and publishes the release only after all four targets succeed.
+is a commit on `main` and matches both package versions, builds the Linux and
+macOS tar.gz archives, runs the e2e suites against the linux amd64 binary,
+creates `checksums.txt`, and publishes the release only after all four targets
+succeed. It does not repeat the unit tests, which ran in `CI` on the release
+pull request.
 Release scripts live in `scripts/release/`.
 
 A manual Release workflow run executes all checks and builds without publishing.

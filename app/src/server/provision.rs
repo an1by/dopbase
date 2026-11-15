@@ -106,7 +106,7 @@ pub(crate) async fn commit_root(
   db: &DbClient,
   credentials: &service::RootCredentials,
 ) -> Result<String> {
-  let mut tx = db.pool().begin().await?;
+  let mut tx = crate::services::change::Change::begin(db.pool()).await?;
   let admin_id = service::create_root(&mut tx, credentials, &chrono::Utc::now())
     .await
     .map_err(cli_error)?;

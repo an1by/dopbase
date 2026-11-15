@@ -27,8 +27,23 @@ commands. CLI changes appear in the UI.
 | [Import and export](./import-export)                 | Move secrets between a `.env` file and an environment                            |
 | [Backups and restoration](./backups)                 | Create and restore full encrypted server snapshots (`.dop` archives)             |
 | [Audit and instance status](./audit-instance)        | Read the audit log and check server health                                       |
-| [Users and AI agents](./users)                       | Manage human roles and create AI service accounts                                |
+| [Project access](./project-access)                   | Decide who reaches a project and protect production                              |
+| [Users](./users)                                     | Add people, give them a role, and disable or delete accounts                     |
+| [AI agents](./ai-agents)                             | Add accounts for bots and CI, and create or replace their token                  |
+| [Groups](./groups)                                   | Give a team access to projects at once                                           |
+| [Roles](./roles)                                     | Create custom roles, as root                                                     |
 | [Account settings](./account)                        | Manage profile details, update passwords, and view session status                |
+
+## Finding your way around
+
+The sidebar groups pages into **Workspace** (Projects, Audit log), **Access**
+(Users, AI agents, Groups, Roles) and **Instance** (Status, Backups, Single
+sign-on). It only lists pages your role can open, and a group with none of
+them doesn't show. If you follow a link to a page your role can't open, the
+console says which capability it needs instead of sending you somewhere else.
+
+Your email and role name sit at the bottom of the sidebar. Click them for
+Account, Personal tokens, the docs and Sign out.
 
 ## On phones and tablets
 
@@ -40,11 +55,11 @@ buttons stay in view.
 
 ## Who can sign in
 
-Version {{version}} supports root, admin, and member sign-in. Setup creates the
-protected root. Root and admin create additional users from Users.
-AI agents authenticate through service-account tokens. Applications use
-environment-scoped runner tokens to retrieve values. See
-[identity and tokens](/reference/identity) for the permission matrix.
+Setup creates the protected root account. People with `users.manage`, such as
+admins, add other people from **Users** and AI agents from **AI agents**, and each person sees
+only the projects and pages their role and grants allow. AI agents use personal
+tokens and never sign in. Applications use environment-scoped runner tokens.
+See [identity and access](/reference/identity).
 
 ## Where the UI fits
 

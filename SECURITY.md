@@ -4,9 +4,18 @@ Dopbase handles application credentials, so a vulnerability can affect systems b
 
 ## Supported versions
 
-Dopbase has no stable release and is not supported for production use. Security reports against the current source are still welcome, but the project does not yet provide release support periods, backports, or fixed response times.
+Dopbase is before 1.0. Security fixes go into the latest release line only.
 
-This section will be replaced with a version support table when supported releases exist.
+| Version           | Security fixes |
+| ----------------- | -------------- |
+| 0.2.x             | Yes            |
+| 0.1.x and earlier | No             |
+
+Fixes are not backported to older lines, and there are no fixed response times yet. Reports against the current `main` branch are welcome too.
+
+A minor release can still change the storage format, the API, or the backup format, so read the [changelog](./CHANGELOG.md) before you upgrade. 0.1.x has no in-place upgrade: follow [Upgrade to 0.2.0](./docs/self-hosting/upgrade-to-0-2.md) to move to a supported version.
+
+If you self-host Dopbase, you are responsible for TLS, network access, backups, master-key storage, monitoring, and upgrades.
 
 ## Report a vulnerability
 

@@ -1,63 +1,81 @@
 use super::{model::*, repository};
 use crate::modules::common;
+use crate::utils::time::Stamp;
 use crate::{
   constants::{
     errors::TOKEN_SCOPE_INVALID,
+    limits::{RUNNER_TOKEN_DEFAULT_DAYS, RUNNER_TOKEN_MAX_DAYS},
     tokens::{RUNNER_TOKEN_ID_PREFIX, RUNNER_TOKEN_PREFIX},
   },
-  extractors::require_project_manager,
+  extractors::{require_person, require_recent_auth},
   http::HttpError,
   models::AuthIdentity,
-  services::token,
+  modules::environments::service::authorize,
+  services::{authx::Level, token},
   state::AppState,
 };
-use chrono::Utc;
+use chrono::{Duration, Utc};
 pub async fn list(
   state: &AppState,
   identity: &AuthIdentity,
   id: &str,
 ) -> Result<Vec<TokenMetadata>, HttpError> {
-  require_project_manager(identity)?;
-  crate::modules::environments::service::show(state, id).await?;
+  require_person(identity)?;
+  authorize(state, identity, id, Level::Manage).await?;
   Ok(repository::list(state.db.pool(), id).await?)
 }
+/// How long a new runner token lives: 90 days unless asked otherwise, and
+/// never longer than a year.
+fn lifetime(expires_in: Option<&str>) -> Result<Duration, HttpError> {
+  let Some(value) = expires_in else {
+    return Ok(Duration::days(RUNNER_TOKEN_DEFAULT_DAYS));
+  };
+  let invalid = |message: &str| HttpError::bad_request("EXPIRY_INVALID", message);
+  let duration = token::expiry_duration(value)
+    .map_err(invalid)?
+    .ok_or_else(|| invalid("Runner tokens always expire. Choose a number of hours or days."))?;
+  if duration > Duration::days(RUNNER_TOKEN_MAX_DAYS) {
+    return Err(invalid(&format!(
+      "Runner tokens last at most {RUNNER_TOKEN_MAX_DAYS} days."
+    )));
+  }
+  Ok(duration)
+}
+
 pub async fn create(
   state: &AppState,
   identity: &AuthIdentity,
   id: &str,
   request: CreateTokenRequest,
 ) -> Result<CreatedTokenResponse, HttpError> {
-  let (admin_id, email) = require_project_manager(identity)?;
+  let (admin_id, email) = require_person(identity)?;
   if request.role != "runner" {
     return Err(HttpError::validation(std::collections::BTreeMap::from([(
       TOKEN_SCOPE_INVALID.into(),
       "Only the runner role is supported by this token endpoint.".into(),
     )])));
   }
+  // Same rule as project and environment names.
   let name = request.name.trim();
-  if name.is_empty() || name.len() > 64 {
-    return Err(HttpError::validation(std::collections::BTreeMap::from([(
-      "TOKEN_NAME_INVALID".into(),
-      "Token names must contain between 1 and 64 characters.".into(),
-    )])));
-  }
-  let env = crate::modules::environments::service::show(state, id).await?;
+  common::validate_slug(name, "TOKEN_NAME_INVALID", "Token name")?;
+  let env = authorize(state, identity, id, Level::Manage).await?;
+  // A runner token reads every secret in the environment, so a stolen CLI
+  // session alone can't mint one.
+  require_recent_auth(identity)?;
   let now = Utc::now();
-  let expires_at = request.expires_in.as_deref().unwrap_or("never");
-  let expires_at = token::expiry_duration(expires_at)
-    .map_err(|message| HttpError::bad_request("EXPIRY_INVALID", message))?
-    .map(|duration| (now + duration).to_rfc3339());
+  let expires_at = Some((now + lifetime(request.expires_in.as_deref())?).stamp());
   let token_id = token::public_id(RUNNER_TOKEN_ID_PREFIX);
   let raw = token::generate(RUNNER_TOKEN_PREFIX).map_err(|_| HttpError::internal())?;
-  let now = now.to_rfc3339();
-  let mut tx = state.db.pool().begin().await?;
+  let now = now.stamp();
+  let mut tx = crate::services::change::Change::begin(state.db.pool()).await?;
   let result = sqlx::query(
-    "INSERT INTO runner_tokens(id,environment_id,name,token_hash,created_at,expires_at)VALUES(?,?,?,?,?,?)",
+    "INSERT INTO runner_tokens(id, environment_id, name, token_hash, created_by, created_at, expires_at) VALUES($1, $2, $3, $4, $5, $6, $7)",
   )
   .bind(&token_id)
   .bind(id)
   .bind(name)
   .bind(token::hash(&raw))
+  .bind(admin_id)
   .bind(&now)
   .bind(&expires_at)
   .execute(&mut *tx)
@@ -76,7 +94,7 @@ pub async fn create(
     identity.audit_actor_type(),
     Some(admin_id),
     Some(email),
-    "token.created",
+    crate::services::events::Action::TokenCreated,
     Some(&env.project_id),
     Some(id),
     Some("token"),
@@ -103,21 +121,31 @@ pub async fn revoke(
   identity: &AuthIdentity,
   id: &str,
 ) -> Result<TokenMetadata, HttpError> {
-  let (admin_id, email) = require_project_manager(identity)?;
+  let (admin_id, email) = require_person(identity)?;
   let token = repository::find(state.db.pool(), id)
     .await?
     .ok_or_else(|| HttpError::not_found("TOKEN_NOT_FOUND", "The requested token was not found."))?;
+  let env = authorize(state, identity, &token.environment_id, Level::Manage)
+    .await
+    .map_err(|error| {
+      // A token in an environment the caller cannot see does not exist
+      // for them either.
+      if error.status == axum::http::StatusCode::NOT_FOUND {
+        HttpError::not_found("TOKEN_NOT_FOUND", "The requested token was not found.")
+      } else {
+        error
+      }
+    })?;
   if token.revoked_at.is_some() {
     return Err(HttpError::conflict(
       "TOKEN_REVOKED",
       "The token has already been revoked.",
     ));
   }
-  let env = crate::modules::environments::service::show(state, &token.environment_id).await?;
-  let now = Utc::now().to_rfc3339();
-  let mut tx = state.db.pool().begin_with("BEGIN IMMEDIATE").await?;
+  let now = Utc::now().stamp();
+  let mut tx = crate::services::change::Change::begin(state.db.pool()).await?;
   let updated =
-    sqlx::query("UPDATE runner_tokens SET revoked_at=? WHERE id=? AND revoked_at IS NULL")
+    sqlx::query("UPDATE runner_tokens SET revoked_at=$1 WHERE id=$2 AND revoked_at IS NULL")
       .bind(&now)
       .bind(id)
       .execute(&mut *tx)
@@ -133,7 +161,7 @@ pub async fn revoke(
     identity.audit_actor_type(),
     Some(admin_id),
     Some(email),
-    "token.revoked",
+    crate::services::events::Action::TokenRevoked,
     Some(&env.project_id),
     Some(&env.id),
     Some("token"),

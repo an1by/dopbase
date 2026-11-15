@@ -10,6 +10,8 @@ pub mod controller;
 pub mod doc;
 pub mod model;
 pub mod service;
+pub mod snapshot;
+pub mod upgrade;
 
 pub fn routes() -> Router<AppState> {
   Router::new()

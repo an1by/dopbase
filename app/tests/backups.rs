@@ -21,6 +21,7 @@ async fn test_app() -> (TempDir, app::state::AppState, Router) {
       path: directory.path().join("master.key"),
     },
     docs_enabled: true,
+    features: app::services::features::Features::all(),
     ..ServerConfig::default()
   };
   let state = server::build_setup_state(config).await.unwrap();
@@ -83,7 +84,7 @@ async fn admin_setup() -> (TempDir, app::state::AppState, Router, String) {
     "/api/v1/bootstrap/admin",
     None,
     Some(
-      json!({"setupToken": setup, "email": "admin@example.com", "password": "correct-horse-123"}),
+      json!({"setupToken": setup, "email": "admin@dopbase.com", "password": "correct-horse-123"}),
     ),
   )
   .await;
@@ -94,7 +95,7 @@ async fn admin_setup() -> (TempDir, app::state::AppState, Router, String) {
     "/api/v1/auth/login",
     None,
     Some(
-      json!({"email": "admin@example.com", "password": "correct-horse-123", "sessionKind": "cli"}),
+      json!({"email": "admin@dopbase.com", "password": "correct-horse-123", "sessionKind": "cli"}),
     ),
   )
   .await;
@@ -140,6 +141,24 @@ async fn backup_and_restore_lifecycle() {
     .await;
     assert_eq!(status, 200);
   }
+
+  // Groups and grants are part of the snapshot.
+  for statement in [
+    "INSERT INTO accounts(id,kind,role_id,created_at,updated_at) VALUES('usr_teammate','user','rol_member','t','t')",
+    "INSERT INTO users(id,email) VALUES('usr_teammate','teammate@dopbase.com')",
+    "INSERT INTO groups(id,name,created_at,updated_at) VALUES('grp_backend','Backend','t','t')",
+    "INSERT INTO group_members(group_id,account_id,created_at) VALUES('grp_backend','usr_teammate','t')",
+  ] {
+    sqlx::query(statement)
+      .execute(state.db.pool())
+      .await
+      .unwrap();
+  }
+  sqlx::query("INSERT INTO grants(id,group_id,scope,project_id,environment_id,level,created_at,updated_at) VALUES('grt_backend','grp_backend','environment',(SELECT project_id FROM environments WHERE id = ?1),?1,'read','t','t')")
+    .bind(env_id)
+    .execute(state.db.pool())
+    .await
+    .unwrap();
 
   // 2. Initialize new backup with custom name
   let (status, create_res, _) = call(
@@ -205,6 +224,11 @@ async fn backup_and_restore_lifecycle() {
   .await;
   assert_eq!(status, 200);
 
+  sqlx::query("DELETE FROM groups")
+    .execute(state.db.pool())
+    .await
+    .unwrap();
+
   // 7. Restore from backup
   let (status, restore_res, _) = call(
     &router,
@@ -262,6 +286,14 @@ async fn backup_and_restore_lifecycle() {
   .await;
   assert_eq!(status, 200);
   assert_eq!(verified["data"]["ok"], true, "{verified}");
+
+  let access: (i64, i64, i64, i64) = sqlx::query_as(
+    "SELECT (SELECT COUNT(*) FROM group_members WHERE group_id='grp_backend'), (SELECT COUNT(*) FROM grants WHERE id='grt_backend'), (SELECT COUNT(*) FROM roles WHERE builtin=1), (SELECT COUNT(*) FROM accounts WHERE is_root=1)",
+  )
+  .fetch_one(state.db.pool())
+  .await
+  .unwrap();
+  assert_eq!(access, (1, 1, 4, 1));
 
   // 8. Verify secrets are restored to their original snapshot state!
   let (status, reveal_res, _) = call(
@@ -479,6 +511,7 @@ async fn bootstrap_restore_lifecycle() {
       path: key_path,
     },
     docs_enabled: true,
+    features: app::services::features::Features::all(),
     ..ServerConfig::default()
   };
   let state2 = server::build_setup_state(config2).await.unwrap();
@@ -494,14 +527,14 @@ async fn bootstrap_restore_lifecycle() {
   let boundary = "---------------------------974767299852498929531610575";
   let mut body = Vec::new();
   body.extend_from_slice(format!("--{boundary}\r\n").as_bytes());
+  body.extend_from_slice(b"Content-Disposition: form-data; name=\"setup_token\"\r\n\r\n");
+  body.extend_from_slice(setup_token2.as_bytes());
+  body.extend_from_slice(format!("\r\n--{boundary}\r\n").as_bytes());
   body.extend_from_slice(
     b"Content-Disposition: form-data; name=\"file\"; filename=\"initial_seed.dop\"\r\n",
   );
   body.extend_from_slice(b"Content-Type: application/octet-stream\r\n\r\n");
   body.extend_from_slice(&raw_bytes);
-  body.extend_from_slice(format!("\r\n--{boundary}\r\n").as_bytes());
-  body.extend_from_slice(b"Content-Disposition: form-data; name=\"setup_token\"\r\n\r\n");
-  body.extend_from_slice(setup_token2.as_bytes());
   body.extend_from_slice(format!("\r\n--{boundary}--\r\n").as_bytes());
 
   let req = Request::builder()
@@ -530,7 +563,7 @@ async fn bootstrap_restore_lifecycle() {
     "/api/v1/auth/login",
     None,
     Some(
-      json!({"email": "admin@example.com", "password": "correct-horse-123", "sessionKind": "cli"}),
+      json!({"email": "admin@dopbase.com", "password": "correct-horse-123", "sessionKind": "cli"}),
     ),
   )
   .await;
@@ -592,7 +625,7 @@ async fn bootstrap_restore_with_different_master_key() {
     .execute(state1.db.pool())
     .await
     .unwrap();
-  sqlx::query("INSERT INTO admin_identities(id,admin_id,provider_id,issuer,subject,linked_via,created_at) SELECT 'idn_backup',id,'sso_backup','https://idp.example.com','root-subject','manual',? FROM admins WHERE role='root'")
+  sqlx::query("INSERT INTO user_identities(id,user_id,provider_id,issuer,subject,linked_via,created_at) SELECT 'idn_backup',id,'sso_backup','https://idp.example.com','root-subject','manual',? FROM accounts WHERE is_root=1")
     .bind(&now)
     .execute(state1.db.pool())
     .await
@@ -676,6 +709,7 @@ async fn bootstrap_restore_with_different_master_key() {
       path: server2_key_path.clone(),
     },
     docs_enabled: true,
+    features: app::services::features::Features::all(),
     ..ServerConfig::default()
   };
   let state2 = server::build_setup_state(config2).await.unwrap();
@@ -694,14 +728,14 @@ async fn bootstrap_restore_with_different_master_key() {
   let boundary = "---------------------------123456789012345678901234567";
   let mut fail_body = Vec::new();
   fail_body.extend_from_slice(format!("--{boundary}\r\n").as_bytes());
+  fail_body.extend_from_slice(b"Content-Disposition: form-data; name=\"setup_token\"\r\n\r\n");
+  fail_body.extend_from_slice(setup_token2.as_bytes());
+  fail_body.extend_from_slice(format!("\r\n--{boundary}\r\n").as_bytes());
   fail_body.extend_from_slice(
     b"Content-Disposition: form-data; name=\"file\"; filename=\"migration.dop\"\r\n",
   );
   fail_body.extend_from_slice(b"Content-Type: application/octet-stream\r\n\r\n");
   fail_body.extend_from_slice(&raw_bytes);
-  fail_body.extend_from_slice(format!("\r\n--{boundary}\r\n").as_bytes());
-  fail_body.extend_from_slice(b"Content-Disposition: form-data; name=\"setup_token\"\r\n\r\n");
-  fail_body.extend_from_slice(setup_token2.as_bytes());
   fail_body.extend_from_slice(format!("\r\n--{boundary}--\r\n").as_bytes());
 
   let req_fail = Request::builder()
@@ -719,6 +753,9 @@ async fn bootstrap_restore_with_different_master_key() {
   // Now restore with both backup file AND server1's master key
   let mut restore_body = Vec::new();
   restore_body.extend_from_slice(format!("--{boundary}\r\n").as_bytes());
+  restore_body.extend_from_slice(b"Content-Disposition: form-data; name=\"setup_token\"\r\n\r\n");
+  restore_body.extend_from_slice(setup_token2.as_bytes());
+  restore_body.extend_from_slice(format!("\r\n--{boundary}\r\n").as_bytes());
   restore_body.extend_from_slice(
     b"Content-Disposition: form-data; name=\"file\"; filename=\"migration.dop\"\r\n",
   );
@@ -730,9 +767,6 @@ async fn bootstrap_restore_with_different_master_key() {
   );
   restore_body.extend_from_slice(b"Content-Type: application/octet-stream\r\n\r\n");
   restore_body.extend_from_slice(&server1_key_bytes);
-  restore_body.extend_from_slice(format!("\r\n--{boundary}\r\n").as_bytes());
-  restore_body.extend_from_slice(b"Content-Disposition: form-data; name=\"setup_token\"\r\n\r\n");
-  restore_body.extend_from_slice(setup_token2.as_bytes());
   restore_body.extend_from_slice(format!("\r\n--{boundary}--\r\n").as_bytes());
 
   let req_success = Request::builder()
@@ -770,7 +804,7 @@ async fn bootstrap_restore_with_different_master_key() {
       .unwrap(),
     b"sso-client-secret"
   );
-  let linked: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM admin_identities")
+  let linked: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM user_identities")
     .fetch_one(state2.db.pool())
     .await
     .unwrap();
@@ -783,7 +817,7 @@ async fn bootstrap_restore_with_different_master_key() {
     "/api/v1/auth/login",
     None,
     Some(
-      json!({"email": "admin@example.com", "password": "correct-horse-123", "sessionKind": "cli"}),
+      json!({"email": "admin@dopbase.com", "password": "correct-horse-123", "sessionKind": "cli"}),
     ),
   )
   .await;
@@ -827,7 +861,7 @@ async fn test_download_master_key_cookie_session_without_csrf() {
     "POST",
     "/api/v1/auth/login",
     None,
-    Some(json!({"email": "admin@example.com", "password": "correct-horse-123", "sessionKind": "browser"})),
+    Some(json!({"email": "admin@dopbase.com", "password": "correct-horse-123", "sessionKind": "browser"})),
   )
   .await;
   assert_eq!(status, 200);
@@ -986,22 +1020,29 @@ async fn test_dashboard_upload_cross_key_rekeys_cleanly() {
 async fn restore_recovers_agent_and_expiring_runner_tokens() {
   let (_dir, state, router, token) = admin_setup().await;
   let now = Utc::now().to_rfc3339();
-  sqlx::query("INSERT INTO service_accounts(id,name,role,created_at,updated_at) VALUES(?,?,?,?,?)")
-    .bind("aia_backup_test")
-    .bind("backup-agent")
-    .bind("ai_agent")
+  sqlx::query("INSERT INTO accounts(id,kind,role_id,created_at,updated_at) VALUES(?,'agent','rol_ai_agent',?,?)")
+    .bind("usr_backup_agent")
     .bind(&now)
     .bind(&now)
     .execute(state.db.pool())
     .await
     .unwrap();
   sqlx::query(
-    "INSERT INTO agent_tokens(id,service_account_id,name,token_hash,created_at) VALUES(?,?,?,?,?)",
+    "INSERT INTO agents(id,name,owner_id) VALUES(?,?,(SELECT id FROM accounts WHERE is_root=1))",
   )
-  .bind("ait_backup_test")
-  .bind("aia_backup_test")
+  .bind("usr_backup_agent")
+  .bind("backup-agent")
+  .execute(state.db.pool())
+  .await
+  .unwrap();
+  sqlx::query(
+    "INSERT INTO personal_tokens(id,account_id,name,token_hash,scope,level,created_at,expires_at) VALUES(?,?,?,?,'all','metadata',?,?)",
+  )
+  .bind("ptk_backup_test")
+  .bind("usr_backup_agent")
   .bind("restore-token")
-  .bind(app::services::token::hash("dpa_restore_test"))
+  .bind(app::services::token::hash("dpp_restore_test"))
+  .bind(&now)
   .bind(&now)
   .execute(state.db.pool())
   .await
@@ -1027,7 +1068,7 @@ async fn restore_recovers_agent_and_expiring_runner_tokens() {
   assert_eq!(status, 201);
   let key = backup["data"]["key"].as_str().unwrap();
 
-  sqlx::query("DELETE FROM agent_tokens")
+  sqlx::query("DELETE FROM personal_tokens")
     .execute(state.db.pool())
     .await
     .unwrap();
@@ -1035,7 +1076,7 @@ async fn restore_recovers_agent_and_expiring_runner_tokens() {
     .execute(state.db.pool())
     .await
     .unwrap();
-  sqlx::query("DELETE FROM service_accounts")
+  sqlx::query("DELETE FROM accounts WHERE id='usr_backup_agent'")
     .execute(state.db.pool())
     .await
     .unwrap();
@@ -1050,15 +1091,21 @@ async fn restore_recovers_agent_and_expiring_runner_tokens() {
   .await;
   assert_eq!(status, 200);
 
-  let account_count: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM service_accounts")
+  // The agent comes back with its owner, who is still this root.
+  let owner: Option<String> =
+    sqlx::query_scalar("SELECT owner_id FROM agents WHERE id='usr_backup_agent'")
+      .fetch_one(state.db.pool())
+      .await
+      .unwrap();
+  let root: String = sqlx::query_scalar("SELECT id FROM accounts WHERE is_root=1")
     .fetch_one(state.db.pool())
     .await
     .unwrap();
-  let token_count: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM agent_tokens")
+  let token_count: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM personal_tokens")
     .fetch_one(state.db.pool())
     .await
     .unwrap();
-  assert_eq!(account_count, 1);
+  assert_eq!(owner, Some(root));
   assert_eq!(token_count, 1);
   let restored_expiry: String =
     sqlx::query_scalar("SELECT expires_at FROM runner_tokens WHERE id='tok_backup_test'")
@@ -1121,4 +1168,244 @@ fn backup_names_reject_path_syntax_and_deceptive_extensions() {
       "expected {name:?} to be rejected"
     );
   }
+}
+
+#[tokio::test]
+async fn a_failed_rekey_names_no_environment_or_secret() {
+  let (dir1, state1, router1, token1) = admin_setup().await;
+  let (status, proj, _) = call(
+    &router1,
+    "POST",
+    "/api/v1/projects",
+    Some(&token1),
+    Some(json!({"name": "shop-project"})),
+  )
+  .await;
+  assert_eq!(status, 201);
+  let project_id = proj["data"]["id"].as_str().unwrap();
+  let (status, env, _) = call(
+    &router1,
+    "POST",
+    &format!("/api/v1/projects/{project_id}/environments"),
+    Some(&token1),
+    Some(json!({"name": "production"})),
+  )
+  .await;
+  assert_eq!(status, 201);
+  let env_id = env["data"]["id"].as_str().unwrap();
+  let (status, _, _) = call(
+    &router1,
+    "PUT",
+    &format!("/api/v1/environments/{env_id}/secrets/STRIPE_KEY"),
+    Some(&token1),
+    Some(json!({"value": "sk-marker"})),
+  )
+  .await;
+  assert_eq!(status, 200);
+  // The archive still decrypts, but this row's data key can't be unwrapped.
+  sqlx::query(
+    "UPDATE secret_versions SET wrapped_key = zeroblob(48) WHERE wrapped_key IS NOT NULL",
+  )
+  .execute(state1.db.pool())
+  .await
+  .unwrap();
+  let (status, backup_res, _) = call(
+    &router1,
+    "POST",
+    "/api/v1/backups",
+    Some(&token1),
+    Some(json!({"name": "broken_backup"})),
+  )
+  .await;
+  assert_eq!(status, 201);
+  let backup_key = backup_res["data"]["key"].as_str().unwrap();
+  let (status, raw_backup, _) = call_raw(
+    &router1,
+    "GET",
+    &format!("/api/v1/backups/{backup_key}"),
+    Some(&token1),
+  )
+  .await;
+  assert_eq!(status, 200);
+  let server1_key = std::fs::read(dir1.path().join("master.key")).unwrap();
+
+  let (_dir2, _state2, router2, token2) = admin_setup().await;
+  let boundary = "---------------------------111122223333444455556666777";
+  let mut body = Vec::new();
+  body.extend_from_slice(format!("--{boundary}\r\n").as_bytes());
+  body.extend_from_slice(
+    b"Content-Disposition: form-data; name=\"file\"; filename=\"broken.dop\"\r\n",
+  );
+  body.extend_from_slice(b"Content-Type: application/octet-stream\r\n\r\n");
+  body.extend_from_slice(&raw_backup);
+  body.extend_from_slice(format!("\r\n--{boundary}\r\n").as_bytes());
+  body.extend_from_slice(
+    b"Content-Disposition: form-data; name=\"master_key\"; filename=\"master.key\"\r\n",
+  );
+  body.extend_from_slice(b"Content-Type: application/octet-stream\r\n\r\n");
+  body.extend_from_slice(&server1_key);
+  body.extend_from_slice(format!("\r\n--{boundary}--\r\n").as_bytes());
+  let request = Request::builder()
+    .method("POST")
+    .uri("/api/v1/backups/upload")
+    .header(header::AUTHORIZATION, format!("Bearer {token2}"))
+    .header(
+      header::CONTENT_TYPE,
+      format!("multipart/form-data; boundary={boundary}"),
+    )
+    .body(Body::from(body))
+    .unwrap();
+  let response = router2.clone().oneshot(request).await.unwrap();
+  assert_eq!(response.status().as_u16(), 400);
+  let bytes = axum::body::to_bytes(response.into_body(), 1024 * 1024)
+    .await
+    .unwrap();
+  let text = String::from_utf8_lossy(&bytes);
+  let json: Value = serde_json::from_slice(&bytes).unwrap();
+  assert_eq!(
+    json["error"]["BACKUP_REKEY_FAILED"], "The backup could not be re-keyed with this master key.",
+    "{text}"
+  );
+  assert!(!text.contains(env_id), "{text}");
+  assert!(!text.contains("STRIPE_KEY"), "{text}");
+}
+
+/// Sends the start of a bootstrap restore over a real connection, promising
+/// a 200 MB body but never sending more than `head`, and returns the status
+/// line. A server that reads the whole upload before checking the setup
+/// token never answers.
+async fn partial_restore(
+  router: axum::Router,
+  extra_header: &str,
+  head: &[u8],
+) -> Option<String> {
+  use tokio::io::{AsyncReadExt, AsyncWriteExt};
+  let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+  let address = listener.local_addr().unwrap();
+  tokio::spawn(async move {
+    axum::serve(
+      listener,
+      router.into_make_service_with_connect_info::<std::net::SocketAddr>(),
+    )
+    .await
+    .unwrap();
+  });
+  let mut stream = tokio::net::TcpStream::connect(address).await.unwrap();
+  let request = format!(
+    "POST /api/v1/bootstrap/restore HTTP/1.1\r\nHost: localhost\r\nContent-Type: multipart/form-data; boundary=XyZ\r\n{extra_header}Content-Length: 209715200\r\n\r\n"
+  );
+  stream.write_all(request.as_bytes()).await.unwrap();
+  stream.write_all(head).await.unwrap();
+  let mut reply = vec![0; 256];
+  let read = tokio::time::timeout(std::time::Duration::from_secs(5), stream.read(&mut reply))
+    .await
+    .ok()?
+    .ok()?;
+  let text = String::from_utf8_lossy(&reply[..read]).into_owned();
+  text.lines().next().map(str::to_owned)
+}
+
+// Security audit v1 H1: a caller without the setup token could make the
+// server buffer a 250 MB upload before the token was checked.
+#[tokio::test]
+async fn bootstrap_restore_checks_the_setup_token_before_reading_the_file() {
+  let directory = TempDir::new().unwrap();
+  let config = ServerConfig {
+    data_dir: directory.path().to_path_buf(),
+    database_url: format!("sqlite://{}", directory.path().join("dopbase.db").display()),
+    master_key: app::config::MasterKeyConfig {
+      provider: "file".into(),
+      path: directory.path().join("master.key"),
+    },
+    features: app::services::features::Features::all(),
+    ..ServerConfig::default()
+  };
+  let state = server::build_setup_state(config).await.unwrap();
+  let router = server::router(state.clone());
+
+  // A wrong token in the header is refused before any of the body.
+  let status = partial_restore(
+    router.clone(),
+    "X-Dopbase-Setup-Token: dbs_wrong\r\n",
+    b"--XyZ\r\n",
+  )
+  .await;
+  assert_eq!(status.as_deref(), Some("HTTP/1.1 401 Unauthorized"));
+
+  // A wrong token as the first form field is refused before the file.
+  let head = b"--XyZ\r\nContent-Disposition: form-data; name=\"setup_token\"\r\n\r\ndbs_wrong\r\n--XyZ\r\nContent-Disposition: form-data; name=\"file\"; filename=\"big.dop\"\r\n\r\nPK";
+  let status = partial_restore(router.clone(), "", head).await;
+  assert_eq!(status.as_deref(), Some("HTTP/1.1 401 Unauthorized"));
+
+  // A file before any token is refused without reading it.
+  let head =
+    b"--XyZ\r\nContent-Disposition: form-data; name=\"file\"; filename=\"big.dop\"\r\n\r\nPK";
+  let status = partial_restore(router.clone(), "", head).await;
+  assert_eq!(status.as_deref(), Some("HTTP/1.1 400 Bad Request"));
+
+  // So is a master key before any token.
+  let head = b"--XyZ\r\nContent-Disposition: form-data; name=\"master_key\"; filename=\"master.key\"\r\n\r\nAA";
+  let status = partial_restore(router.clone(), "", head).await;
+  assert_eq!(status.as_deref(), Some("HTTP/1.1 400 Bad Request"));
+
+  // A setup token field that never ends is refused once it's too long to
+  // be one, not read to the end of the upload.
+  let mut head = b"--XyZ\r\nContent-Disposition: form-data; name=\"setup_token\"\r\n\r\n".to_vec();
+  head.extend(std::iter::repeat_n(b'a', 64 * 1024));
+  let status = partial_restore(router, "", &head).await;
+  assert_eq!(status.as_deref(), Some("HTTP/1.1 400 Bad Request"));
+  state.db.close().await;
+}
+
+#[path = "modules/backups/v020_backup_roundtrip.rs"]
+mod v020_backup_roundtrip;
+
+#[path = "modules/backups/v020_upgrade_restore.rs"]
+mod v020_upgrade_restore;
+
+// Security audit N5: a CLI token reached the master key and restore with no
+// fresh sign-in, so a token leaked from a laptop was enough.
+#[tokio::test]
+async fn the_master_key_and_restore_need_a_recent_sign_in_from_the_cli_too() {
+  let (_dir, state, router, token) = admin_setup().await;
+  let (status, _, _) = call(
+    &router,
+    "POST",
+    "/api/v1/backups",
+    Some(&token),
+    Some(json!({"name":"recent"})),
+  )
+  .await;
+  assert_eq!(status, 201);
+  sqlx::query("UPDATE sessions SET recent_auth_at = $1 WHERE kind = 'cli'")
+    .bind((Utc::now() - chrono::Duration::minutes(11)).to_rfc3339())
+    .execute(state.db.pool())
+    .await
+    .unwrap();
+  let (status, _, _) = call_raw(&router, "GET", "/api/v1/backups/master-key", Some(&token)).await;
+  assert_eq!(status, 403);
+  let (status, body, _) = call(
+    &router,
+    "POST",
+    "/api/v1/backups/recent.dop/restore",
+    Some(&token),
+    None,
+  )
+  .await;
+  assert_eq!(status, 403, "{body}");
+  assert!(body["error"]["RECENT_AUTHENTICATION_REQUIRED"].is_string());
+
+  // Confirming the password from the CLI opens both again.
+  let (status, body, _) = call(
+    &router,
+    "POST",
+    "/api/v1/auth/reauthenticate",
+    Some(&token),
+    Some(json!({"password":"correct-horse-123"})),
+  )
+  .await;
+  assert_eq!(status, 200, "{body}");
+  let (status, _, _) = call_raw(&router, "GET", "/api/v1/backups/master-key", Some(&token)).await;
+  assert_eq!(status, 200);
+  state.db.close().await;
 }

@@ -1,0 +1,608 @@
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { freshPinia } from "~/tests/pinia";
+import {
+  agentTokenUsage,
+  liveToken,
+  useAgentsController,
+} from "./Agents.controller";
+import type { PersonalToken } from "~/services/personal-tokens.api";
+import * as agentsApi from "~/services/agents.api";
+import * as rolesApi from "~/services/roles.api";
+import * as usersApi from "~/services/users.api";
+import { ApiError } from "~/services/http.client";
+import { formatDate } from "~/utils/format";
+import { mountController } from "~/tests/mount-controller";
+import {
+  accessFixture,
+  adminRole,
+  agentFixture,
+  agentRole,
+  grantFixture,
+  lead,
+  maya,
+  memberRole,
+  reviewBot,
+  roleFixture,
+  settle,
+  signInAs,
+  tokenFixture,
+} from "~/tests/people";
+
+const { push } = vi.hoisted(() => ({ push: vi.fn() }));
+
+vi.mock("vue-router", () => ({
+  useRouter: () => ({ push }),
+}));
+
+vi.mock("~/services/users.api");
+vi.mock("~/services/agents.api");
+vi.mock("~/services/roles.api", async (original) => ({
+  ...(await original<typeof rolesApi>()),
+  fetchRoles: vi.fn(),
+}));
+
+const NOW = new Date("2026-10-31T00:00:00Z");
+
+/** Owned by lead, so maya does not own it. */
+const deployBot = agentFixture({
+  id: "usr_deploy",
+  name: "deploy-bot",
+  ownerId: "usr_lead",
+  ownerEmail: "lead@dopbase.com",
+});
+
+function tokensFor(lists: Record<string, PersonalToken[] | Error>) {
+  vi.mocked(agentsApi.listAgentTokens).mockImplementation(async (userId) => {
+    const list = lists[userId ?? "me"] ?? [];
+    if (list instanceof Error) throw list;
+    return list;
+  });
+}
+
+async function mountAgents() {
+  const mounted = mountController(useAgentsController);
+  await settle();
+  return mounted.controller;
+}
+
+function rowOf(
+  controller: ReturnType<typeof useAgentsController>,
+  agentId: string,
+) {
+  const row = controller.rows.value.find((item) => item.agent.id === agentId);
+  if (!row) throw new Error(`No row for ${agentId}`);
+  return row;
+}
+
+beforeEach(() => {
+  freshPinia();
+  vi.clearAllMocks();
+  vi.useFakeTimers({ toFake: ["Date"] });
+  vi.setSystemTime(NOW);
+  signInAs(["users.view", "agents.view", "agents.view_all", "agents.manage"]);
+  vi.mocked(usersApi.fetchUsers).mockResolvedValue([maya, lead]);
+  vi.mocked(agentsApi.fetchAgents).mockResolvedValue([reviewBot, deployBot]);
+  vi.mocked(rolesApi.fetchRoles).mockResolvedValue([memberRole, agentRole]);
+  tokensFor({ usr_bot: [tokenFixture()], usr_deploy: [] });
+});
+
+afterEach(() => {
+  vi.useRealTimers();
+});
+
+describe("liveToken", () => {
+  it("picks the newest active token and skips newer revoked or expired ones", () => {
+    const older = tokenFixture({
+      id: "pat_old",
+      createdAt: "2026-09-01T00:00:00Z",
+    });
+    const newer = tokenFixture({
+      id: "pat_new",
+      createdAt: "2026-10-10T00:00:00Z",
+    });
+    const revoked = tokenFixture({
+      id: "pat_revoked",
+      createdAt: "2026-10-20T00:00:00Z",
+      revokedAt: "2026-10-21T00:00:00Z",
+    });
+    const expired = tokenFixture({
+      id: "pat_expired",
+      createdAt: "2026-10-25T00:00:00Z",
+      expiresAt: "2026-10-30T00:00:00Z",
+    });
+
+    expect(liveToken([older, revoked, newer, expired])?.id).toBe("pat_new");
+  });
+
+  it("returns null when every token is revoked or expired", () => {
+    expect(
+      liveToken([
+        tokenFixture({ revokedAt: "2026-10-21T00:00:00Z" }),
+        tokenFixture({ id: "pat_2", expiresAt: "2026-10-01T00:00:00Z" }),
+      ]),
+    ).toBeNull();
+  });
+});
+
+describe("useAgentsController", () => {
+  it("lists the AI agents and the people who could own them", async () => {
+    const controller = await mountAgents();
+
+    expect(controller.agents.value?.map((agent) => agent.id)).toEqual([
+      "usr_bot",
+      "usr_deploy",
+    ]);
+    expect(controller.people.value.map((person) => person.id)).toEqual([
+      "usr_maya",
+      "usr_lead",
+    ]);
+    expect(agentsApi.listAgentTokens).toHaveBeenCalledWith(
+      "usr_bot",
+      expect.any(AbortSignal),
+    );
+    expect(agentsApi.listAgentTokens).toHaveBeenCalledWith(
+      "usr_deploy",
+      expect.any(AbortSignal),
+    );
+  });
+
+  it("says it could not load the agents when their list fails", async () => {
+    vi.mocked(agentsApi.fetchAgents).mockRejectedValue(
+      new ApiError(500, { INTERNAL: "The server broke." }),
+    );
+    const controller = await mountAgents();
+
+    expect(controller.loadError.value).toBe("Could not load AI agents.");
+    expect(controller.agents.value).toEqual([]);
+    expect(controller.rows.value).toEqual([]);
+  });
+
+  it("names the owner by email from the people list, or says No owner or Unknown", async () => {
+    const unnamed = agentFixture({ ownerEmail: null });
+    const orphan = agentFixture({
+      id: "usr_orphan",
+      ownerId: "",
+      ownerEmail: null,
+    });
+    const stray = agentFixture({
+      id: "usr_stray",
+      ownerId: "usr_gone",
+      ownerEmail: null,
+    });
+    vi.mocked(agentsApi.fetchAgents).mockResolvedValue([
+      unnamed,
+      orphan,
+      stray,
+    ]);
+    const controller = await mountAgents();
+
+    expect(rowOf(controller, "usr_bot").owner).toBe("maya@dopbase.com");
+    expect(rowOf(controller, "usr_orphan").owner).toBe("No owner");
+    expect(rowOf(controller, "usr_stray").owner).toBe("Unknown");
+  });
+
+  it("still lists agents when the roles list fails", async () => {
+    vi.mocked(rolesApi.fetchRoles).mockRejectedValue(new Error("down"));
+    const controller = await mountAgents();
+
+    expect(controller.loadError.value).toBeNull();
+    expect(rowOf(controller, "usr_bot").owner).toBe("maya@dopbase.com");
+    expect(controller.agentRole.value).toBeNull();
+  });
+
+  it("offers Transfer owner only when someone else could own the agent", async () => {
+    // Lead's role runs agents, so lead could take maya's bot; this
+    // member role doesn't, so nobody could take lead's.
+    vi.mocked(rolesApi.fetchRoles).mockResolvedValue([
+      memberRole,
+      adminRole,
+      agentRole,
+    ]);
+    const controller = await mountAgents();
+
+    expect(rowOf(controller, "usr_bot").canTransfer).toBe(true);
+    expect(rowOf(controller, "usr_deploy").canTransfer).toBe(false);
+  });
+
+  it("marks a token with months left as active", async () => {
+    tokensFor({
+      usr_bot: [tokenFixture({ lastUsedAt: "2026-10-30T23:59:50Z" })],
+    });
+    const controller = await mountAgents();
+    const row = rowOf(controller, "usr_bot");
+
+    expect(row.token?.id).toBe("pat_1");
+    expect(row.status).toBe("active");
+    expect(row.statusLabel).toBe("active");
+    expect(row.expires).toBe(formatDate("2099-01-01T00:00:00Z"));
+    expect(row.lastUsed).toBe("just now");
+  });
+
+  it("flags a token expiring in 3 days", async () => {
+    tokensFor({
+      usr_bot: [tokenFixture({ expiresAt: "2026-11-03T00:00:00Z" })],
+    });
+    const controller = await mountAgents();
+    const row = rowOf(controller, "usr_bot");
+
+    expect(row.status).toBe("expiring");
+    expect(row.statusLabel).toBe("expires in 3 days");
+    expect(row.lastUsed).toBe("Never");
+  });
+
+  it("says expires in 1 day when the token ends within hours", async () => {
+    tokensFor({
+      usr_bot: [tokenFixture({ expiresAt: "2026-10-31T06:00:00Z" })],
+    });
+    const controller = await mountAgents();
+
+    expect(rowOf(controller, "usr_bot").statusLabel).toBe("expires in 1 day");
+  });
+
+  it("shows no token when an agent only has revoked or expired ones", async () => {
+    tokensFor({
+      usr_bot: [
+        tokenFixture({ revokedAt: "2026-10-20T00:00:00Z" }),
+        tokenFixture({ id: "pat_2", expiresAt: "2026-10-01T00:00:00Z" }),
+      ],
+    });
+    const controller = await mountAgents();
+    const row = rowOf(controller, "usr_bot");
+
+    expect(row.token).toBeNull();
+    expect(row.status).toBe("none");
+    expect(row.statusLabel).toBe("no token");
+    expect(row.expires).toBe("—");
+  });
+
+  it("shows the token as unknown when that agent's tokens fail to load", async () => {
+    tokensFor({
+      usr_bot: new Error("down"),
+      usr_deploy: [tokenFixture({ id: "pat_9" })],
+    });
+    const controller = await mountAgents();
+
+    expect(rowOf(controller, "usr_bot").status).toBe("unknown");
+    expect(rowOf(controller, "usr_bot").statusLabel).toBe("—");
+    expect(rowOf(controller, "usr_deploy").status).toBe("active");
+  });
+
+  it("lets someone with agents.manage manage every agent", async () => {
+    const controller = await mountAgents();
+
+    expect(controller.rows.value.every((row) => row.canManage)).toBe(true);
+  });
+
+  it("lets an owner with agents.view manage only their own agent", async () => {
+    signInAs(["tokens.personal", "agents.view"], {
+      adminId: "usr_maya",
+      role: "member",
+    });
+    const controller = await mountAgents();
+
+    expect(rowOf(controller, "usr_bot").canManage).toBe(true);
+    expect(rowOf(controller, "usr_deploy").canManage).toBe(false);
+    expect(rowOf(controller, "usr_bot").canTransfer).toBe(false);
+  });
+
+  it("lets nobody manage an agent with users.manage alone", async () => {
+    signInAs(["users.view", "users.manage"]);
+    const controller = await mountAgents();
+
+    expect(controller.rows.value.some((row) => row.canManage)).toBe(false);
+    expect(controller.canAdd.value).toBe(false);
+  });
+
+  it("lets agents.view_all see every agent but change none", async () => {
+    signInAs(["agents.view_all"], { adminId: "usr_reader", role: "member" });
+    const controller = await mountAgents();
+
+    expect(controller.rows.value).toHaveLength(2);
+    expect(controller.rows.value.some((row) => row.canManage)).toBe(false);
+    expect(controller.canAdd.value).toBe(false);
+  });
+
+  it("names the owner from the agent, without listing people", async () => {
+    signInAs(["agents.view_all"], { adminId: "usr_reader", role: "member" });
+    vi.mocked(agentsApi.fetchAgents).mockResolvedValue([deployBot]);
+    const controller = await mountAgents();
+
+    expect(usersApi.fetchUsers).not.toHaveBeenCalled();
+    expect(rowOf(controller, "usr_deploy").owner).toBe("lead@dopbase.com");
+  });
+
+  it("links each row to the agent's audit activity", async () => {
+    const controller = await mountAgents();
+
+    expect(rowOf(controller, "usr_bot").activity).toEqual({
+      name: "audit",
+      query: { actor: "usr_bot" },
+    });
+  });
+
+  it("offers each owner once, sorted, as a filter", async () => {
+    const twin = agentFixture({ id: "usr_twin", name: "twin-bot" });
+    vi.mocked(agentsApi.fetchAgents).mockResolvedValue([
+      reviewBot,
+      deployBot,
+      twin,
+    ]);
+    const controller = await mountAgents();
+
+    expect(controller.ownerFilters.value).toEqual([
+      { value: "lead@dopbase.com", label: "lead@dopbase.com" },
+      { value: "maya@dopbase.com", label: "maya@dopbase.com" },
+    ]);
+  });
+
+  it("narrows the list by owner and by a case-insensitive name search", async () => {
+    const controller = await mountAgents();
+    const visible = () =>
+      controller.visibleRows.value.map((row) => row.agent.id);
+
+    controller.ownerFilter.value = "lead@dopbase.com";
+    expect(visible()).toEqual(["usr_deploy"]);
+
+    controller.ownerFilter.value = null;
+    controller.filter.value = "  REVIEW ";
+    expect(visible()).toEqual(["usr_bot"]);
+
+    controller.ownerFilter.value = "lead@dopbase.com";
+    expect(visible()).toEqual([]);
+  });
+
+  it("gives new agents the token-only role you may assign", async () => {
+    const locked = roleFixture({
+      ...agentRole,
+      id: "rol_locked",
+      assignable: false,
+    });
+    vi.mocked(rolesApi.fetchRoles).mockResolvedValue([
+      memberRole,
+      locked,
+      agentRole,
+    ]);
+    const controller = await mountAgents();
+
+    expect(controller.agentRole.value?.id).toBe("rol_ai_agent");
+    expect(controller.canAdd.value).toBe(true);
+  });
+
+  it("hides Add when no token-only role can be assigned", async () => {
+    vi.mocked(rolesApi.fetchRoles).mockResolvedValue([
+      memberRole,
+      roleFixture({ ...agentRole, assignable: false }),
+    ]);
+    const controller = await mountAgents();
+
+    expect(controller.agentRole.value).toBeNull();
+    expect(controller.canAdd.value).toBe(false);
+  });
+
+  it("offers Add to a member with agents.view", async () => {
+    signInAs(["tokens.personal", "agents.view"], {
+      adminId: "usr_maya",
+      role: "member",
+    });
+    const controller = await mountAgents();
+
+    expect(controller.agentRole.value?.id).toBe("rol_ai_agent");
+    expect(controller.canAdd.value).toBe(true);
+  });
+
+  it("hides Add from agents.manage without agents.view, since adding means owning", async () => {
+    signInAs(["tokens.personal", "agents.view_all", "agents.manage"], {
+      adminId: "usr_lead",
+      role: "member",
+    });
+    const controller = await mountAgents();
+
+    expect(controller.canAdd.value).toBe(false);
+  });
+
+  it("hides Add from someone who can't create agents", async () => {
+    signInAs(["tokens.personal", "agents.view_all"], {
+      adminId: "usr_maya",
+      role: "member",
+    });
+    const controller = await mountAgents();
+
+    expect(controller.canAdd.value).toBe(false);
+  });
+
+  it("points people at personal tokens, but not root, which has none", async () => {
+    signInAs(["tokens.personal"], { adminId: "usr_maya", role: "member" });
+    const member = await mountAgents();
+    expect(member.showsPersonalTokenHint.value).toBe(true);
+
+    signInAs([], { role: "root" });
+    const root = await mountAgents();
+    expect(root.showsPersonalTokenHint.value).toBe(false);
+  });
+
+  it("opens the new agent's page once it is added", async () => {
+    const controller = await mountAgents();
+    controller.addOpen.value = true;
+
+    await controller.added(deployBot);
+
+    expect(controller.addOpen.value).toBe(false);
+    expect(push).toHaveBeenCalledWith({
+      name: "agent",
+      params: { agentId: "usr_deploy" },
+    });
+  });
+
+  it("loads the agent's grants when opening New token", async () => {
+    const grants = [grantFixture({ principalId: "usr_bot", level: "read" })];
+    vi.mocked(agentsApi.fetchAgentAccess).mockResolvedValue(
+      accessFixture({ userId: "usr_bot", grants }),
+    );
+    const controller = await mountAgents();
+    const row = rowOf(controller, "usr_bot");
+
+    await controller.openToken(row);
+
+    expect(agentsApi.fetchAgentAccess).toHaveBeenCalledWith(
+      "usr_bot",
+      expect.any(AbortSignal),
+    );
+    expect(controller.tokenFor.value).toEqual(row);
+    expect(controller.tokenGrants.value).toEqual(grants);
+  });
+
+  it("still opens New token with no grants when they fail to load", async () => {
+    vi.mocked(agentsApi.fetchAgentAccess)
+      .mockResolvedValueOnce(accessFixture())
+      .mockRejectedValueOnce(new Error("down"));
+    const controller = await mountAgents();
+    await controller.openToken(rowOf(controller, "usr_bot"));
+
+    await controller.openToken(rowOf(controller, "usr_deploy"));
+
+    expect(controller.tokenFor.value?.agent.id).toBe("usr_deploy");
+    expect(controller.tokenGrants.value).toEqual([]);
+  });
+
+  it("closes New token, keeps the plaintext and reloads after a token is made", async () => {
+    const controller = await mountAgents();
+    await controller.openToken(rowOf(controller, "usr_bot"));
+    const created = {
+      token: tokenFixture({ id: "pat_2" }),
+      plaintextToken: "dop_pat_x",
+    };
+    const listed = vi.mocked(agentsApi.listAgentTokens).mock.calls.length;
+
+    controller.tokenCreated(created);
+    await settle();
+
+    expect(controller.tokenFor.value).toBeNull();
+    expect(controller.createdToken.value).toEqual(created);
+    expect(
+      vi.mocked(agentsApi.listAgentTokens).mock.calls.length,
+    ).toBeGreaterThan(listed);
+  });
+
+  it("lets an owner with agents.view revoke their agent's token", async () => {
+    signInAs(["tokens.personal", "agents.view"], {
+      adminId: "usr_maya",
+      role: "member",
+    });
+    const controller = await mountAgents();
+    controller.askRevoke(rowOf(controller, "usr_bot"));
+    const listed = vi.mocked(agentsApi.listAgentTokens).mock.calls.length;
+
+    await controller.confirmRevoke();
+
+    expect(agentsApi.revokeAgentToken).toHaveBeenCalledWith("usr_bot", "pat_1");
+    expect(controller.revoking.value).toBeNull();
+    expect(controller.revokeError.value).toBeNull();
+    expect(
+      vi.mocked(agentsApi.listAgentTokens).mock.calls.length,
+    ).toBeGreaterThan(listed);
+  });
+
+  it("keeps the confirmation open with the server's reason when revoking fails", async () => {
+    vi.mocked(agentsApi.revokeAgentToken).mockRejectedValue(
+      new ApiError(404, { TOKEN_NOT_FOUND: "That token no longer exists." }),
+    );
+    const controller = await mountAgents();
+    controller.askRevoke(rowOf(controller, "usr_bot"));
+
+    await controller.confirmRevoke();
+
+    expect(controller.revoking.value?.agent.id).toBe("usr_bot");
+    expect(controller.revokeError.value).toBe("That token no longer exists.");
+    expect(controller.revokeBusy.value).toBe(false);
+    expect(agentsApi.fetchAgents).toHaveBeenCalledTimes(1);
+  });
+
+  it("does nothing when the agent has no live token to revoke", async () => {
+    const controller = await mountAgents();
+    controller.askRevoke(rowOf(controller, "usr_deploy"));
+
+    await controller.confirmRevoke();
+
+    expect(agentsApi.revokeAgentToken).not.toHaveBeenCalled();
+  });
+
+  it("ignores cancel while the revoke is still in flight", async () => {
+    let finish!: () => void;
+    vi.mocked(agentsApi.revokeAgentToken).mockReturnValue(
+      new Promise((resolve) => {
+        finish = () => resolve(tokenFixture({ revokedAt: NOW.toISOString() }));
+      }),
+    );
+    const controller = await mountAgents();
+    controller.askRevoke(rowOf(controller, "usr_bot"));
+
+    const confirming = controller.confirmRevoke();
+    controller.cancelRevoke();
+    expect(controller.revokeBusy.value).toBe(true);
+    expect(controller.revoking.value?.agent.id).toBe("usr_bot");
+
+    finish();
+    await confirming;
+    expect(controller.revoking.value).toBeNull();
+  });
+
+  it("closes the revoke confirmation on cancel when nothing is in flight", async () => {
+    const controller = await mountAgents();
+    controller.askRevoke(rowOf(controller, "usr_bot"));
+
+    controller.cancelRevoke();
+
+    expect(controller.revoking.value).toBeNull();
+  });
+
+  it("closes Transfer owner and reloads once the agent moves", async () => {
+    const controller = await mountAgents();
+    controller.transferring.value = reviewBot;
+
+    await controller.transferred();
+
+    expect(controller.transferring.value).toBeNull();
+    expect(agentsApi.fetchAgents).toHaveBeenCalledTimes(2);
+  });
+
+  it("reloads the list after deleting an agent from its row menu", async () => {
+    const controller = await mountAgents();
+    controller.actions.ask("delete", deployBot);
+
+    await controller.actions.confirm();
+
+    expect(agentsApi.deleteAgent).toHaveBeenCalledWith("usr_deploy");
+    expect(agentsApi.fetchAgents).toHaveBeenCalledTimes(2);
+  });
+});
+
+describe("agentTokenUsage", () => {
+  const created = (overrides: Partial<PersonalToken>) => ({
+    token: tokenFixture(overrides),
+    plaintextToken: "dpp_example",
+  });
+
+  it("names the environment an environment token reaches", () => {
+    expect(
+      agentTokenUsage(
+        created({ scopeType: "environment", scopeLabel: "payments/prod" }),
+      ),
+    ).toBe(
+      "export DOPBASE_TOKEN=dpp_example\ndopbase run payments/prod -- <command>",
+    );
+  });
+
+  it("leaves the environment to fill in for a project token", () => {
+    expect(
+      agentTokenUsage(
+        created({ scopeType: "project", scopeLabel: "payments" }),
+      ),
+    ).toContain("dopbase run payments/<environment> -- <command>");
+  });
+
+  it("leaves both to fill in for an all-projects token", () => {
+    expect(
+      agentTokenUsage(created({ scopeType: "all", scopeLabel: "" })),
+    ).toContain("dopbase run <project>/<environment> -- <command>");
+  });
+});

@@ -20,6 +20,8 @@ pub mod secret_editor;
 pub mod secret_format;
 #[doc(hidden)]
 pub mod session;
+#[doc(hidden)]
+pub mod version_check;
 pub use commands::update;
 
 pub use args::Cli;

@@ -101,12 +101,15 @@ pub(crate) async fn execute(
       output::print_json(&res)?;
     } else {
       output::print_success("Restore complete.");
-      output::print_fields(&[
+      let mut fields = vec![
         ("Source:", path.display().to_string()),
         ("Server:", format!("{} (initialized)", server.url)),
         ("Sign in:", format!("{}/login", server.url)),
         ("Status:", "ready".into()),
-      ]);
+      ];
+      // One call, so the upgrade notes line up with the fields above.
+      fields.extend(upgrade_fields(res.get("upgrade")));
+      output::print_fields(&fields);
     }
   } else {
     if !json_output {
@@ -145,15 +148,82 @@ pub(crate) async fn execute(
       output::print_json(&restore_res)?;
     } else {
       output::print_success("Restore complete.");
-      output::print_fields(&[
+      let mut fields = vec![
         ("Source:", path.display().to_string()),
         ("Key:", key.to_owned()),
         ("Server:", server.url.clone()),
         ("Status:", "ready".into()),
-      ]);
+      ];
+      // A 0.1.x backup is upgraded when it is uploaded.
+      fields.extend(upgrade_fields(
+        upload_res
+          .get("upgrade")
+          .or_else(|| restore_res.get("upgrade")),
+      ));
+      output::print_fields(&fields);
     }
   }
 
   Ok(0)
 }
 use super::RestoreArgs;
+
+/// What restoring a 0.1.x backup changed on the way in, as fields for the
+/// restore summary. Prints a one-line note when there was an upgrade.
+fn upgrade_fields(report: Option<&Value>) -> Vec<(&'static str, String)> {
+  let Some(report) = report.filter(|report| report.is_object()) else {
+    return Vec::new();
+  };
+  let notes = |key: &str| {
+    report
+      .get(key)
+      .and_then(Value::as_array)
+      .map(|notes| {
+        notes
+          .iter()
+          .map(|note| {
+            format!(
+              "{} {} ({})",
+              note.get("rows").and_then(Value::as_i64).unwrap_or_default(),
+              note
+                .get("table")
+                .and_then(Value::as_str)
+                .unwrap_or_default(),
+              note
+                .get("reason")
+                .and_then(Value::as_str)
+                .unwrap_or_default(),
+            )
+          })
+          .collect::<Vec<_>>()
+      })
+      .unwrap_or_default()
+  };
+  output::print_info("This backup was made by Dopbase 0.1.x and was upgraded to 0.2.0.");
+  let mut fields = Vec::new();
+  for (label, line) in notes("dropped")
+    .into_iter()
+    .map(|line| ("Left out:", line))
+    .chain(notes("changed").into_iter().map(|line| ("Changed:", line)))
+  {
+    fields.push((label, line));
+  }
+  let archived = report
+    .get("archivedAuditRecords")
+    .and_then(Value::as_u64)
+    .unwrap_or_default();
+  if archived > 0 {
+    fields.push((
+      "Audit archive:",
+      format!(
+        "{archived} record(s) from before the hash chain, saved to {}",
+        report
+          .get("auditArchive")
+          .and_then(Value::as_str)
+          .unwrap_or_default()
+      ),
+    ));
+  }
+  fields.push(("Next:", "Everyone signs in again.".into()));
+  fields
+}

@@ -78,9 +78,11 @@ credential unchanged.
 
 After validation, Dopbase asks for confirmation. A successful switch stops the
 current managed background server when present, removes the previous encrypted
-CLI session and key, and clears the previous default environment. A foreground
-server must be stopped with Ctrl+C first. Remote and unrelated local servers
-are not stopped. Authenticate separately against the new endpoint:
+CLI session and key, and clears the previous default environment. When the
+current endpoint is a local foreground server, stop it with Ctrl+C first;
+connecting to a running foreground server needs no such step. Remote and
+unrelated local servers are not stopped. Authenticate separately against the
+new endpoint:
 
 ```bash
 dopbase login
@@ -93,9 +95,13 @@ dopbase client connect local
 dopbase login
 ```
 
-The `local` alias resolves to `http://localhost:8840`. Dopbase validates the
-local server, removes the `server_url` override, and removes the previous
-server's credential.
+The `local` alias resolves to the public URL of the instance in the same data
+directory, which is `http://localhost:8840` by default. On that default URL
+Dopbase removes the `server_url` override; any other public URL is saved. The
+previous server's credential is removed either way. The local server can be
+stopped when you switch: if nothing answers at its URL, Dopbase switches
+anyway and asks you to start it. Something that answers but isn't a
+compatible Dopbase server is still refused.
 
 Persistent switching is rejected while `DOPBASE_URL` is set because that
 environment variable would override the newly saved endpoint.
@@ -118,7 +124,10 @@ IP addresses, and the client does not follow redirects.
 
 Only one saved connection is active in v{{version}}. Logging in again, with a human
 account or runner token, replaces the saved credential. `dopbase logout`
-removes the active credential but leaves the selected server unchanged.
+ends a saved login on the server, removes the active credential, and leaves
+the selected server unchanged. Both `login` and `logout` stop while
+`DOPBASE_TOKEN` is set, because the variable takes priority over anything
+saved here.
 
 On macOS and Linux, the data directory is mode `0700` and both session files
 are mode `0600`. Separating the key protects a copied `session` file by itself,
@@ -170,9 +179,9 @@ Config file:     /home/alex/.dopbase/config.toml
 Server:          https://dopbase.example.com
 Server status:   connected (live)
 Server source:   config
-Authentication:  encrypted_session
-Identity:        admin
-Email:           admin@example.com
+Authentication:  dopbase login (saved session)
+Role:            Member
+Email:           alex@dopbase.com
 Environment:     env_482731 (default)
 ```
 
@@ -188,6 +197,7 @@ same safe fields for diagnostics and automation:
   "server_source": "default",
   "authentication": "none",
   "identity": "none",
+  "role": null,
   "email": null,
   "environment": null
 }
@@ -199,11 +209,23 @@ the remaining fields still come from safe local configuration and session
 metadata. The health probe times out after three seconds.
 
 The stable server-source values are `argument`, `environment`, `config`, and
-`default`. Authentication is `environment`, `encrypted_session`, or `none`.
-Identity is `admin`, `human`, `runner`, `ai_agent`, `unknown`, or `none`. Dopbase
-identifies environment credentials from their token prefix, so this field does
-not confirm that the token is valid. Environment credentials have no email in
-status output.
+`default`.
+
+Authentication says how the CLI signed in: `dopbase login` (a saved session), a
+runner, personal, or AI agent token saved with `dopbase login --token`, or a
+token in `DOPBASE_TOKEN`. In JSON, `authentication` is `environment`,
+`encrypted_session`, or `none`, and `identity` is the kind of credential:
+`admin` (a saved login session), `human`, `runner`, `personal_token`,
+`ai_agent` (an agent token from before personal tokens), `unknown`, or `none`.
+Dopbase reads the kind from the token prefix, so it does not confirm that the
+token is valid. Environment credentials have no email in status output.
+
+Role is the account's role as the server names it, such as `Root`, `Admin`,
+`Member`, `Auditor`, `AI agent`, or a custom role. Dopbase asks the server, so
+the role is only shown while it is connected; offline, it reads
+`unknown (server offline)` and the JSON `role` is `null`. Runner tokens act for
+one environment and have no role. A personal token reaches at most what its
+role allows and often less, so run `dopbase access` to see what it reaches.
 
 ## Resolution order
 
@@ -228,6 +250,10 @@ The environment used by `dopbase run` is resolved in this order:
 1. Positional environment reference
 2. A non-empty `DOPBASE_ENV`
 3. The saved default when its server URL matches the effective server
+
+A runner token skips this order. It always runs its own environment, ignores the
+saved default, and treats a positional reference or `DOPBASE_ENV` as a check: one
+that names another environment stops the run.
 
 Set or clear the default with `dopbase env default <ENVIRONMENT_REF>` and
 `dopbase env default --clear`. A server override never reuses a default saved

@@ -12,6 +12,7 @@ use super::{
   presets,
   repository::{self, FlowRow, NewFlow, NewIdentity, ProviderFields, ProviderRow},
 };
+use crate::utils::time::Stamp;
 use crate::{
   constants::{
     api::{
@@ -33,7 +34,7 @@ use crate::{
       SSO_PROVIDER_ID_PREFIX,
     },
   },
-  extractors::{require_project_manager, require_recent_browser_auth, require_root_browser},
+  extractors::{require_capability_browser, require_person, require_recent_browser_auth},
   http::HttpError,
   models::{AdminRole, AuthIdentity, SessionKind},
   modules::{
@@ -41,8 +42,10 @@ use crate::{
     common,
   },
   services::{
+    authx::{self, Capability, SignIn},
     client_ip,
     crypto::sso_client_secret_aad,
+    features::Feature,
     oidc::{self, Freshness, ProviderSettings, VerifiedIdentity},
     token,
   },
@@ -74,7 +77,21 @@ pub struct SsoPolicy {
 }
 
 pub async fn policy(state: &AppState) -> Result<SsoPolicy, sqlx::Error> {
-  Ok(match repository::enabled_policy(state.db.pool()).await? {
+  policy_for(state.db.pool(), &state.config.features).await
+}
+
+/// [`policy`] without a running server, for commands that open the
+/// database directly.
+pub async fn policy_for(
+  pool: &sqlx::SqlitePool,
+  features: &crate::services::features::Features,
+) -> Result<SsoPolicy, sqlx::Error> {
+  // With the feature off a stored provider changes nothing: no button, and
+  // "required" no longer blocks password sign-in.
+  if !features.enabled(Feature::Sso) {
+    return Ok(SsoPolicy::default());
+  }
+  Ok(match repository::enabled_policy(pool).await? {
     Some((name, require_sso, hide_password_form)) => SsoPolicy {
       enabled_name: Some(name),
       require_sso,
@@ -90,6 +107,9 @@ pub async fn confirmation_name(
   state: &AppState,
   admin_id: &str,
 ) -> Result<Option<String>, sqlx::Error> {
+  if !state.config.features.enabled(Feature::Sso) {
+    return Ok(None);
+  }
   repository::confirmation_name(state.db.pool(), admin_id).await
 }
 
@@ -176,7 +196,7 @@ async fn discover_issuer(issuer: &str) -> Option<String> {
 /// Changing single sign-on decides who can reach the instance, so it takes
 /// the root account in the Admin UI with a fresh password.
 fn require_root_change(identity: &AuthIdentity) -> Result<(&str, &str), HttpError> {
-  let result = require_root_browser(identity)?;
+  let result = require_capability_browser(identity, Capability::SsoManage)?;
   require_recent_browser_auth(identity)?;
   Ok(result)
 }
@@ -206,7 +226,7 @@ pub async fn get_provider(
   state: &AppState,
   identity: &AuthIdentity,
 ) -> Result<ProviderSettingsResponse, HttpError> {
-  require_root_browser(identity)?;
+  require_capability_browser(identity, Capability::SsoManage)?;
   let provider = match provider_row(state).await? {
     Some(row) => {
       let linked = repository::linked_count(state.db.pool(), &row.id).await?;
@@ -286,7 +306,7 @@ pub async fn put_provider(
   })?;
   let issuer = issuer.as_str();
 
-  let now = Utc::now().to_rfc3339();
+  let now = Utc::now().stamp();
   let provider_id = existing.as_ref().map_or_else(
     || token::public_id(SSO_PROVIDER_ID_PREFIX),
     |row| row.id.clone(),
@@ -324,18 +344,18 @@ pub async fn put_provider(
     now: &now,
   };
 
-  let mut tx = state.db.pool().begin().await?;
+  let mut tx = crate::services::change::Change::begin(state.db.pool()).await?;
   let mut identities_removed = 0;
   let action = if existing.is_none() {
     repository::insert_provider(&mut tx, fields).await?;
-    "sso_provider.created"
+    crate::services::events::Action::SsoProviderCreated
   } else {
     repository::update_provider(&mut tx, fields, reverify).await?;
     // Identities from another issuer can never match a sign-in again.
     // People link again by verified email on their next sign-in.
     identities_removed =
       repository::delete_identities_from_other_issuers(&mut tx, &provider_id, issuer).await?;
-    "sso_provider.updated"
+    crate::services::events::Action::SsoProviderUpdated
   };
   common::audit(
     &mut tx,
@@ -373,18 +393,18 @@ pub async fn set_enabled(
     }
     require_secure_public_url(state)?;
   }
-  let mut tx = state.db.pool().begin().await?;
+  let mut tx = crate::services::change::Change::begin(state.db.pool()).await?;
   // Requiring single sign-on only makes sense while it is on.
-  repository::set_enabled(&mut tx, &row.id, enabled, &Utc::now().to_rfc3339()).await?;
+  repository::set_enabled(&mut tx, &row.id, enabled, &Utc::now().stamp()).await?;
   common::audit(
     &mut tx,
     identity.audit_actor_type(),
     Some(admin_id),
     Some(email),
     if enabled {
-      "sso_provider.enabled"
+      crate::services::events::Action::SsoProviderEnabled
     } else {
-      "sso_provider.disabled"
+      crate::services::events::Action::SsoProviderDisabled
     },
     None,
     None,
@@ -412,8 +432,8 @@ pub async fn set_required(
         "Turn on single sign-on before requiring it.",
       )
     })?;
-  let now = Utc::now().to_rfc3339();
-  let mut tx = state.db.pool().begin().await?;
+  let now = Utc::now().stamp();
+  let mut tx = crate::services::change::Change::begin(state.db.pool()).await?;
   repository::set_required(&mut tx, &row.id, required, &now).await?;
   // Sessions started with a password would otherwise outlive the policy,
   // CLI ones by up to 90 days. Everyone but root signs in again.
@@ -427,7 +447,7 @@ pub async fn set_required(
     identity.audit_actor_type(),
     Some(admin_id),
     Some(email),
-    "sso_provider.policy_changed",
+    crate::services::events::Action::SsoProviderPolicyChanged,
     None,
     None,
     Some("sso_provider"),
@@ -450,14 +470,14 @@ pub async fn set_password_form_hidden(
   let row = provider_row(state)
     .await?
     .ok_or_else(|| HttpError::not_found(SSO_NOT_CONFIGURED, "Single sign-on is not configured."))?;
-  let mut tx = state.db.pool().begin().await?;
-  repository::set_password_form_hidden(&mut tx, &row.id, hidden, &Utc::now().to_rfc3339()).await?;
+  let mut tx = crate::services::change::Change::begin(state.db.pool()).await?;
+  repository::set_password_form_hidden(&mut tx, &row.id, hidden, &Utc::now().stamp()).await?;
   common::audit(
     &mut tx,
     identity.audit_actor_type(),
     Some(admin_id),
     Some(email),
-    "sso_provider.policy_changed",
+    crate::services::events::Action::SsoProviderPolicyChanged,
     None,
     None,
     Some("sso_provider"),
@@ -477,7 +497,7 @@ pub async fn delete_provider(
   let row = provider_row(state)
     .await?
     .ok_or_else(|| HttpError::not_found(SSO_NOT_CONFIGURED, "Single sign-on is not configured."))?;
-  let mut tx = state.db.pool().begin().await?;
+  let mut tx = crate::services::change::Change::begin(state.db.pool()).await?;
   // Linked identities and pending sign-ins go with it.
   repository::delete_provider(&mut tx, &row.id).await?;
   common::audit(
@@ -485,7 +505,7 @@ pub async fn delete_provider(
     identity.audit_actor_type(),
     Some(admin_id),
     Some(email),
-    "sso_provider.deleted",
+    crate::services::events::Action::SsoProviderDeleted,
     None,
     None,
     Some("sso_provider"),
@@ -548,8 +568,8 @@ async fn create_flow(
       })?;
   let binding = token::generate(SSO_BINDING_PREFIX).map_err(|_| HttpError::internal())?;
   let now = Utc::now();
-  let now_text = now.to_rfc3339();
-  let mut tx = state.db.pool().begin().await?;
+  let now_text = now.stamp();
+  let mut tx = crate::services::change::Change::begin(state.db.pool()).await?;
   repository::delete_expired_flows(&mut tx, &now_text).await?;
   let client = client_ip::current().map(|address| address.to_string());
   let (pending, pending_here) = repository::pending_flows(&mut tx, client.as_deref()).await?;
@@ -575,7 +595,7 @@ async fn create_flow(
       redirect_to: redirect_to.as_deref(),
       client_ip: client.as_deref(),
       now: &now_text,
-      expires_at: &(now + Duration::minutes(SSO_FLOW_MINUTES)).to_rfc3339(),
+      expires_at: &(now + Duration::minutes(SSO_FLOW_MINUTES)).stamp(),
     },
   )
   .await?;
@@ -608,7 +628,7 @@ pub async fn start_link(
   state: &AppState,
   identity: &AuthIdentity,
 ) -> Result<StartedFlow, HttpError> {
-  let (admin_id, _) = require_project_manager(identity)?;
+  let (admin_id, _) = require_person(identity)?;
   let AuthIdentity::Admin {
     kind: SessionKind::Browser,
     session_id,
@@ -621,6 +641,9 @@ pub async fn start_link(
       "Link single sign-on from the Admin UI.",
     ));
   };
+  // A link is a new way into the account, so a stolen or forgotten browser
+  // session alone can't add one.
+  require_recent_browser_auth(identity)?;
   let row = provider_row(state)
     .await?
     .filter(|row| row.enabled || *role == AdminRole::Root)
@@ -635,7 +658,7 @@ pub async fn start_reauth(
   state: &AppState,
   identity: &AuthIdentity,
 ) -> Result<StartedFlow, HttpError> {
-  let (admin_id, _) = require_project_manager(identity)?;
+  let (admin_id, _) = require_person(identity)?;
   let AuthIdentity::Admin {
     kind: SessionKind::Browser,
     session_id,
@@ -725,17 +748,17 @@ pub async fn callback(
     "sso_callback:{}",
     client_ip::current().map_or_else(|| "unknown".to_owned(), |ip| ip.to_string())
   );
-  if !state.rate_limiter.check(&limit_key).await {
+  let Some(attempt) = state.rate_limiter.reserve(&limit_key).await else {
     return error_location(Target::Login, "rate_limited");
-  }
+  };
   // Without the binding cookie the callback cannot be tied to the browser
   // that started it. Refuse before touching the database, so a replayed
   // callback URL can neither use nor burn someone else's sign-in.
   let (Some(binding), Some(state_param)) = (binding, query.state.as_deref()) else {
-    state.rate_limiter.failure(&limit_key).await;
+    attempt.fail();
     return error_location(Target::Login, "expired");
   };
-  let now = Utc::now().to_rfc3339();
+  let now = Utc::now().stamp();
   let flow: Result<Option<FlowRow>, sqlx::Error> = repository::consume_flow(
     state.db.pool(),
     &token::hash(state_param),
@@ -750,30 +773,40 @@ pub async fn callback(
     return error_location(Target::Login, "failed");
   };
   let Some(flow) = found else {
-    state.rate_limiter.failure(&limit_key).await;
+    attempt.fail();
     return error_location(Target::Login, "expired");
   };
 
   match finish_callback(state, &flow, &query).await {
-    Ok(location) => location,
+    Ok(location) => {
+      // The budget is shared by everyone behind this address, so a success
+      // hands the attempt back without wiping other people's failures.
+      attempt.release();
+      location
+    }
     Err(failure) => {
-      state.rate_limiter.failure(&limit_key).await;
+      attempt.fail();
       if let Ok(mut conn) = state.db.pool().acquire().await {
         let _ = repository::delete_flow(&mut conn, &flow.id).await;
       }
-      let _ = common::audit_standalone(
+      // This answer is a redirect, so a failed record is logged, not
+      // returned; the sign-in fails either way.
+      if let Err(error) = common::audit_standalone(
         state.db.pool(),
         "anonymous",
         None,
         failure.email.as_deref(),
-        "sso_login.failed",
+        crate::services::events::Action::SsoLoginFailed,
         None,
         None,
         None,
         None,
         serde_json::json!({"reason":failure.reason,"purpose":flow.purpose}),
       )
-      .await;
+      .await
+      {
+        tracing::error!(%error, "could not record a failed single sign-on");
+      }
       error_location(failure.target, failure.reason)
     }
   }
@@ -787,13 +820,12 @@ async fn finish_callback(
   let target = match flow.purpose.as_str() {
     "link" => {
       let mut conn = state.db.pool().acquire().await?;
-      let account = match flow.admin_id.as_deref() {
-        Some(admin_id) => repository::account(&mut conn, admin_id).await?,
+      let access = match flow.admin_id.as_deref() {
+        Some(admin_id) => authx::load_access(&mut conn, admin_id, &state.config.features).await?,
         None => None,
       };
-      // TODO(rbac): root's test sign-in returns to the settings page. Pick
-      // the page by permission once roles are configurable.
-      if account.is_some_and(|(_, role)| role == AdminRole::Root.as_str()) {
+      // Whoever manages single sign-on tested it, so send them back there.
+      if access.is_some_and(|access| access.has(Capability::SsoManage)) {
         Target::Settings
       } else {
         Target::Account
@@ -872,8 +904,8 @@ async fn confirm_identity(
   if !fresh {
     return Err(Failure::new(target, "reauth_not_fresh"));
   }
-  let now = Utc::now().to_rfc3339();
-  let mut tx = state.db.pool().begin().await?;
+  let now = Utc::now().stamp();
+  let mut tx = crate::services::change::Change::begin(state.db.pool()).await?;
   let account =
     repository::live_session_account(&mut tx, flow.session_id.as_deref(), admin_id, &now).await?;
   let (email, role) = account.ok_or_else(|| Failure::new(target, "expired"))?;
@@ -883,7 +915,7 @@ async fn confirm_identity(
     audit_actor(&role),
     Some(admin_id),
     Some(&email),
-    "admin.reauthenticated",
+    crate::services::events::Action::AdminReauthenticated,
     None,
     None,
     None,
@@ -898,7 +930,23 @@ async fn confirm_identity(
 
 /// The audit actor type for a stored role.
 fn audit_actor(role: &str) -> &'static str {
-  AdminRole::parse_human(role).map_or("admin", AdminRole::audit_actor_type)
+  AdminRole::parse(role).map_or("admin", AdminRole::audit_actor_type)
+}
+
+/// Why an account the provider vouched for still gets no session, as an
+/// `sso_error` reason. `None` when it may sign in. The person has already
+/// proved who they are, so saying the account is turned off leaks nothing.
+/// Token-only accounts, as AI agents are, read as no account at all.
+async fn sign_in_refusal(
+  conn: &mut sqlx::SqliteConnection,
+  admin_id: &str,
+  features: &crate::services::features::Features,
+) -> Result<Option<&'static str>, sqlx::Error> {
+  Ok(match authx::load_access(conn, admin_id, features).await? {
+    None => Some("account_disabled"),
+    Some(access) if access.sign_in != SignIn::Interactive => Some("account_not_found"),
+    Some(_) => None,
+  })
 }
 
 fn is_unique_violation(error: &sqlx::Error) -> bool {
@@ -914,15 +962,16 @@ async fn login_identity(
   verified: &VerifiedIdentity,
 ) -> Result<String, Failure> {
   let now = Utc::now();
-  let now_text = now.to_rfc3339();
-  let mut tx = state.db.pool().begin().await?;
+  let now_text = now.stamp();
+  let mut tx = crate::services::change::Change::begin(state.db.pool()).await?;
   let linked = repository::linked_account(&mut tx, &verified.issuer, &verified.subject).await?;
 
   let admin_id = match linked {
-    Some((admin_id, role)) => {
-      // An AI agent has no human session, even with a stale link.
-      if AdminRole::parse_human(&role).is_none() {
-        return Err(Failure::new(Target::Login, "account_not_found"));
+    Some((admin_id, _)) => {
+      // A disabled or token-only account has no session, even with a stale
+      // link.
+      if let Some(reason) = sign_in_refusal(&mut tx, &admin_id, &state.config.features).await? {
+        return Err(Failure::new(Target::Login, reason));
       }
       repository::touch_identity(&mut tx, &verified.issuer, &verified.subject, &now_text).await?;
       admin_id
@@ -944,13 +993,15 @@ async fn login_identity(
         return Err(failure("email_unverified"));
       }
       let account = repository::account_by_email(&mut tx, &email).await?;
-      let (admin_id, role) = account.ok_or_else(|| failure("account_not_found"))?;
-      // TODO(rbac): only the fixed admin and member roles link by email.
-      // Decide by permission once roles are configurable.
-      match AdminRole::parse_human(&role) {
-        Some(AdminRole::Admin | AdminRole::Member) => {}
-        Some(AdminRole::Root) => return Err(failure("root_not_linked")),
-        _ => return Err(failure("account_not_found")),
+      let (admin_id, _) = account.ok_or_else(|| failure("account_not_found"))?;
+      // Root links by hand, so the provider can never take over the
+      // break-glass account. Accounts that never sign in don't link.
+      let access = authx::load_access(&mut tx, &admin_id, &state.config.features).await?;
+      if access.as_ref().is_some_and(|access| access.is_root) {
+        return Err(failure("root_not_linked"));
+      }
+      if let Some(reason) = sign_in_refusal(&mut tx, &admin_id, &state.config.features).await? {
+        return Err(failure(reason));
       }
       let inserted = repository::insert_identity(
         &mut tx,
@@ -978,7 +1029,7 @@ async fn login_identity(
         "admin",
         Some(&admin_id),
         Some(&email),
-        "sso_identity.linked",
+        crate::services::events::Action::SsoIdentityLinked,
         None,
         None,
         Some("admin"),
@@ -996,7 +1047,7 @@ async fn login_identity(
     &mut tx,
     &flow.id,
     &token::hash(&handoff),
-    &(now + Duration::seconds(SSO_HANDOFF_SECONDS)).to_rfc3339(),
+    &(now + Duration::seconds(SSO_HANDOFF_SECONDS)).stamp(),
     &admin_id,
   )
   .await?;
@@ -1016,8 +1067,8 @@ async fn link_identity(
     .admin_id
     .as_deref()
     .ok_or_else(|| Failure::new(target, "failed"))?;
-  let now = Utc::now().to_rfc3339();
-  let mut tx = state.db.pool().begin().await?;
+  let now = Utc::now().stamp();
+  let mut tx = crate::services::change::Change::begin(state.db.pool()).await?;
   // The session that asked for the link must still be live: a sign-out in
   // the meantime cancels it.
   let account =
@@ -1066,7 +1117,7 @@ async fn link_identity(
         audit_actor(&role),
         Some(admin_id),
         Some(&email),
-        "sso_identity.linked",
+        crate::services::events::Action::SsoIdentityLinked,
         None,
         None,
         Some("admin"),
@@ -1076,16 +1127,18 @@ async fn link_identity(
       .await?;
     }
   }
-  // TODO(rbac): root's link is the test sign-in that verifies the provider.
-  // Check for the permission to manage single sign-on once roles are
-  // configurable.
-  if role == AdminRole::Root.as_str() && repository::mark_verified(&mut tx, &row.id, &now).await? {
+  // A link by whoever manages single sign-on is the test sign-in that
+  // verifies the provider.
+  let manages_sso = authx::load_access(&mut tx, admin_id, &state.config.features)
+    .await?
+    .is_some_and(|access| access.has(Capability::SsoManage));
+  if manages_sso && repository::mark_verified(&mut tx, &row.id, &now).await? {
     common::audit(
       &mut tx,
       "root",
       Some(admin_id),
       Some(&email),
-      "sso_provider.verified",
+      crate::services::events::Action::SsoProviderVerified,
       None,
       None,
       Some("sso_provider"),
@@ -1123,12 +1176,12 @@ pub async fn exchange(
   };
   let binding = binding.ok_or_else(invalid)?;
   let now = Utc::now();
-  let mut tx = state.db.pool().begin().await?;
+  let mut tx = crate::services::change::Change::begin(state.db.pool()).await?;
   let flow = repository::take_handoff(
     &mut tx,
     &token::hash(code),
     &token::hash(binding),
-    &now.to_rfc3339(),
+    &now.stamp(),
   )
   .await?;
   let (admin_id, redirect_to) = flow.ok_or_else(invalid)?;
@@ -1136,14 +1189,14 @@ pub async fn exchange(
   let (email, role_value) = repository::account(&mut tx, &admin_id)
     .await?
     .ok_or_else(invalid)?;
-  let role = AdminRole::parse_human(&role_value).ok_or_else(invalid)?;
+  let role = AdminRole::parse(&role_value).ok_or_else(invalid)?;
   let session = issue_session(&mut tx, &admin_id, SessionKind::Browser).await?;
   common::audit(
     &mut tx,
     role.audit_actor_type(),
     Some(&admin_id),
     Some(&email),
-    "login.succeeded",
+    crate::services::events::Action::LoginSucceeded,
     None,
     None,
     Some("session"),
@@ -1161,7 +1214,7 @@ pub async fn exchange(
         session_kind: SessionKind::Browser,
         token: None,
         csrf_token: session.csrf,
-        last_login_at: Some(session.created_at.to_rfc3339()),
+        last_login_at: Some(session.created_at.stamp()),
       },
       redirect_to: safe_redirect(redirect_to),
     },
@@ -1173,7 +1226,7 @@ pub async fn identity_status(
   state: &AppState,
   identity: &AuthIdentity,
 ) -> Result<IdentityResponse, HttpError> {
-  let (admin_id, _) = require_project_manager(identity)?;
+  let (admin_id, _) = require_person(identity)?;
   let provider = provider_row(state).await?;
   let linked = match &provider {
     Some(row) => repository::identity_of(state.db.pool(), admin_id, &row.id).await?,
@@ -1194,7 +1247,7 @@ pub async fn unlink_self(
   state: &AppState,
   identity: &AuthIdentity,
 ) -> Result<(), HttpError> {
-  let (admin_id, email) = require_project_manager(identity)?;
+  let (admin_id, email) = require_person(identity)?;
   if !matches!(
     identity,
     AuthIdentity::Admin {
@@ -1227,8 +1280,8 @@ pub async fn unlink(
   admin_id: &str,
   target_email: &str,
 ) -> Result<(), HttpError> {
-  let (actor_id, actor_email) = require_project_manager(identity)?;
-  let mut tx = state.db.pool().begin().await?;
+  let (actor_id, actor_email) = require_person(identity)?;
+  let mut tx = crate::services::change::Change::begin(state.db.pool()).await?;
   let removed = repository::delete_identities_of(&mut tx, admin_id).await?;
   if removed == 0 {
     return Err(HttpError::not_found(
@@ -1241,7 +1294,7 @@ pub async fn unlink(
     identity.audit_actor_type(),
     Some(actor_id),
     Some(actor_email),
-    "sso_identity.unlinked",
+    crate::services::events::Action::SsoIdentityUnlinked,
     None,
     None,
     Some("admin"),

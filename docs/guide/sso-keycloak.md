@@ -26,7 +26,7 @@ sequenceDiagram
   participant B as Browser
   participant D as Dopbase (localhost:7480)
   participant K as Keycloak (localhost:8080)
-  B->>D: Select "Sign in with Keycloak"
+  B->>D: Select "Continue with Keycloak"
   D-->>B: Redirect to Keycloak
   B->>K: Username and password
   K-->>B: Redirect to the Dopbase callback with a code
@@ -79,13 +79,19 @@ Start a separate Dopbase instance for the trial, so it doesn't touch a real
 one:
 
 ```bash
-DOPBASE_ROOT_EMAIL=root@example.com dopbase server start \
+DOPBASE_ROOT_EMAIL=root@dopbase.com DOPBASE_SSO=true DOPBASE_RBAC=true \
+  dopbase server start \
   --data-dir ./dopbase-sso-demo \
   --port 7480 \
   --public-url http://localhost:7480
 ```
 
 Dopbase creates the root account and prints its password once. Copy it.
+
+Single sign-on and adding people are both off by default. `DOPBASE_SSO=true`
+turns on the **Single sign-on** page, and `DOPBASE_RBAC=true` lets you add
+Thomi's account in step 8. See
+[optional features](/self-hosting/operations#optional-features).
 
 Single sign-on needs an HTTPS public URL, with one exception: `localhost`. That
 is why this tutorial works without a certificate. Run Dopbase directly on your
@@ -109,11 +115,11 @@ selected for the rest of the Keycloak steps.
 
 ## 4. Copy the redirect URI from Dopbase
 
-In another tab, open `http://localhost:7480` and sign in as `root@example.com`
-with the password from step 2. Open **Single sign-on** and copy the redirect
-URI under **1. Register Dopbase with your provider**.
+In another tab, open `http://localhost:7480` and sign in as `root@dopbase.com`
+with the password from step 2. Open **Single sign-on** and copy the
+**Redirect URI** with the **Copy** button next to it.
 
-![The Dopbase Single sign-on page showing the redirect URI http://localhost:7480/api/v1/auth/sso/callback](../assets/sso-keycloak/dopbase-redirect-uri.png)
+![The Dopbase Single sign-on page with no provider yet, showing the redirect URI http://localhost:7480/api/v1/auth/sso/callback](../assets/sso-keycloak/dopbase-redirect-uri.png)
 
 ## 5. Create the Dopbase client in Keycloak
 
@@ -181,17 +187,19 @@ email, and the test sign-in links root directly.
 ## 8. Create Thomi's account in Dopbase
 
 Single sign-on only signs in people who already have a Dopbase account. In
-Dopbase, open **Users** and select **Add User**. Keep the **Member** role,
-enter `thomi@dopbase.com`, and give the account a password. Select **Save**.
+Dopbase, open **Users** and select **Add user**. Enter `thomi@dopbase.com`,
+give the account a temporary password, and choose the **Member** role. Select
+**Add user**.
 
-![The Dopbase Add User dialog with thomi@dopbase.com as a member](../assets/sso-keycloak/dopbase-add-user.png)
+![The Dopbase Add user dialog with thomi@dopbase.com, a temporary password and the Member role](../assets/sso-keycloak/dopbase-add-user.png)
 
-The password is required for now. Once single sign-on is on, you can leave it
-empty for new accounts, and those people sign in only through Keycloak.
+The password is required for now. Once single sign-on is on, the dialog asks
+how a new person signs in. Choose **Single sign-on** and they get no password
+and sign in only through Keycloak.
 
 ## 9. Enter the provider details in Dopbase
 
-Go back to **Single sign-on** in Dopbase and fill in **2. Provider details**:
+Go back to **Single sign-on** in Dopbase and fill in the **Provider** form:
 
 | Field         | Value                                        |
 | ------------- | -------------------------------------------- |
@@ -201,7 +209,7 @@ Go back to **Single sign-on** in Dopbase and fill in **2. Provider details**:
 | Client ID     | `dopbase`                                    |
 | Client secret | The secret you copied in step 6              |
 
-![The Dopbase provider details form filled in for Keycloak](../assets/sso-keycloak/dopbase-provider-details.png)
+![The Dopbase Provider form filled in for Keycloak, with the issuer URL, client ID dopbase and the button label Keycloak](../assets/sso-keycloak/dopbase-provider-details.png)
 
 Select **Save**. Dopbase loads
 `http://localhost:8080/realms/dopbase/.well-known/openid-configuration` before
@@ -209,12 +217,13 @@ it saves, so a typo in the issuer URL or realm name shows up right away.
 
 ## 10. Run a test sign-in
 
-Under **3. Test, then turn on**, select **Test sign-in**. Dopbase sends you to
-Keycloak. Sign in with the `root` Keycloak user from step 7. Keycloak sends you
-back, and the page says "Test sign-in worked. You can turn on single sign-on
-now." The badge next to the title changes to **Ready to turn on**.
+In the card at the top of the page, select **Test sign-in**. Dopbase sends you
+to Keycloak. Sign in with the `root` Keycloak user from step 7. Keycloak sends
+you back, and the page says "Test sign-in worked. You can turn on single
+sign-on now." The badge next to **Keycloak** changes from **Untested** to
+**Off**, and **Turn on** becomes available.
 
-![The Dopbase Single sign-on page after a successful test sign-in, with the badge Ready to turn on](../assets/sso-keycloak/dopbase-test-ok.png)
+![The Dopbase Single sign-on page after a successful test sign-in, with the badge Off and the Turn on button](../assets/sso-keycloak/dopbase-test-ok.png)
 
 The test linked your root account to that Keycloak user and proved the client
 ID, secret, and redirect URI all work.
@@ -222,20 +231,21 @@ ID, secret, and redirect URI all work.
 ## 11. Turn it on and sign in as Thomi
 
 Select **Turn on**. Then sign out, or open a private window, and go to
-`http://localhost:7480`. The sign-in page now has a **Sign in with Keycloak**
+`http://localhost:7480`. The sign-in page now has a **Continue with Keycloak**
 button above the password form.
 
-![The Dopbase sign-in page with a Sign in with Keycloak button](../assets/sso-keycloak/dopbase-login-button.png)
+![The Dopbase sign-in page with a Continue with Keycloak button above the email and password form](../assets/sso-keycloak/dopbase-login-button.png)
 
 Select it. Keycloak shows its sign-in page with the realm name on top. Sign in
 as `thomi` with the password from step 7.
 
 ![Keycloak's sign-in page for the dopbase realm, with thomi as the username](../assets/sso-keycloak/keycloak-login.png)
 
-Keycloak sends you back to Dopbase, signed in as `thomi@dopbase.com` in the
-member console.
+Keycloak sends you back to Dopbase, signed in as `thomi@dopbase.com` with the
+Member role. Thomi sees no projects yet: a new member reaches only what someone
+gives them access to.
 
-![The Dopbase member console signed in as thomi@dopbase.com](../assets/sso-keycloak/dopbase-signed-in.png)
+![Dopbase signed in as thomi@dopbase.com, a Member, on an empty Projects page](../assets/sso-keycloak/dopbase-signed-in.png)
 
 On this first sign-in, Dopbase matched Thomi by the verified email and linked
 the Keycloak user to the Dopbase account. From now on it recognizes Thomi by
@@ -286,6 +296,8 @@ docker rm -f keycloak
 - **"No Dopbase account uses that email."** The email on the Keycloak user
   doesn't match any Dopbase account. Create the account on the Users page, or
   fix the email in Keycloak.
+- **"Your Dopbase account is disabled."** The account exists but is turned
+  off. Enable it on the Users page.
 - **"Single sign-on didn't work."** This usually means a wrong client secret,
   or **Client authentication** is off in Keycloak. Copy the secret from the
   **Credentials** tab again, save, and run **Test sign-in**. The

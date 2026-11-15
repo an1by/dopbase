@@ -1,0 +1,131 @@
+import { describe, expect, it } from "vitest";
+import {
+  accountName,
+  isAgent,
+  roleOf,
+  signInMethod,
+  tokenState,
+  userLimit,
+} from "./people";
+import {
+  maya,
+  memberRole,
+  reader,
+  reviewBot,
+  root,
+  tokenFixture,
+  userFixture,
+  viewerRole,
+} from "~/tests/people";
+
+const NOW = Date.parse("2026-10-31T12:00:00Z");
+
+describe("isAgent", () => {
+  it("tells an AI agent, which has a name, from a person, who has an email", () => {
+    expect(isAgent(reviewBot)).toBe(true);
+    expect(isAgent(maya)).toBe(false);
+    expect(isAgent(root)).toBe(false);
+    expect(accountName(reviewBot)).toBe("review-bot");
+    expect(accountName(maya)).toBe("maya@dopbase.com");
+  });
+});
+
+describe("userLimit", () => {
+  const people = [root, maya, reader];
+
+  it("is null when the server sets no limit", () => {
+    expect(userLimit(people, null)).toBeNull();
+    expect(userLimit(people, undefined)).toBeNull();
+    expect(userLimit(people, 0)).toBeNull();
+  });
+
+  it("counts the accounts the server marks: active people only", () => {
+    const gone = userFixture({ id: "usr_gone", status: "disabled" });
+    // The server's mark wins over anything the console could work out.
+    const unmarked = userFixture({ id: "usr_other", countsTowardLimit: false });
+    expect(userLimit([...people, gone, unmarked], 5)).toEqual({
+      used: 2,
+      max: 5,
+      full: false,
+    });
+  });
+
+  it("is full once every spot is taken, or more", () => {
+    expect(userLimit(people, 2)?.full).toBe(true);
+    expect(userLimit(people, 1)).toEqual({ used: 2, max: 1, full: true });
+  });
+});
+
+describe("signInMethod", () => {
+  it("shows a disabled account as disabled whatever it signs in with", () => {
+    expect(signInMethod(userFixture({ status: "disabled" }))).toBe("disabled");
+    expect(
+      signInMethod(
+        userFixture({
+          status: "disabled",
+          hasPassword: false,
+          ssoLinked: true,
+        }),
+      ),
+    ).toBe("disabled");
+  });
+
+  it("shows single sign-on for an account linked to it without a password", () => {
+    expect(
+      signInMethod(userFixture({ hasPassword: false, ssoLinked: true })),
+    ).toBe("sso");
+  });
+
+  it("shows password when the account has one, even if single sign-on is linked too", () => {
+    expect(signInMethod(maya)).toBe("password");
+    expect(signInMethod(userFixture({ ssoLinked: true }))).toBe("password");
+  });
+
+  it("shows none for an account with neither a password nor single sign-on", () => {
+    expect(signInMethod(userFixture({ hasPassword: false }))).toBe("none");
+  });
+});
+
+describe("roleOf", () => {
+  it("finds the role row behind an account", () => {
+    expect(roleOf(reader, [memberRole, viewerRole])).toBe(viewerRole);
+  });
+
+  it("returns null when the roles list doesn't have it, as for root", () => {
+    expect(roleOf(root, [memberRole, viewerRole])).toBeNull();
+    expect(roleOf(maya, [])).toBeNull();
+  });
+});
+
+describe("tokenState", () => {
+  it("calls a token with a future expiry active", () => {
+    expect(
+      tokenState(tokenFixture({ expiresAt: "2026-11-01T00:00:00Z" }), NOW),
+    ).toBe("active");
+  });
+
+  it("calls a token without an expiry active", () => {
+    expect(tokenState(tokenFixture({ expiresAt: null }), NOW)).toBe("active");
+  });
+
+  it("calls a token expired from the moment its expiry passes", () => {
+    expect(
+      tokenState(tokenFixture({ expiresAt: "2026-10-31T12:00:00Z" }), NOW),
+    ).toBe("expired");
+    expect(
+      tokenState(tokenFixture({ expiresAt: "2026-10-30T00:00:00Z" }), NOW),
+    ).toBe("expired");
+  });
+
+  it("calls a revoked token revoked even after it expired", () => {
+    expect(
+      tokenState(
+        tokenFixture({
+          revokedAt: "2026-10-20T00:00:00Z",
+          expiresAt: "2026-10-25T00:00:00Z",
+        }),
+        NOW,
+      ),
+    ).toBe("revoked");
+  });
+});

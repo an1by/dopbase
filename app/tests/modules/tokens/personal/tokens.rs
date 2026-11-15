@@ -1,0 +1,796 @@
+use super::grants_access::{As, Person, grant, instance, person, send};
+use super::*;
+
+async fn token(
+  router: &Router,
+  by: &Person,
+  user: &str,
+  body: Value,
+) -> (u16, Value) {
+  // AI agents' tokens live under /agents, everyone else's under /users.
+  let kind = if user.starts_with("agt_") {
+    "agents"
+  } else {
+    "users"
+  };
+  send(
+    router,
+    "POST",
+    &format!("/api/v1/{kind}/{user}/tokens"),
+    by.browser(),
+    Some(body),
+  )
+  .await
+}
+
+fn plaintext(body: &Value) -> String {
+  body["data"]["plaintextToken"].as_str().unwrap().to_owned()
+}
+
+#[tokio::test]
+async fn a_personal_token_reaches_its_account_s_live_access_within_its_scope() {
+  let (_dir, state, router) = test_app().await;
+  let (root, env) = instance(&state, &router).await;
+  let member = person(&router, &root, "member@dopbase.com", "member").await;
+  let dev = &env["payments/dev"];
+  let prod = &env["payments/prod"];
+  grant(
+    &router,
+    &root,
+    ("user", &member.id),
+    ("project", Some("payments")),
+    "write",
+  )
+  .await;
+  let runtime = |id: &str| format!("/api/v1/environments/{id}/secrets/runtime");
+
+  // A read token on dev only.
+  let (status, body) = token(
+    &router,
+    &member,
+    "me",
+    json!({"name":"laptop-agent","scopeType":"environment","scope":dev,"level":"read","expiresIn":"7d"}),
+  )
+  .await;
+  assert_eq!(status, 201, "{body}");
+  assert_eq!(body["data"]["token"]["scopeLabel"], "payments/dev");
+  let laptop = plaintext(&body);
+  let (status, _) = send(&router, "GET", &runtime(dev), As::Token(&laptop), None).await;
+  assert_eq!(status, 200);
+  let (status, _) = send(&router, "GET", &runtime(prod), As::Token(&laptop), None).await;
+  assert_eq!(status, 404);
+  let (status, _) = send(
+    &router,
+    "PUT",
+    &format!("/api/v1/environments/{dev}/secrets/FROM_TOKEN"),
+    As::Token(&laptop),
+    Some(json!({"value":"nope"})),
+  )
+  .await;
+  assert_eq!(status, 403);
+
+  // A write token changes secrets, but never manages or creates anything.
+  let (_, body) = token(&router, &member, "me", json!({"name":"ci","level":"write"})).await;
+  let ci = plaintext(&body);
+  let (status, body) = send(
+    &router,
+    "PUT",
+    &format!("/api/v1/environments/{dev}/secrets/FROM_TOKEN"),
+    As::Token(&ci),
+    Some(json!({"value":"written-by-token"})),
+  )
+  .await;
+  assert_eq!(status, 200, "{body}");
+  for (method, path) in [
+    ("GET", format!("/api/v1/environments/{dev}/tokens")),
+    ("GET", "/api/v1/users/me/tokens".to_owned()),
+    ("POST", "/api/v1/projects".to_owned()),
+  ] {
+    let (status, body) = send(
+      &router,
+      method,
+      &path,
+      As::Token(&ci),
+      Some(json!({"name":"x"})),
+    )
+    .await;
+    assert_eq!(status, 403, "{method} {path}: {body}");
+  }
+  let (status, body) = send(
+    &router,
+    "GET",
+    "/api/v1/users/me/access",
+    As::Token(&ci),
+    None,
+  )
+  .await;
+  assert_eq!(status, 200, "{body}");
+  assert_eq!(body["data"]["email"], "member@dopbase.com");
+  assert_eq!(body["data"]["token"]["name"], "ci");
+  assert_eq!(body["data"]["token"]["level"], "write");
+
+  // The token follows the account: losing the grant loses the data.
+  let (_, access) = send(
+    &router,
+    "GET",
+    &format!("/api/v1/users/{}/access", member.id),
+    root.browser(),
+    None,
+  )
+  .await;
+  let grant_id = access["data"]["grants"][0]["id"]
+    .as_str()
+    .unwrap()
+    .to_owned();
+  send(
+    &router,
+    "DELETE",
+    &format!("/api/v1/grants/{grant_id}"),
+    root.browser(),
+    None,
+  )
+  .await;
+  let (status, _) = send(&router, "GET", &runtime(dev), As::Token(&laptop), None).await;
+  assert_eq!(status, 404);
+
+  // A disabled account's tokens stop working.
+  sqlx::query("UPDATE accounts SET status = 'disabled' WHERE id = ?")
+    .bind(&member.id)
+    .execute(state.db.pool())
+    .await
+    .unwrap();
+  let (status, _) = send(&router, "GET", "/api/v1/projects", As::Token(&ci), None).await;
+  assert_eq!(status, 401);
+  sqlx::query("UPDATE accounts SET status = 'active' WHERE id = ?")
+    .bind(&member.id)
+    .execute(state.db.pool())
+    .await
+    .unwrap();
+
+  // Revoking is immediate, and a member can't revoke someone else's.
+  let (_, list) = send(
+    &router,
+    "GET",
+    "/api/v1/users/me/tokens",
+    member.cli(),
+    None,
+  )
+  .await;
+  assert_eq!(list["data"].as_array().unwrap().len(), 2);
+  let ci_id = list["data"][0]["id"].as_str().unwrap().to_owned();
+  let (status, _) = send(
+    &router,
+    "POST",
+    &format!("/api/v1/users/{}/tokens/{ci_id}/revoke", member.id),
+    root.browser(),
+    None,
+  )
+  .await;
+  assert_eq!(status, 200);
+  let (status, _) = send(&router, "GET", "/api/v1/projects", As::Token(&ci), None).await;
+  assert_eq!(status, 401);
+  let (status, _) = send(
+    &router,
+    "POST",
+    &format!("/api/v1/users/{}/tokens", root.id),
+    member.browser(),
+    Some(json!({"name":"x","level":"read"})),
+  )
+  .await;
+  assert_eq!(status, 403);
+  state.db.close().await;
+}
+
+#[tokio::test]
+async fn an_ai_agent_never_reaches_more_than_its_owner() {
+  let (_dir, state, router) = test_app().await;
+  let (root, env) = instance(&state, &router).await;
+  let owner = person(&router, &root, "lead@dopbase.com", "admin").await;
+  let (status, body) = send(
+    &router,
+    "POST",
+    "/api/v1/agents",
+    owner.browser(),
+    Some(json!({"name":"review-bot"})),
+  )
+  .await;
+  assert_eq!(status, 201, "{body}");
+  assert_eq!(body["data"]["ownerId"], owner.id);
+  let agent = body["data"]["id"].as_str().unwrap().to_owned();
+  // Root gives the agent read on everything; the owner manages all
+  // projects, so the agent reads both.
+  grant(&router, &root, ("agent", &agent), ("all", None), "read").await;
+  let (status, body) = token(
+    &router,
+    &owner,
+    &agent,
+    json!({"name":"default","level":"read"}),
+  )
+  .await;
+  assert_eq!(status, 201, "{body}");
+  let bot = plaintext(&body);
+  let runtime = |id: &str| format!("/api/v1/environments/{id}/secrets/runtime");
+  let search = &env["search/dev"];
+  let (status, _) = send(&router, "GET", &runtime(search), As::Token(&bot), None).await;
+  assert_eq!(status, 200);
+  // A person can't sign in as the agent.
+  let (status, _, _) = call(
+    &router,
+    "POST",
+    "/api/v1/auth/login",
+    None,
+    Some(json!({"email":"review-bot","password":"","sessionKind":"cli"})),
+  )
+  .await;
+  assert!(status == 401 || status == 422, "{status}");
+
+  // Cut the owner to payments, and the agent loses search too.
+  let (_, access) = send(
+    &router,
+    "GET",
+    &format!("/api/v1/users/{}/access", owner.id),
+    root.browser(),
+    None,
+  )
+  .await;
+  let all = access["data"]["grants"][0]["id"]
+    .as_str()
+    .unwrap()
+    .to_owned();
+  send(
+    &router,
+    "DELETE",
+    &format!("/api/v1/grants/{all}"),
+    root.browser(),
+    None,
+  )
+  .await;
+  grant(
+    &router,
+    &root,
+    ("user", &owner.id),
+    ("project", Some("payments")),
+    "project_manager",
+  )
+  .await;
+  let (status, _) = send(&router, "GET", &runtime(search), As::Token(&bot), None).await;
+  assert_eq!(status, 404);
+  let (status, _) = send(
+    &router,
+    "GET",
+    &runtime(&env["payments/dev"]),
+    As::Token(&bot),
+    None,
+  )
+  .await;
+  assert_eq!(status, 200);
+
+  // The owner can't leave while answering for the agent, and a disabled
+  // owner disables the agent.
+  let (status, body) = send(
+    &router,
+    "DELETE",
+    &format!("/api/v1/users/{}", owner.id),
+    root.browser(),
+    None,
+  )
+  .await;
+  assert_eq!(status, 409, "{body}");
+  assert!(body["error"]["OWNS_AI_AGENTS"].is_string());
+  sqlx::query("UPDATE accounts SET status = 'disabled' WHERE id = ?")
+    .bind(&owner.id)
+    .execute(state.db.pool())
+    .await
+    .unwrap();
+  let (status, _) = send(&router, "GET", "/api/v1/projects", As::Token(&bot), None).await;
+  assert_eq!(status, 401);
+
+  // An auditor can't create agents, so it can't own one; another admin
+  // can take it.
+  let auditor =
+    super::audit_scope::with_role(&router, &root, "auditor@dopbase.com", "rol_auditor").await;
+  let (status, body) = send(
+    &router,
+    "PATCH",
+    &format!("/api/v1/agents/{agent}"),
+    root.browser(),
+    Some(json!({"ownerId":auditor.id})),
+  )
+  .await;
+  assert_eq!(status, 400, "{body}");
+  assert!(body["error"]["OWNER_INVALID"].is_string());
+  let deputy = person(&router, &root, "deputy@dopbase.com", "admin").await;
+  let (status, body) = send(
+    &router,
+    "PATCH",
+    &format!("/api/v1/agents/{agent}"),
+    root.browser(),
+    Some(json!({"ownerId":deputy.id})),
+  )
+  .await;
+  assert_eq!(status, 200, "{body}");
+  assert_eq!(body["data"]["ownerId"], deputy.id);
+
+  // Root hands the agent to itself, and the owner can go.
+  let (status, body) = send(
+    &router,
+    "PATCH",
+    &format!("/api/v1/agents/{agent}"),
+    root.browser(),
+    Some(json!({"ownerId":root.id})),
+  )
+  .await;
+  assert_eq!(status, 200, "{body}");
+  assert_eq!(body["data"]["ownerId"], root.id);
+  let (status, _) = send(
+    &router,
+    "DELETE",
+    &format!("/api/v1/users/{}", owner.id),
+    root.browser(),
+    None,
+  )
+  .await;
+  assert_eq!(status, 200);
+  // Changing hands revoked the old token; root's new one works with the
+  // owner gone.
+  let (status, _) = send(&router, "GET", &runtime(search), As::Token(&bot), None).await;
+  assert_eq!(status, 401);
+  let (status, body) = token(
+    &router,
+    &root,
+    &agent,
+    json!({"name":"root","level":"read"}),
+  )
+  .await;
+  assert_eq!(status, 201, "{body}");
+  let bot = plaintext(&body);
+  let (status, _) = send(&router, "GET", &runtime(search), As::Token(&bot), None).await;
+  assert_eq!(status, 200);
+  state.db.close().await;
+}
+
+#[tokio::test]
+async fn a_root_owned_ai_agent_writes_where_it_is_granted_write() {
+  let (_dir, state, router) = test_app().await;
+  let (root, env) = instance(&state, &router).await;
+  let (status, body) = send(
+    &router,
+    "POST",
+    "/api/v1/agents",
+    root.browser(),
+    Some(json!({"name":"solo-bot"})),
+  )
+  .await;
+  assert_eq!(status, 201, "{body}");
+  assert_eq!(body["data"]["ownerId"], root.id);
+  let agent = body["data"]["id"].as_str().unwrap().to_owned();
+  grant(
+    &router,
+    &root,
+    ("agent", &agent),
+    ("project", Some("payments")),
+    "write",
+  )
+  .await;
+  let secret = |id: &str| format!("/api/v1/environments/{id}/secrets/FROM_AGENT");
+  let dev = &env["payments/dev"];
+
+  // A read token on a write grant still only reads.
+  let (status, body) = token(
+    &router,
+    &root,
+    &agent,
+    json!({"name":"reader","level":"read"}),
+  )
+  .await;
+  assert_eq!(status, 201, "{body}");
+  let reader = plaintext(&body);
+  let (status, _) = send(
+    &router,
+    "PUT",
+    &secret(dev),
+    As::Token(&reader),
+    Some(json!({"value":"nope"})),
+  )
+  .await;
+  assert_eq!(status, 403);
+
+  let (status, body) = token(
+    &router,
+    &root,
+    &agent,
+    json!({"name":"writer","level":"write","replaceExisting":true}),
+  )
+  .await;
+  assert_eq!(status, 201, "{body}");
+  let writer = plaintext(&body);
+  let (status, body) = send(
+    &router,
+    "PUT",
+    &secret(dev),
+    As::Token(&writer),
+    Some(json!({"value":"written-by-agent"})),
+  )
+  .await;
+  assert_eq!(status, 200, "{body}");
+  // Once production is protected, the project grant stops short of it.
+  let (status, body) = send(
+    &router,
+    "PATCH",
+    &format!("/api/v1/environments/{}", env["payments/prod"]),
+    root.cli(),
+    Some(json!({"protected":true})),
+  )
+  .await;
+  assert_eq!(status, 200, "{body}");
+  let (status, _) = send(
+    &router,
+    "PUT",
+    &secret(&env["payments/prod"]),
+    As::Token(&writer),
+    Some(json!({"value":"nope"})),
+  )
+  .await;
+  assert_eq!(status, 404);
+  state.db.close().await;
+}
+
+#[tokio::test]
+async fn replacing_an_agent_s_token_revokes_its_other_live_tokens_in_one_step() {
+  let (_dir, state, router) = test_app().await;
+  let (root, _) = instance(&state, &router).await;
+  let owner = person(&router, &root, "lead@dopbase.com", "admin").await;
+  let (_, body) = send(
+    &router,
+    "POST",
+    "/api/v1/agents",
+    owner.browser(),
+    Some(json!({"name":"deploy-bot"})),
+  )
+  .await;
+  let agent = body["data"]["id"].as_str().unwrap().to_owned();
+  let mut old = Vec::new();
+  for name in ["first", "second", "stale"] {
+    let (status, body) = token(&router, &owner, &agent, json!({"name":name,"level":"read"})).await;
+    assert_eq!(status, 201, "{body}");
+    old.push((
+      body["data"]["token"]["id"].as_str().unwrap().to_owned(),
+      plaintext(&body),
+    ));
+  }
+  // An expired token is left as it is.
+  sqlx::query("UPDATE personal_tokens SET expires_at = '2000-01-01T00:00:00+00:00' WHERE id = ?")
+    .bind(&old[2].0)
+    .execute(state.db.pool())
+    .await
+    .unwrap();
+  let projects = |bearer: &str| {
+    let bearer = bearer.to_owned();
+    let router = router.clone();
+    async move {
+      send(&router, "GET", "/api/v1/projects", As::Token(&bearer), None)
+        .await
+        .0
+    }
+  };
+  assert_eq!(projects(&old[0].1).await, 200);
+
+  let (status, body) = token(
+    &router,
+    &owner,
+    &agent,
+    json!({"name":"rotated","level":"read","replaceExisting":true}),
+  )
+  .await;
+  assert_eq!(status, 201, "{body}");
+  let rotated = plaintext(&body);
+  assert_eq!(projects(&rotated).await, 200);
+  assert_eq!(projects(&old[0].1).await, 401);
+  assert_eq!(projects(&old[1].1).await, 401);
+  let revoked: Vec<String> = sqlx::query_scalar(
+    "SELECT resource_id FROM audit_events WHERE action = 'personal_token.revoked' AND json_extract(metadata, '$.userId') = ? ORDER BY seq",
+  )
+  .bind(&agent)
+  .fetch_all(state.db.pool())
+  .await
+  .unwrap();
+  assert_eq!(revoked, [old[0].0.clone(), old[1].0.clone()]);
+  let stale: Option<String> =
+    sqlx::query_scalar("SELECT revoked_at FROM personal_tokens WHERE id = ?")
+      .bind(&old[2].0)
+      .fetch_one(state.db.pool())
+      .await
+      .unwrap();
+  assert!(stale.is_none());
+
+  // A person's tokens are theirs to revoke one by one.
+  let member = person(&router, &root, "member@dopbase.com", "member").await;
+  let (_, body) = token(
+    &router,
+    &member,
+    "me",
+    json!({"name":"laptop","level":"read"}),
+  )
+  .await;
+  let laptop = plaintext(&body);
+  let (status, body) = token(
+    &router,
+    &member,
+    "me",
+    json!({"name":"desktop","level":"read","replaceExisting":true}),
+  )
+  .await;
+  assert_eq!(status, 422, "{body}");
+  assert!(body["error"]["TOKEN_REPLACE_INVALID"].is_string(), "{body}");
+  assert_eq!(projects(&laptop).await, 200);
+  state.db.close().await;
+}
+
+#[tokio::test]
+async fn someone_who_cannot_manage_people_learns_nothing_about_other_accounts() {
+  let (_dir, state, router) = test_app().await;
+  let (root, _) = instance(&state, &router).await;
+  let member = person(&router, &root, "member@dopbase.com", "member").await;
+  let other = person(&router, &root, "other@dopbase.com", "member").await;
+
+  // A missing id, root and another person all get the role refusal.
+  for user in ["usr_missing", root.id.as_str(), other.id.as_str()] {
+    let mut refusals = Vec::new();
+    for (method, path, body) in [
+      ("GET", format!("/api/v1/users/{user}/tokens"), None),
+      (
+        "POST",
+        format!("/api/v1/users/{user}/tokens"),
+        Some(json!({"name":"x","level":"read"})),
+      ),
+      (
+        "POST",
+        format!("/api/v1/users/{user}/tokens/pat_missing/revoke"),
+        None,
+      ),
+    ] {
+      let (status, body) = send(&router, method, &path, member.browser(), body).await;
+      assert_eq!(status, 403, "{method} {path}: {body}");
+      refusals.push(body);
+    }
+    assert!(
+      refusals
+        .iter()
+        .all(|body| body["error"]["AUTHORIZATION_DENIED"]
+          == "Your role does not allow this operation."),
+      "{user}: {refusals:?}"
+    );
+  }
+
+  // Someone who manages people still hears that the account is missing.
+  let (status, _) = send(
+    &router,
+    "GET",
+    "/api/v1/users/usr_missing/tokens",
+    root.browser(),
+    None,
+  )
+  .await;
+  assert_eq!(status, 404);
+  state.db.close().await;
+}
+
+#[tokio::test]
+async fn managing_without_seeing_people_treats_a_missing_account_like_one_out_of_reach() {
+  let (_dir, state, router) = test_app().await;
+  let (root, _) = instance(&state, &router).await;
+  let lead = person(&router, &root, "lead@dopbase.com", "admin").await;
+  let (status, body) = send(
+    &router,
+    "POST",
+    "/api/v1/roles",
+    root.browser(),
+    Some(json!({
+      "name": "Token desk",
+      "capabilities": ["tokens.revoke_others", "users.manage"],
+      "maxLevel": "read",
+    })),
+  )
+  .await;
+  assert_eq!(status, 201, "{body}");
+  let role_id = body["data"]["id"].as_str().unwrap();
+  let desk = super::audit_scope::with_role(&router, &root, "desk@dopbase.com", role_id).await;
+
+  // Root and an admin reach further than the desk; a missing id must look
+  // the same as they do.
+  for (method, suffix, body) in [
+    ("POST", "tokens/pat_missing/revoke", None),
+    ("POST", "tokens", Some(json!({"name":"x","level":"read"}))),
+  ] {
+    let mut refusals = Vec::new();
+    for user in ["usr_missing", root.id.as_str(), lead.id.as_str()] {
+      let path = format!("/api/v1/users/{user}/{suffix}");
+      let (status, response) = send(&router, method, &path, desk.browser(), body.clone()).await;
+      assert_eq!(status, 403, "{path}: {response}");
+      refusals.push(response);
+    }
+    assert!(
+      refusals.iter().all(|response| response == &refusals[0]),
+      "{suffix}: {refusals:?}"
+    );
+    assert!(
+      refusals[0]["error"]["ACCESS_EXCEEDS_YOURS"].is_string(),
+      "{suffix}: {}",
+      refusals[0]
+    );
+  }
+  state.db.close().await;
+}
+
+// Security audit N2 and architecture audit B2: a token kept working after
+// its role stopped allowing it, at the level it was made with.
+#[tokio::test]
+async fn a_token_follows_its_role_on_every_use() {
+  let (_dir, state, router) = test_app().await;
+  let (root, env) = instance(&state, &router).await;
+  let dev = env["payments/dev"].clone();
+  let (status, role) = send(
+    &router,
+    "POST",
+    "/api/v1/roles",
+    root.browser(),
+    Some(json!({"name":"Contractor","capabilities":["tokens.personal"],"maxLevel":"write","tokenMaxLevel":"write"})),
+  )
+  .await;
+  assert_eq!(status, 201, "{role}");
+  let role_id = role["data"]["id"].as_str().unwrap().to_owned();
+  let contractor =
+    super::audit_scope::with_role(&router, &root, "carol@dopbase.com", &role_id).await;
+  grant(
+    &router,
+    &root,
+    ("user", &contractor.id),
+    ("project", Some("payments")),
+    "write",
+  )
+  .await;
+  let (status, body) = token(
+    &router,
+    &contractor,
+    "me",
+    json!({"name":"ci","scopeType":"all","level":"write","expiresIn":"30d"}),
+  )
+  .await;
+  assert_eq!(status, 201, "{body}");
+  let raw = plaintext(&body);
+  let write = |raw: String| {
+    let router = router.clone();
+    let path = format!("/api/v1/environments/{dev}/secrets/FROM_CI");
+    async move {
+      send(
+        &router,
+        "PUT",
+        &path,
+        As::Token(&raw),
+        Some(json!({"value":"v"})),
+      )
+      .await
+      .0
+    }
+  };
+  assert_eq!(write(raw.clone()).await, 200);
+
+  // Lowering the role's token level caps the token at once.
+  let (status, body) = send(
+    &router,
+    "PATCH",
+    &format!("/api/v1/roles/{role_id}"),
+    root.browser(),
+    Some(json!({"tokenMaxLevel":"read"})),
+  )
+  .await;
+  assert_eq!(status, 200, "{body}");
+  assert_eq!(write(raw.clone()).await, 403);
+  let (status, _) = send(
+    &router,
+    "GET",
+    &format!("/api/v1/environments/{dev}/secrets/runtime"),
+    As::Token(&raw),
+    None,
+  )
+  .await;
+  assert_eq!(status, 200, "reading is still within the role");
+
+  // Taking tokens away from the role ends the token.
+  let (status, body) = send(
+    &router,
+    "PATCH",
+    &format!("/api/v1/roles/{role_id}"),
+    root.browser(),
+    Some(json!({"capabilities":[],"tokenScope":"none"})),
+  )
+  .await;
+  assert_eq!(status, 200, "{body}");
+  let (status, body) = send(&router, "GET", "/api/v1/projects", As::Token(&raw), None).await;
+  assert_eq!(status, 401, "{body}");
+}
+
+// The role's longest lifetime counts from when a token was made, whatever
+// its expiry says, and a creation time that can't be read fails closed.
+#[tokio::test]
+async fn a_token_older_than_its_role_allows_is_refused() {
+  let (_dir, state, router) = test_app().await;
+  let (root, _) = instance(&state, &router).await;
+  let member = person(&router, &root, "dana@dopbase.com", "member").await;
+  let mut tokens = Vec::new();
+  for name in ["recent", "old", "unreadable"] {
+    let (status, body) = token(
+      &router,
+      &member,
+      "me",
+      json!({"name":name,"scopeType":"all","level":"read","expiresIn":"30d"}),
+    )
+    .await;
+    assert_eq!(status, 201, "{body}");
+    tokens.push(plaintext(&body));
+  }
+  // The Member role allows tokens 365 days. Expiry stays in the future, as
+  // a 0.1.x token with a long expiry would have it.
+  let made_long_ago = (chrono::Utc::now() - chrono::Duration::days(400))
+    .format("%Y-%m-%dT%H:%M:%S%.3fZ")
+    .to_string();
+  for (name, created_at) in [("old", made_long_ago.as_str()), ("unreadable", "t")] {
+    sqlx::query("UPDATE personal_tokens SET created_at = $1 WHERE name = $2 AND account_id = $3")
+      .bind(created_at)
+      .bind(name)
+      .bind(&member.id)
+      .execute(state.db.pool())
+      .await
+      .unwrap();
+  }
+  let use_token = |raw: String| {
+    let router = router.clone();
+    async move {
+      send(&router, "GET", "/api/v1/projects", As::Token(&raw), None)
+        .await
+        .0
+    }
+  };
+  assert_eq!(use_token(tokens[0].clone()).await, 200);
+  assert_eq!(
+    use_token(tokens[1].clone()).await,
+    401,
+    "older than 365 days"
+  );
+  assert_eq!(
+    use_token(tokens[2].clone()).await,
+    401,
+    "creation time unreadable"
+  );
+}
+
+// Security audit v1 M10: a password change signed sessions out but left
+// personal tokens working.
+#[tokio::test]
+async fn a_new_password_ends_the_tokens_made_under_the_old_one() {
+  let (_dir, state, router) = test_app().await;
+  let (root, _) = instance(&state, &router).await;
+  let member = person(&router, &root, "member@dopbase.com", "member").await;
+  let (status, body) = token(
+    &router,
+    &member,
+    "me",
+    json!({"name":"laptop","scopeType":"all","level":"read","expiresIn":"7d"}),
+  )
+  .await;
+  assert_eq!(status, 201, "{body}");
+  let raw = plaintext(&body);
+  let (status, _) = send(&router, "GET", "/api/v1/projects", As::Token(&raw), None).await;
+  assert_eq!(status, 200);
+  let (status, body) = send(
+    &router,
+    "PATCH",
+    &format!("/api/v1/users/{}", member.id),
+    root.browser(),
+    Some(json!({"password":"another-horse-789"})),
+  )
+  .await;
+  assert_eq!(status, 200, "{body}");
+  let (status, _) = send(&router, "GET", "/api/v1/projects", As::Token(&raw), None).await;
+  assert_eq!(status, 401);
+}

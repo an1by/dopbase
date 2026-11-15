@@ -1,0 +1,68 @@
+export const MAX_TOKEN_EXPIRY_DAYS = 1095;
+/** Runner tokens last 90 days unless asked otherwise, and a year at most. */
+export const RUNNER_TOKEN_DEFAULT_EXPIRY = "90d";
+export const RUNNER_TOKEN_MAX_DAYS = 365;
+
+export const tokenExpiryOptions = [
+  { value: "never", label: "No expiry" },
+  { value: "1h", label: "1 hour" },
+  { value: "1d", label: "1 day" },
+  { value: "3d", label: "3 days" },
+  { value: "7d", label: "7 days" },
+  { value: "30d", label: "30 days" },
+  { value: "custom", label: "Custom" },
+];
+
+/** Runner token lifetimes, offered as a segmented choice. */
+export const runnerTokenExpiryPresets = [
+  { value: "7d", label: "7 days" },
+  { value: "30d", label: "30 days" },
+  { value: "90d", label: "90 days" },
+  { value: "365d", label: "1 year" },
+  { value: "custom", label: "Custom" },
+];
+
+const presetExpiries = new Set(
+  [...tokenExpiryOptions, ...runnerTokenExpiryPresets]
+    .filter((option) => option.value !== "custom")
+    .map((option) => option.value),
+);
+
+/**
+ * When a token created now with `expiresIn` (`never`, `7d`, `12h` ...)
+ * stops working, or null for never.
+ */
+export function expiryDate(expiresIn: string, from = new Date()): Date | null {
+  const match = /^([0-9]+)([hd])$/.exec(expiresIn);
+  if (!match) return null;
+  const hours = Number(match[1]) * (match[2] === "d" ? 24 : 1);
+  return new Date(from.getTime() + hours * 3_600_000);
+}
+
+export const tokenExpiryUnits = [
+  { value: "h", label: "Hours" },
+  { value: "d", label: "Days" },
+];
+
+export function tokenExpiresIn(
+  choice: string,
+  amount: string,
+  unit: string,
+  maxDays = MAX_TOKEN_EXPIRY_DAYS,
+): string {
+  if (choice !== "custom") {
+    if (!presetExpiries.has(choice)) throw new Error("Choose a valid expiry.");
+    return choice;
+  }
+  const max = unit === "h" ? maxDays * 24 : unit === "d" ? maxDays : 0;
+  if (!/^[0-9]+$/.test(amount) || !max) {
+    throw new Error("Enter a whole number of hours or days.");
+  }
+  const value = Number(amount);
+  if (!Number.isSafeInteger(value) || value < 1 || value > max) {
+    throw new Error(
+      `Enter a value from 1 to ${max} ${unit === "h" ? "hours" : "days"}.`,
+    );
+  }
+  return `${value}${unit}`;
+}

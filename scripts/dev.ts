@@ -24,11 +24,6 @@ const children: Child[] = [
   },
 ];
 
-console.log("Dopbase development servers starting:");
-console.log("  Admin UI: http://localhost:9000");
-console.log("  API:      http://localhost:8840/api/v1");
-console.log("  API Spec:  http://localhost:8840/api/docs/");
-
 let stopping = false;
 
 async function stop(signal: NodeJS.Signals, exitCode: number): Promise<never> {

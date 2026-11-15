@@ -21,6 +21,9 @@ pub const AUDIT_ARCHIVE_DIRECTORY_NAME: &str = "audit-archive";
 pub const AUDIT_RETENTION_INTERVAL: std::time::Duration =
   std::time::Duration::from_secs(24 * 60 * 60);
 
+/// Days audit records are kept when nothing sets `audit_retention_days`.
+pub const DEFAULT_AUDIT_RETENTION_DAYS: u64 = 365;
+
 pub const ENV_AUDIT_RETENTION_DAYS: &str = "DOPBASE_AUDIT_RETENTION_DAYS";
 pub const ENV_SECRET_HISTORY_VERSIONS: &str = "DOPBASE_SECRET_HISTORY_VERSIONS";
 
@@ -34,6 +37,12 @@ pub const ENV_TRUSTED_PROXIES: &str = "DOPBASE_TRUSTED_PROXIES";
 pub const ENV_DATA_DIR: &str = "DOPBASE_DATA_DIR";
 pub const ENV_DOCS: &str = "DOPBASE_DOCS";
 pub const ENV_WEB_UI: &str = "DOPBASE_WEB_UI";
+pub const ENV_UPDATE_CHECK: &str = "DOPBASE_UPDATE_CHECK";
+pub const ENV_VERSION_WARNING: &str = "DOPBASE_VERSION_WARNING";
+pub const ENV_SSO: &str = "DOPBASE_SSO";
+pub const ENV_RBAC: &str = "DOPBASE_RBAC";
+pub const ENV_RBAC_ROLES: &str = "DOPBASE_RBAC_ROLES";
+pub const ENV_RBAC_MAX_USERS: &str = "DOPBASE_RBAC_MAX_USERS";
 pub const ENV_HOST: &str = "DOPBASE_HOST";
 pub const ENV_MASTER_KEY_PATH: &str = "DOPBASE_MASTER_KEY_PATH";
 pub const ENV_PORT: &str = "DOPBASE_PORT";
@@ -60,20 +69,51 @@ pub const RUN_RESERVED_NAMES: [&str; 5] = [
 pub const RUN_SHELL_RESERVED_NAMES: [&str; 4] = ["PATH", "HOME", "PS1", "PS2"];
 pub const RUN_SHELL_RESERVED_PREFIXES: [&str; 2] = ["XDG_", "LC_"];
 /// Names that make a program load extra code or run extra commands.
-/// `dopbase run` skips them unless `--only` names them, then warns.
-pub const RUN_CODE_LOADING_NAMES: [&str; 11] = [
+/// `dopbase run` skips them unless `--only` names them, then warns. Some
+/// run a command with no file on disk (`GIT_SSH_COMMAND`, `PAGER`), so a
+/// person who can write secrets could otherwise run commands wherever the
+/// environment is used.
+pub const RUN_CODE_LOADING_NAMES: [&str; 31] = [
+  // Dynamic loaders.
   "LD_PRELOAD",
   "LD_LIBRARY_PATH",
+  "LD_AUDIT",
   "DYLD_INSERT_LIBRARIES",
   "DYLD_LIBRARY_PATH",
+  "DYLD_FRAMEWORK_PATH",
+  // Language runtimes.
   "NODE_OPTIONS",
+  "NODE_PATH",
   "PERL5OPT",
+  "PERL5LIB",
   "PYTHONWARNINGS",
+  "PYTHONPATH",
+  "RUBYOPT",
+  "RUBYLIB",
+  "JAVA_TOOL_OPTIONS",
+  "JDK_JAVA_OPTIONS",
+  "_JAVA_OPTIONS",
+  "PHPRC",
+  // Shells.
   "BASH_ENV",
   "PROMPT_COMMAND",
-  "JAVA_TOOL_OPTIONS",
-  "PHPRC",
+  // Git, SSH and the tools they start.
+  "GIT_SSH",
+  "GIT_SSH_COMMAND",
+  "GIT_PROXY_COMMAND",
+  "GIT_EXTERNAL_DIFF",
+  "GIT_ASKPASS",
+  "SSH_ASKPASS",
+  "GIT_PAGER",
+  "GIT_EDITOR",
+  "PAGER",
+  "EDITOR",
+  "VISUAL",
 ];
+/// Prefixes treated like [`RUN_CODE_LOADING_NAMES`]. `GIT_CONFIG_COUNT`
+/// with `GIT_CONFIG_KEY_n` and `GIT_CONFIG_VALUE_n` sets any Git option,
+/// `core.fsmonitor` and `core.sshCommand` included.
+pub const RUN_CODE_LOADING_PREFIXES: [&str; 1] = ["GIT_CONFIG_"];
 /// Names that change program behavior without loading code. `dopbase run`
 /// injects them and warns.
 pub const RUN_SENSITIVE_NAMES: [&str; 5] = [
@@ -85,7 +125,7 @@ pub const RUN_SENSITIVE_NAMES: [&str; 5] = [
 ];
 
 /// Every environment variable read by the Dopbase executable.
-pub const fn executable_environment_names() -> [&'static str; 15] {
+pub const fn executable_environment_names() -> [&'static str; 21] {
   [
     ENV_TOKEN,
     ENV_SERVER_URL,
@@ -97,22 +137,29 @@ pub const fn executable_environment_names() -> [&'static str; 15] {
     ENV_PUBLIC_URL,
     ENV_DOCS,
     ENV_WEB_UI,
+    ENV_UPDATE_CHECK,
+    ENV_VERSION_WARNING,
     ENV_MASTER_KEY_PATH,
     ENV_SHUTDOWN_GRACE_SECONDS,
     ENV_AUDIT_RETENTION_DAYS,
     ENV_SECRET_HISTORY_VERSIONS,
     ENV_TRUSTED_PROXIES,
+    ENV_SSO,
+    ENV_RBAC,
+    ENV_RBAC_ROLES,
+    ENV_RBAC_MAX_USERS,
   ]
 }
 
 /// Every `DOPBASE_*` environment variable the server configuration reads.
 /// The background server strips these from its child process so the daemon
 /// resolves its configuration from the captured launch inputs.
-pub const fn daemon_environment_names() -> [&'static str; 12] {
+pub const fn daemon_environment_names() -> [&'static str; 17] {
   [
     ENV_DATA_DIR,
     ENV_DOCS,
     ENV_WEB_UI,
+    ENV_UPDATE_CHECK,
     ENV_HOST,
     ENV_MASTER_KEY_PATH,
     ENV_PORT,
@@ -122,5 +169,9 @@ pub const fn daemon_environment_names() -> [&'static str; 12] {
     ENV_AUDIT_RETENTION_DAYS,
     ENV_SECRET_HISTORY_VERSIONS,
     ENV_TRUSTED_PROXIES,
+    ENV_SSO,
+    ENV_RBAC,
+    ENV_RBAC_ROLES,
+    ENV_RBAC_MAX_USERS,
   ]
 }

@@ -26,22 +26,25 @@ the [CLI cheat sheet](./cheat-sheet).
 | `dopbase server status`                | Check the local server process      |
 | `dopbase server logs`                  | Read background server logs         |
 | `dopbase client connect <server-url>`  | Validate and save another server    |
-| `dopbase client connect local`         | Return to the implicit local server |
+| `dopbase client connect local`         | Return to this machine's server     |
 | `dopbase login`                        | Sign in or save a runner token      |
-| `dopbase logout`                       | Remove the active saved credential  |
+| `dopbase logout`                       | End and remove the saved login      |
 | `dopbase client status`                | Show safe effective client settings |
 | `dopbase status`                       | Alias for `dopbase client status`   |
+| `dopbase access`                       | Show what you or a token can reach  |
 | `dopbase update`                       | Check GitHub for a newer release    |
-| `dopbase admin reset-password <email>` | Reset a user password offline       |
+| `dopbase admin reset-password <email>` | Reset a user password on the server |
+| `dopbase admin passcode <email>`       | Sign an account in without password |
 | `dopbase admin factory-reset`          | Reset the local instance offline    |
 
 When no server is configured, client commands use `http://localhost:8840`.
 `client connect` validates a new endpoint, asks for interactive confirmation,
 stops the current managed background server when present, deletes the previous
 encrypted CLI session, clears the saved default environment, and then saves the
-new endpoint. A foreground server must first be stopped with Ctrl+C. It does
-not select a project or environment, stop remote or unrelated local servers,
-or revoke browser sessions.
+new endpoint. To switch away from a local foreground server, stop it with
+Ctrl+C first; connecting to one while it runs works. It does not select a
+project or environment, stop remote or unrelated local servers, or revoke
+browser sessions.
 
 ## Server setup
 
@@ -123,6 +126,12 @@ The command exits with status 0 whether or not an update is available, and with
 status 1 when the release cannot be queried. Run it with `--json` for
 automation. No other command contacts GitHub.
 
+`dopbase update` asks GitHub every time you run it, whatever
+`DOPBASE_UPDATE_CHECK` says. That setting only controls whether the server
+checks for releases on its own for the Status page. To keep a machine off
+GitHub completely, don't run `dopbase update` there, or block
+`api.github.com` at the network.
+
 The server resolution order is:
 
 1. A global `--server <url>` argument
@@ -141,6 +150,26 @@ CI systems and deployment platforms should inject `DOPBASE_TOKEN` from their
 secret store. Authentication uses `DOPBASE_TOKEN`, then the encrypted credential
 saved by `login`. A saved credential is used only when it matches the resolved
 server. An invalid environment credential never falls back to the saved one.
+
+`dopbase login` and `dopbase logout` stop with exit code 1 while
+`DOPBASE_TOKEN` is set. The token takes priority over a saved login, so a new
+login would be ignored and a logout would leave you signed in. Unset the
+variable first. To remove a saved login while keeping the variable for other
+commands, run `env -u DOPBASE_TOKEN dopbase logout`. The error message prints
+that command with any `--data-dir` or `--server` you passed, so you can copy
+it as is.
+
+`dopbase logout` ends a saved login on the server before it deletes the local
+files, so a copy of the session token stops working. If the server can't be
+reached, the files are still deleted and a warning says the session stays
+valid until it expires. A saved runner token is only removed from this machine;
+revoke it with `dopbase token revoke` or in the Admin UI. With `--json`,
+`server_session` is `revoked`, `already_ended`, `not_reached` (the server
+didn't answer), `unreadable` (the saved login was damaged) or
+`not_applicable`. When `--server` or
+`DOPBASE_URL` points somewhere other than the server that issued the saved
+login, logout ends it on the issuing server and never sends its token to the
+other one. The JSON then also has `session_server_url`.
 
 `dopbase client status` displays the config path, resolved server and its source,
 authentication source, locally identified credential type, login email, and
@@ -258,7 +287,8 @@ created in that project, so cloning across projects or servers is not
 supported. Dopbase resolves the source, checks that the new name is available,
 shows the source, destination, and secret count, then asks for confirmation.
 `--yes` skips this confirmation but still requires a recently authenticated
-human account. Runner tokens and service accounts cannot clone environments.
+human account with project manager on the project. Runner tokens and personal
+tokens cannot clone environments.
 
 Dopbase creates the destination before reading plaintext secrets. This closes
 a name-conflict race without exposing source values. If export or import
@@ -377,10 +407,10 @@ them newest first with the change, who made it, when, and a status:
 ```text
 $ dopbase secret history payment-service/production DATABASE_URL
 VERSION   CHANGE                BY                SAVED                  STATUS
-v4        rolled back from v2   ana@example.com   2026-10-23 10:02 UTC   current
-v3        updated               bob@example.com   2026-10-22 18:40 UTC   available
-v2        imported              bob@example.com   2026-10-21 09:15 UTC   available
-v1        created               ana@example.com   2026-09-01 08:00 UTC   available
+v4        rolled back from v2   ana@dopbase.com   2026-10-23 10:02 UTC   current
+v3        updated               bob@dopbase.com   2026-10-22 18:40 UTC   available
+v2        imported              bob@dopbase.com   2026-10-21 09:15 UTC   available
+v1        created               ana@dopbase.com   2026-09-01 08:00 UTC   available
 
 4 version(s)
 ```
@@ -390,8 +420,9 @@ v1        created               ana@example.com   2026-09-01 08:00 UTC   availab
 Dopbase still shows who changed them and when, but no longer stores the value.
 `--limit` sets the page size (1 to 200, default 50). When more versions exist,
 the command for the next page, with `--before`, is printed to standard error.
-`--json` prints the API page unchanged. History never contains values, and AI
-agent tokens can read it the same way they read `secret list`.
+`--json` prints the API page unchanged. History never contains values, and a
+personal token that reads names only can read it the same way it reads
+`secret list`.
 
 `secret rollback` saves the value of an earlier version as a new version. It
 never edits history, so a rollback can be rolled back too. Leave out VERSION
@@ -492,7 +523,8 @@ and creates the file with restrictive permissions where the platform supports
 them. Export reveals plaintext values and records access in the audit log.
 Human CLI exports require interactive password confirmation. Runner tokens can
 export only their assigned environment without a prompt, using `DOPBASE_TOKEN`
-or an encrypted saved runner credential. AI agent tokens cannot export values.
+or an encrypted saved runner credential. A personal token exports without a
+prompt when it reaches read on the environment; a names-only token is refused.
 
 Exports require a live server response. They never fall back to the encrypted
 run cache. Authentication, network, or rendering failures leave an existing
@@ -562,14 +594,61 @@ dopbase token create payment-service/production \
 
 The plaintext token is displayed only once. Tokens can also be created and
 revoked on an environment's Tokens tab in the [Admin UI](/ui/projects-environments).
-Without `--expires-in`, a runner token does not expire. Use `never` or a whole
-number followed by `h` or `d`, up to `26280h` or `1095d`. The server rejects
-expired tokens even if the client's clock is wrong. The list shows each token's
-expiry and status.
+Runner tokens always expire. Without `--expires-in` a token lasts 90 days; give
+a whole number followed by `h` or `d`, up to `8760h` or `365d`. Creating one
+asks you to confirm your password if you haven't signed in recently. The server
+rejects expired tokens even if the client's clock is wrong. The list shows each
+token's expiry and status.
 A runner token can retrieve values for `dopbase run` and export them from its
 assigned environment. It cannot modify secrets or access another environment.
 Export audit entries identify the runner token and secret count without storing
 values.
+
+## Personal tokens
+
+A personal token lets a script or an AI agent act as you through
+`DOPBASE_TOKEN`. It reaches at most what you reach at that moment, within its
+own project or environment and level, and always expires.
+
+```bash
+dopbase token personal create --name laptop-agent --level metadata \
+  --project payment-service --expires-in 7d
+dopbase token personal create --name siem --audit --expires-in 90d
+```
+
+| Command                                                                                                                                              | Purpose                   |
+| ---------------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------- |
+| `dopbase token personal create --name <NAME> [--level metadata\|read\|write] [--project <REF> \| --env <ENVIRONMENT_REF>] [--expires-in <DURATION>]` | Create one of your tokens |
+| `dopbase token personal create --name <NAME> --audit [--expires-in <DURATION>]`                                                                      | Create an audit token     |
+| `dopbase token personal list`                                                                                                                        | List your tokens          |
+| `dopbase token personal revoke <token-id>`                                                                                                           | Revoke one of your tokens |
+
+`--level` defaults to `read` and stops at your role's token limit. Leave out
+`--project` and `--env` for every project you reach. `--expires-in` defaults to
+your role's default and can't be `never`. `--audit` is for roles whose tokens
+read the audit log, such as Auditor. The value is shown once. Tokens for AI
+agent accounts are created on the [AI agents](/ui/ai-agents) page.
+
+## Access
+
+`dopbase access` shows your role, groups, and every grant that reaches you.
+With a personal token in `DOPBASE_TOKEN`, it also shows the token's own limit,
+so you can check what an agent will reach before handing it over.
+
+| Command                                  | Purpose                                         |
+| ---------------------------------------- | ----------------------------------------------- |
+| `dopbase access`                         | Show your access, or the token's                |
+| `dopbase access --project <PROJECT_REF>` | Show who reaches a project and its environments |
+| `dopbase access --user <USER_ID>`        | Show another account's access                   |
+
+`--project` needs project manager on the project, or `access.report`.
+`--user` needs `users.view` for a person, and `agents.view_all` for an AI agent,
+or `agents.view` if the agent is yours. Access is changed in the Admin UI, on a
+project's [Access](/ui/project-access) page.
+
+An AI agent's report also names its owner. An agent never gets more than its
+owner, so where the owner has less, the level column shows what the agent
+really gets, with the granted level in brackets.
 
 ## Audit commands
 
@@ -601,7 +680,7 @@ request. `--limit` sets the page size from 1 to 200 (default 50):
 ```bash
 dopbase audit list
 dopbase audit list --project storefront --environment storefront/production
-dopbase audit list --action secret.updated --actor admin@example.com --limit 100
+dopbase audit list --action secret.updated --actor admin@dopbase.com --limit 100
 dopbase --json audit list --cursor <CURSOR>
 ```
 
@@ -616,9 +695,11 @@ with nothing on standard error. `nextCursor` is `null` on the last page. To
 read every matching record in a script, use `dopbase audit export` instead of
 paging by hand.
 
-The table leaves out each event's metadata; `--json` includes it. The command
-requires an administrator sign-in. A member gets the server's authorization
-error, and runner or agent tokens are refused before any audit request. Audit
+The table leaves out each event's metadata; `--json` includes it. You see the
+events your role allows: everything with `audit.read_all`, your projects with
+`audit.read`, and otherwise your own actions. Audit tokens read the log as
+their account would; runner tokens and personal tokens that read project data
+are refused. Audit
 events never contain secret values, and the CLI does not fetch any. Control
 characters and bidirectional text markers stored in an event are shown as `?`,
 so a planted record cannot rewrite the lines around it in your terminal.
@@ -681,18 +762,23 @@ Pass the environment directly:
 dopbase run payment-service/development -- npm run dev
 ```
 
-On an application server, save its runner token once:
+On an application server, save its runner token once. The token belongs to one
+environment, so `run` needs no reference:
 
 ```bash
 printf '%s' "$RUNNER_TOKEN" | dopbase login --token
-dopbase run payment-service/production -- npm start
+dopbase run -- npm start
 ```
 
 For CI jobs, inject `DOPBASE_TOKEN` through the pipeline's secret store:
 
 ```bash
-dopbase run payment-service/production -- npm start
+dopbase run -- npm start
 ```
+
+With a runner token, a positional reference or `DOPBASE_ENV` only checks the
+token. A reference to another environment stops `run` before the child starts,
+and the saved default is ignored.
 
 Automation may set `DOPBASE_ENV` instead:
 
@@ -707,14 +793,16 @@ dopbase env default payment-service/development
 dopbase run -- npm run dev
 ```
 
-An explicit positional environment takes precedence over `DOPBASE_ENV`, which
-takes precedence over the saved default. If none is available, `run` explains
+For other credentials, an explicit positional environment takes precedence over
+`DOPBASE_ENV`, which takes precedence over the saved default. If none is available, `run` explains
 how to set the default. Use `dopbase env default --clear` to remove it. An empty
 `DOPBASE_ENV` is an error and does not fall back.
 
 Before starting the child, Dopbase writes the resolved project, environment,
 immutable ID, injected key count, and whether values came from the live server or
-encrypted cache to standard error. It does not print values.
+encrypted cache to standard error. With a runner token it writes only the key
+count and the source, because that output usually ends up in CI logs. It does
+not print values.
 
 Choose which secrets reach the child and which inherited values win:
 
@@ -853,6 +941,10 @@ dopbase restore ./pre-upgrade.dop --setup-token setup_... --yes
   4. Decrypts and authenticates the archive using the provided `--key` (or the server's existing master key).
   5. If `--key` was provided, re-keys restored secret metadata to the target server's existing `~/.dopbase/master.key`.
   6. Replaces SQLite database tables, runs any pending migrations, and preserves the active administrator session.
+- **A backup from Dopbase 0.1.x**: restore upgrades it to the 0.2.0 schema
+  before anything else, then restores it the usual way. It prints what it left
+  out and changed, and everyone signs in again. See
+  [Upgrade to 0.2.0](/self-hosting/upgrade-to-0-2).
 - **On a first-run uninitialized server**:
   - Start with no bootstrap email, or use `server setup --web`; restoration requires the printed one-time setup token.
 
@@ -862,22 +954,95 @@ dopbase restore ./pre-upgrade.dop --setup-token setup_... --yes
 
 ## Server administration
 
-Offline maintenance commands operate directly on the server database:
+Maintenance commands open the server's database directly. They never talk to
+a server over the network:
 
 ```bash
-dopbase admin reset-password admin@example.com
+dopbase admin reset-password admin@dopbase.com
+dopbase admin passcode root@dopbase.com
 dopbase admin factory-reset
 dopbase admin factory-reset --no-backup
 ```
 
-`admin reset-password` performs offline recovery on the host machine. Because it accesses SQLite files directly, the background or foreground server process must be stopped first to avoid database locks.
+They act on the instance in the local data directory (`--data-dir`,
+`DOPBASE_DATA_DIR`, or `~/.dopbase`), so run them on the machine that hosts
+the server. For a server in a container, run them inside it:
+
+```bash
+docker exec -it dopbase dopbase admin reset-password admin@dopbase.com
+```
+
+Each command prints the data directory it uses. All three refuse when this CLI
+is connected to a different server, through `dopbase client connect` or
+`DOPBASE_URL`, and ask you to connect to the local instance. A connection
+counts as this instance when it is the instance's public URL, or `localhost`,
+`127.0.0.1`, or `::1` on the port the server listens on. If this instance is
+stopped and a Dopbase server still answers at that address, it's another
+server on the same port, such as a container published on it, and the
+commands refuse too. With no saved connection, as in a fresh container, the
+commands run. To fix a refusal,
+connect to the local instance first, or set `DOPBASE_URL` to it for one run:
+
+```bash
+dopbase client connect http://localhost:8840
+DOPBASE_URL=http://localhost:8840 dopbase admin reset-password admin@dopbase.com
+```
+
+`admin reset-password` sets a new password in the instance's database. It
+works with the server running or stopped. When the server is stopped, it holds
+the instance lock while it writes, so a server can't start halfway through.
+It never creates a data directory, database, or master key and never upgrades
+the database. It refuses a directory with no instance, a master key that
+doesn't match, and a database a newer Dopbase version has upgraded.
 
 | Option                     | Description                                       |
 | -------------------------- | ------------------------------------------------- |
 | `--config <FILE>`          | Server configuration file to load (`server.toml`) |
 | `--master-key-file <FILE>` | Path to the server master key file                |
 
-The command requires an interactive terminal, prompts for a new password (12 to 128 characters), updates the stored Argon2id hash, and immediately revokes all active sessions for that account.
+The command requires an interactive terminal, prompts for a new password (12 to 128 characters), updates the stored Argon2id hash, and revokes every active session on the instance. If the server is running and too many wrong passwords paused sign-in for the account, that pause still runs out on its own.
+
+`admin passcode` prints a one-time passcode and a link that signs an account
+in to the Admin UI without a password. Run it on the server machine while the
+server is running, as a user who can write the server's data directory:
+
+```bash
+dopbase admin passcode root@dopbase.com
+dopbase admin passcode alice@dopbase.com --ttl 120
+dopbase --json admin passcode root@dopbase.com
+```
+
+```text
+Launch passcode for root@dopbase.com
+
+Instance:  /srv/dopbase
+Passcode:  GJZG-FLMT
+Expires:   in 60 seconds (14:03:27 UTC)
+Open:      https://dopbase.example.com/launch#identity=root%40dopbase.com&passcode=GJZG-FLMT
+
+It works once. Running this command again replaces it.
+```
+
+| Option            | Description                                                   |
+| ----------------- | ------------------------------------------------------------- |
+| `--ttl <SECONDS>` | How long the passcode stays valid, from 15 to 600. Default 60 |
+| `--config <FILE>` | Server configuration file to load (`server.toml`)             |
+
+The command writes a hash of the passcode into the server database, so it
+never talks to the server and needs no sign-in. Being able to write the data
+directory is what lets you use it. Each account has one passcode at a time,
+and running the command again replaces it. The passcode sits in the link's
+fragment (after `#`), which browsers never send to the server, so it stays
+out of proxy and access logs.
+
+It works for any person's account. It refuses AI agents, which sign in with
+tokens only, and turned-off accounts. While single sign-on is required, only
+root can use it. It also refuses when the server isn't running or the Admin UI
+is off (`web_ui = false`). With `--json` it prints `email`, `passcode`,
+`expiresAt`, `ttlSeconds`, `url`, and `dataDir`.
+
+A passcode works once, and five wrong tries delete it. Each passcode issued,
+and each sign-in attempt with one, is recorded in the audit log.
 
 `admin factory-reset` also requires the server to be stopped. It displays the
 exact data directory, then requires `please-wipe-out-system` and the Dopbase

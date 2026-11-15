@@ -1,9 +1,10 @@
 name: PR template
 
+# Checks the body of every pull request, whatever its base, so feature and
+# stacked pull requests are checked too. Drafts are skipped until they are
+# marked ready for review.
 on:
   pull_request:
-    branches:
-      - main
     types:
       - opened
       - edited
@@ -14,9 +15,15 @@ on:
 permissions:
   contents: read
 
+# Each edit to the body starts a run, so a newer one replaces the last.
+concurrency:
+  group: pr-template-${{ github.event.pull_request.number }}
+  cancel-in-progress: true
+
 jobs:
   validate:
     name: Validate PR template
+    if: ${{ !github.event.pull_request.draft }}
     runs-on: ubuntu-24.04
     timeout-minutes: 5
     steps:

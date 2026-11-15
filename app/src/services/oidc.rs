@@ -5,7 +5,7 @@
 
 use std::{
   fmt,
-  sync::Arc,
+  sync::{Arc, OnceLock},
   time::{Duration, Instant},
 };
 
@@ -171,12 +171,22 @@ impl OidcCache {
 
 /// Provider requests never follow redirects: a redirect could point the
 /// server at an internal address the operator never configured.
+///
+/// The client is built once because loading the system root certificates
+/// takes about 100 ms on macOS. Idle connections aren't kept, so a pooled
+/// connection never outlives the Tokio runtime that opened it.
 fn http_client() -> Result<reqwest::Client, OidcError> {
-  reqwest::Client::builder()
+  static CLIENT: OnceLock<reqwest::Client> = OnceLock::new();
+  if let Some(client) = CLIENT.get() {
+    return Ok(client.clone());
+  }
+  let client = reqwest::Client::builder()
     .redirect(reqwest::redirect::Policy::none())
     .timeout(HTTP_TIMEOUT)
+    .pool_max_idle_per_host(0)
     .build()
-    .map_err(|_| OidcError::Discovery)
+    .map_err(|_| OidcError::Discovery)?;
+  Ok(CLIENT.get_or_init(|| client).clone())
 }
 
 /// Fetch and check the discovery document and signing keys. The crate

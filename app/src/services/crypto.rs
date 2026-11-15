@@ -1,3 +1,4 @@
+use crate::utils::time::Stamp;
 use std::{
   fs::{self, OpenOptions},
   io::Write,
@@ -15,10 +16,34 @@ use sqlx::SqlitePool;
 use zeroize::Zeroizing;
 
 const VERIFICATION_TEXT: &[u8] = b"dopbase-master-key-v1";
+/// Bytes XChaCha20-Poly1305 adds to every value: its authentication tag. A
+/// stored ciphertext is the value's length plus this.
+pub const VALUE_TAG_BYTES: i64 = 16;
 
 #[derive(Clone)]
 pub struct CryptoService {
   master_key: Arc<RwLock<Zeroizing<Vec<u8>>>>,
+}
+
+/// How the master key file on disk compares with the key the server loaded.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum KeyFileState {
+  Matches,
+  Changed,
+  Missing,
+  Unreadable,
+}
+
+impl KeyFileState {
+  /// The name the Status page uses.
+  pub fn as_str(self) -> &'static str {
+    match self {
+      Self::Matches => "matches",
+      Self::Changed => "changed",
+      Self::Missing => "missing",
+      Self::Unreadable => "unreadable",
+    }
+  }
 }
 
 #[derive(Debug)]
@@ -59,10 +84,58 @@ impl CryptoService {
     } else {
       let (ciphertext, nonce) =
         service.encrypt_master(VERIFICATION_TEXT, b"instance-verification")?;
-      sqlx::query("INSERT INTO instance_metadata(id, verification_ciphertext, verification_nonce, created_at) VALUES(1, ?, ?, ?)")
-                .bind(ciphertext).bind(nonce).bind(Utc::now().to_rfc3339()).execute(pool).await?;
+      sqlx::query("INSERT INTO instance_metadata(id, verification_ciphertext, verification_nonce, created_at) VALUES(1, $1, $2, $3)")
+                .bind(ciphertext).bind(nonce).bind(Utc::now().stamp()).execute(pool).await?;
     }
     Ok(service)
+  }
+
+  /// Load the key file at `path` and check it against an instance that
+  /// already has one. Unlike `initialize`, this never creates a key file
+  /// and never writes to the database.
+  pub async fn open_existing(
+    pool: &SqlitePool,
+    path: &Path,
+  ) -> Result<Self> {
+    let record: Option<(Vec<u8>, Vec<u8>)> = sqlx::query_as(
+      "SELECT verification_ciphertext, verification_nonce FROM instance_metadata WHERE id = 1",
+    )
+    .fetch_optional(pool)
+    .await?;
+    let (ciphertext, nonce) = record.context(
+      "this instance has never been started, so it has no master key yet. Start the server once first",
+    )?;
+    let service = Self {
+      master_key: Arc::new(RwLock::new(Zeroizing::new(read_key_file(path)?))),
+    };
+    let clear = service
+      .decrypt_master(&ciphertext, &nonce, b"instance-verification")
+      .context("configured master key does not match this database")?;
+    if clear != VERIFICATION_TEXT {
+      bail!("configured master key does not match this database");
+    }
+    Ok(service)
+  }
+
+  /// How the key file at `path` compares with the key in use. Both copies
+  /// stay in zeroized buffers and are compared in constant time.
+  pub fn key_file_state(
+    &self,
+    path: &Path,
+  ) -> KeyFileState {
+    use subtle::ConstantTimeEq;
+    match fs::read(path).map(Zeroizing::new) {
+      Ok(bytes) => {
+        let key = self.master_key.read().unwrap();
+        if bool::from(bytes.as_slice().ct_eq(key.as_slice())) {
+          KeyFileState::Matches
+        } else {
+          KeyFileState::Changed
+        }
+      }
+      Err(error) if error.kind() == std::io::ErrorKind::NotFound => KeyFileState::Missing,
+      Err(_) => KeyFileState::Unreadable,
+    }
   }
 
   pub fn master_key_bytes(&self) -> Vec<u8> {
@@ -260,7 +333,8 @@ pub async fn rekey_database(
 
   let old_crypto = CryptoService::from_key(old_master_key.to_vec());
   let new_crypto = CryptoService::from_key(new_master_key.to_vec());
-  let mut tx = pool.begin().await?;
+  // Reads every row before rewriting it, so take the write lock first.
+  let mut tx = pool.begin_with("BEGIN IMMEDIATE").await?;
 
   // 1. Re-key instance verification metadata
   let meta: Option<(Vec<u8>, Vec<u8>)> = sqlx::query_as(
@@ -279,7 +353,7 @@ pub async fn rekey_database(
     let (new_cipher, new_nonce) =
       new_crypto.encrypt_master(VERIFICATION_TEXT, b"instance-verification")?;
     sqlx::query(
-      "UPDATE instance_metadata SET verification_ciphertext = ?, verification_nonce = ? WHERE id = 1",
+      "UPDATE instance_metadata SET verification_ciphertext = $1, verification_nonce = $2 WHERE id = 1",
     )
     .bind(new_cipher)
     .bind(new_nonce)
@@ -287,34 +361,10 @@ pub async fn rekey_database(
     .await?;
   }
 
-  // 2. Re-wrap data keys in secrets table
-  type SecretKeyRow = (String, String, i64, Vec<u8>, Vec<u8>);
-  let rows: Vec<SecretKeyRow> =
-    sqlx::query_as("SELECT environment_id, key, version, wrapped_key, key_nonce FROM secrets")
-      .fetch_all(&mut *tx)
-      .await?;
-
-  for (env_id, secret_key, version, wrapped_key, key_nonce) in rows {
-    let secret_aad = aad(&env_id, &secret_key, version);
-    let data_key = old_crypto
-      .decrypt_master(&wrapped_key, &key_nonce, &secret_aad)
-      .with_context(|| {
-        format!("failed to unwrap secret {env_id}:{secret_key} with provided master key")
-      })?;
-    let (new_wrapped, new_nonce) = new_crypto.encrypt_master(&data_key, &secret_aad)?;
-    sqlx::query(
-      "UPDATE secrets SET wrapped_key = ?, key_nonce = ? WHERE environment_id = ? AND key = ?",
-    )
-    .bind(new_wrapped)
-    .bind(new_nonce)
-    .bind(&env_id)
-    .bind(&secret_key)
-    .execute(&mut *tx)
-    .await?;
-  }
-
-  // 3. Re-wrap data keys of stored versions. Expired versions hold no
+  // 2. Re-wrap data keys. Values live only in secret_versions; the
+  // current value is the newest version. Expired versions hold no
   // ciphertext and are skipped.
+  type SecretKeyRow = (String, String, i64, Vec<u8>, Vec<u8>);
   let rows: Vec<SecretKeyRow> = sqlx::query_as(
     "SELECT environment_id, key, version, wrapped_key, key_nonce FROM secret_versions WHERE wrapped_key IS NOT NULL",
   )
@@ -332,7 +382,7 @@ pub async fn rekey_database(
       })?;
     let (new_wrapped, new_nonce) = new_crypto.encrypt_master(&data_key, &secret_aad)?;
     sqlx::query(
-      "UPDATE secret_versions SET wrapped_key = ?, key_nonce = ? WHERE environment_id = ? AND key = ? AND version = ?",
+      "UPDATE secret_versions SET wrapped_key = $1, key_nonce = $2 WHERE environment_id = $3 AND key = $4 AND version = $5",
     )
     .bind(new_wrapped)
     .bind(new_nonce)
@@ -343,7 +393,7 @@ pub async fn rekey_database(
     .await?;
   }
 
-  // 4. Re-encrypt single sign-on client secrets.
+  // 3. Re-encrypt single sign-on client secrets.
   let rows: Vec<(String, Vec<u8>, Vec<u8>)> =
     sqlx::query_as("SELECT id, client_secret_ciphertext, client_secret_nonce FROM sso_providers")
       .fetch_all(&mut *tx)
@@ -358,7 +408,7 @@ pub async fn rekey_database(
       })?;
     let (new_ciphertext, new_nonce) = new_crypto.encrypt_master(&secret, &provider_aad)?;
     sqlx::query(
-      "UPDATE sso_providers SET client_secret_ciphertext = ?, client_secret_nonce = ? WHERE id = ?",
+      "UPDATE sso_providers SET client_secret_ciphertext = $1, client_secret_nonce = $2 WHERE id = $3",
     )
     .bind(new_ciphertext)
     .bind(new_nonce)

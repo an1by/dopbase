@@ -1,34 +1,42 @@
 ---
-title: "Identity, roles, and tokens"
-description: "How Dopbase handles identity: root, admin, and member roles, AI agent accounts, human sessions, and environment-scoped runner tokens."
+title: "Identity and access"
+description: "Root, people, and AI agents; roles and capabilities; grants and groups on projects and environments; sessions, personal tokens, and runner tokens."
 ---
 
-# Identity and tokens
+# Identity and access
 
-Dopbase needs identities for people and for software.
+Dopbase has three kinds of identity:
 
-## Human users
+- **Root**, the one account created during first-run setup. It can do
+  everything and is the way back in when everything else fails.
+- **Accounts**, for people and AI agents. Each holds one role, which says what
+  it may do on the instance, and reaches projects and environments through
+  grants.
+- **Runner tokens**, for servers and CI jobs. Each reads the values of one
+  environment.
 
-The instance has one protected human `root` account, created during first-run
-setup, plus `admin` and `member` accounts. All three human roles have full
-project, environment, secret, and runner-token access in the Admin UI and
-existing human CLI operations. Root and admin manage human and AI accounts.
-Root alone manages full-instance backups and factory reset. Other users cannot change or delete the root account.
+People sign in with a password or single sign-on. AI agents never sign in;
+they use personal tokens. A personal token always acts as one account and
+never reaches further than that account does.
+
+## People
 
 Passwords are hashed with Argon2id. Browser sessions have an eight-hour idle
 and 24-hour absolute lifetime. CLI sessions are opaque bearer tokens with a
 30-day idle and 90-day absolute lifetime and are stored in an encrypted local
 session file. Offline password recovery verifies the master key, requires
-the server to be stopped, and revokes every human session.
+the server to be stopped, and revokes every human session. A disabled account
+can't sign in, and its sessions and tokens stop working.
 
 ### Single sign-on
 
 Root can let people sign in to the Admin UI through an OpenID Connect provider.
-A sign-in links to an existing admin or member account by verified email the
-first time, then by the provider's subject identifier. It never creates an
-account. While it is on, administrators can create accounts without a password,
-and root can require single sign-on for everyone else. Root always keeps its
-password. See [single sign-on](/guide/single-sign-on).
+A sign-in links to an existing account by verified email the first time, then
+by the provider's subject identifier. It never creates an account, and it never
+links root or an AI agent. While it is on, administrators can create accounts
+without a password, and root can require single sign-on for everyone else. Root
+always keeps its password, because it alone holds `password.breakglass`. See
+[single sign-on](/guide/single-sign-on).
 
 ### Browser login
 
@@ -91,7 +99,8 @@ The encrypted payload also caches the administrator email for offline
 Human `secret get --reveal` and `export` operations in the official CLI require
 interactive password confirmation every time. An account that cannot use a
 password, because it has none or single sign-on is required, approves a code in
-the Admin UI instead. Runner tokens can export their
+the Admin UI instead. Personal tokens skip the prompt; the server checks that
+the token reaches values. Runner tokens can export their
 assigned environment without a prompt, using `DOPBASE_TOKEN` or a saved runner
 credential. Direct HTTP clients follow the server's authentication policy;
 browser exports require recent authentication, with a password or single
@@ -108,59 +117,247 @@ The plaintext token is displayed only once. A runner can retrieve, inject, and
 export values from its assigned environment. It cannot change secrets or access
 another environment. Exports are audited with the runner token ID and secret
 count, without recording values. Production and staging servers should always
-use different runner tokens. Runner tokens have no expiry by default. Use
-`--expires-in 12h` or `--expires-in 7d` when creating one for a short job.
-Durations must be whole hours or days, up to 1,095 days.
+use different runner tokens. A runner token lasts 90 days unless you choose
+otherwise, and a year at most. Use `--expires-in 12h` or `--expires-in 7d` for
+a short job. Creating one needs a recent sign-in.
+
+A runner token works only while the person who made it is active. Turning
+them off stops their runner tokens, and deleting them deletes the tokens, so
+someone who leaves doesn't leave working CI credentials behind. Tokens
+brought over from 0.1.x don't record who made them and keep working until
+you revoke them.
+
+## Roles and capabilities
+
+Every account except root holds one role. A role is data, not code. It holds:
+
+- **Capabilities**: what holders may do on the instance, such as manage people
+  or read the audit log.
+- **A level ceiling**: the deepest level any grant can give holders. A grant
+  above it is refused, and access never goes past it.
+- **A sign-in mode**: people who sign in, or accounts that use tokens only.
+- **A token policy**: whether holders' personal tokens read project data or the
+  audit log, the highest level they reach, and how long they last.
+
+These roles are built in and can't be changed:
+
+| Role     | Capabilities                                                                                                                                                                                                                                    | Ceiling         | Personal tokens                                                |
+| -------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | --------------- | -------------------------------------------------------------- |
+| Admin    | `users.view`, `users.manage`, `groups.manage`, `grants.manage`, `projects.create`, `audit.read`, `audit.verify`, `access.report`, `instance.view`, `tokens.personal`, `tokens.revoke_others`, `agents.view`, `agents.view_all`, `agents.manage` | project manager | Project data, up to write, 30 days by default, at most a year  |
+| Member   | `tokens.personal`, `agents.view`                                                                                                                                                                                                                | manage          | Project data, up to write, 30 days by default, at most a year  |
+| Auditor  | `users.view`, `audit.read`, `audit.read_all`, `audit.verify`, `access.report`, `instance.view`, `tokens.personal`, `agents.view_all`                                                                                                            | metadata        | The audit log only, 30 days by default, at most a year         |
+| AI agent | `tokens.personal`                                                                                                                                                                                                                               | write           | Project data, up to write, 30 days by default, at most 90 days |
+
+Root creates custom roles on the [Roles](/ui/roles) page, for example a Viewer
+that reads values but never changes them, or a token-only role for CI bots.
+Changing a custom role changes what everyone holding it can do on their next
+request. A role someone holds can't be deleted.
+
+| Capability             | Lets holders                                                                                                       |
+| ---------------------- | ------------------------------------------------------------------------------------------------------------------ |
+| `users.view`           | See people, groups, roles, and where someone's access comes from                                                   |
+| `users.manage`         | Add, change, and remove people whose access is within their own. Not AI agents                                     |
+| `groups.manage`        | Create groups and change their members                                                                             |
+| `grants.manage`        | Reserved and hidden in the role editor. Giving access depends on the project manager level today                   |
+| `projects.create`      | Create projects. The creator becomes the new project's project manager                                             |
+| `access.report`        | See who reaches any project they can see, without managing it                                                      |
+| `audit.read`           | Read audit events on settings and on the projects they reach                                                       |
+| `audit.read_all`       | Read every audit event                                                                                             |
+| `audit.verify`         | Verify the audit log's hash chain                                                                                  |
+| `instance.view`        | See instance status                                                                                                |
+| `tokens.personal`      | Hold personal tokens                                                                                               |
+| `tokens.revoke_others` | Revoke other people's personal tokens when their access is within their own                                        |
+| `agents.view`          | Create AI agents, then see and run the ones they own: rename, disable, delete, tokens, and access within their own |
+| `agents.view_all`      | See every AI agent, its owner, access, and tokens, without changing them                                           |
+| `agents.manage`        | Change, delete, or transfer anyone's AI agent and manage its tokens, within their own access                       |
+
+Root also holds `roles.manage`, `grants.all_projects`, `sso.manage`,
+`instance.backup`, `instance.reset`, and `password.breakglass`. No role can be
+given these, so root alone manages roles, single sign-on, backups, and factory
+reset, grants access to every project at once, and keeps password sign-in when
+single sign-on is required.
+
+## Access to projects and environments
+
+A **grant** gives a user or a group one level on all projects, one project, or
+one environment. The levels build on each other:
+
+| Level           | Allows                                                                                                  |
+| --------------- | ------------------------------------------------------------------------------------------------------- |
+| Names only      | See the project and environment, secret names, versions, history, and the `.env` layout                 |
+| Read            | Also reveal values, export, run with secrets, and read old versions                                     |
+| Write           | Also set, delete, import, and roll back secrets                                                         |
+| Manage          | Also rename, protect, or delete the environment and manage its runner tokens                            |
+| Project manager | Given on a project only. Also rename or delete the project, add environments, and decide who reaches it |
+
+To work out what an account reaches in one environment, Dopbase:
+
+1. Collects the account's own grants and those of its groups.
+2. Keeps the most specific kind that applies: a grant on the environment wins
+   over one on its project, which wins over one on all projects.
+3. Takes the highest level among those.
+4. Caps it at the role's ceiling. For an AI agent, also at its owner's access.
+   For a personal token, also at the token's own scope and level.
+
+A project manager manages every environment of the project. A grant of **No
+access** on one environment cuts it out of a wider grant, and a lower
+environment grant narrows a wider one.
+
+An environment marked **protected**, such as production, ignores project and
+all-projects grants below project manager. Only a grant on the environment
+itself, or a project manager, reaches it.
+
+Anything an account can't reach doesn't exist for it: lists leave it out and
+requests for it answer 404. Changes apply on the account's next request, tokens
+included.
+
+### Groups
+
+A group is a named set of accounts. A grant to a group reaches everyone in it,
+and leaving the group takes that access away. Groups are flat, never hold root,
+and never add capabilities. See [groups](/ui/groups).
+
+### Who can change access
+
+Grants, group members, and protection are changed from the Admin UI only,
+with a recent sign-in. These rules stop anyone from handing out more than they
+hold:
+
+- You grant only on projects you manage, at levels up to project manager.
+  Grants on all projects are root's.
+- Nobody grants to themselves or to root, and a grant to a person stays within
+  their role's ceiling.
+- You change a group only when you manage every project it reaches.
+- You give only roles within your own capabilities and ceiling.
+- You change, delete, or unlink an account only when its role and its access
+  are within yours. Only root changes root.
+- Nobody changes their own role.
+
+Admins that root creates start as project managers of every project. Admins
+that other admins create, and every new member, start with no access until
+someone shares a project with them. Changing a person's role drops their
+all-projects grant; project grants stay, under the new role's ceiling.
+
+## Personal tokens
+
+A personal token (`dpp_...`) lets a script or an AI agent act as an account
+without signing in. It reaches at most what the account reaches at that
+moment, within its own scope and level:
+
+- **Scope**: all projects, one project, or one environment. Audit tokens read
+  the audit log instead.
+- **Level**: names only, read, or write, up to the role's token limit.
+- **Expiry**: always, within the role's limit.
+
+A token never holds the account's instance capabilities. It reads and changes
+secrets within its level, but can't manage people, grants, projects, or other
+tokens. Losing a grant, leaving a group, or a disabled account takes effect on
+the token's next request.
+
+The role's token rules apply on every request too, not only when the token
+was made. If the role stops holding `tokens.personal`, switches between data
+and audit tokens, or lowers its token level or longest lifetime, existing
+tokens stop, drop to the new level, or expire to match. An AI agent's tokens
+stop when its owner is turned off or their role no longer holds
+`agents.view`. A new password, set by the account or reset by an admin,
+revokes the account's personal tokens along with its sessions.
+
+Create your own on the [Account](/ui/account) page or with
+`dopbase token personal create`, then pass it as `DOPBASE_TOKEN`.
+`dopbase access` shows what it reaches. Root has no personal tokens.
+
+You can revoke your own tokens and those of AI agents you own. People with
+`tokens.revoke_others` revoke anyone's whose access is within theirs.
 
 ## AI agents
 
-The `ai_agent` role belongs to named service accounts with bearer tokens,
-not email/password sessions. Agents can read project and environment metadata,
-secret names, versions, timestamps, editor layouts, and instance counts. They
-cannot reveal, export, or retrieve runtime secret values, mutate projects,
-manage accounts, list runner tokens, or read audit history.
+An AI agent is an account with the AI agent role, or another role that uses
+tokens only. It has a name instead of an email, no password, and an
+**owner**: the person who created it. It reaches only the projects granted to
+it, never more than its role's ceiling (Write for the built-in role), and
+never more than its owner reaches. A disabled owner disables the agent.
 
-Agent tokens are displayed only once when created. They expire after 30 days
-by default. The Admin UI also offers no expiry and custom durations of up to
-three years. Revoking a token or deleting its account prevents subsequent access.
-Pass an agent token to the CLI through `DOPBASE_TOKEN`, just like a runner
-token. `dopbase client status` identifies it as `ai_agent` without displaying
-the token. Use this role when an agent needs configuration context for tasks
-such as checking variable names or preparing an `.env.example` file. It is not
-a runtime credential. See [AI agent access](/guide/ai-agent-access) for a
-practical workflow and [users and AI agents](/ui/users) for account management.
+Dopbase keeps AI agents apart from people. The API lists and changes people at
+`/api/v1/users` and AI agents at `/api/v1/agents`, and a grant names its
+principal as `user`, `agent` or `group`. The database stores agents apart from
+people as well, so it refuses a session, a passcode or a single sign-on link
+for an agent, and an agent's owner is always a person. Agents added in 0.2.0
+have ids that start with `agt_`. Agents restored from 0.1.x keep their `usr_`
+id, so their tokens and audit history still match. Ask the people endpoints
+about an agent's id, or the agent endpoints about a person's, and you get the
+same answer as for an id that doesn't exist.
 
-## Permission model
+AI agents have capabilities of their own. People capabilities don't reach
+them:
 
-The four roles are static. All projects are shared across the instance. No
-user-to-project assignments, custom roles, or configurable permissions exist.
-Runner tokens remain a separate environment-scoped credential type.
+- **`agents.view`** lets you create agents. For agents you own, you can rename,
+  disable, or delete them, create and revoke their tokens, and give them
+  access. Admins and Members have it. An owner's role must keep it to run
+  their agents, and a new owner must have it. If someone with
+  `agents.manage` disables your agent, only `agents.manage` can enable it
+  again.
+- **`agents.view_all`** shows every agent. Admins and Auditors have it.
+- **`agents.manage`** changes, deletes, or transfers anyone's agent within
+  your own access. You also see the people who could own an agent, so you can
+  pick a new owner without `users.view`. It doesn't create agents: whoever
+  creates one owns it, so that takes `agents.view`. Admins have it.
 
-| Operation                                                                  | Root | Admin | Member | AI agent |
-| -------------------------------------------------------------------------- | ---- | ----- | ------ | -------- |
-| Read project/environment and secret metadata                               | Yes  | Yes   | Yes    | Yes      |
-| Manage projects, environments, secrets, imports/exports, and runner tokens | Yes  | Yes   | Yes    | No       |
-| Manage non-root human users and AI accounts                                | Yes  | Yes   | No     | No       |
-| Read audit events, including filtered history                              | Yes  | Yes   | No     | No       |
-| View instance status                                                       | Yes  | Yes   | Yes    | Yes      |
-| Full-instance backups and master-key download                              | Yes  | No    | No     | No       |
-| Factory reset in the Admin UI or offline host CLI                          | Yes  | No    | No     | No       |
+An owner gives their own agent access without being a project manager, but
+only where they reach and at no more than their own level there. With Write on
+one project out of three, you can give your agent Names only, Read, or Write
+on that project and nothing on the other two. A protected environment your
+project grant doesn't reach is out too. Project managers with `agents.manage`
+give any agent access on their projects; `users.view` doesn't count.
 
-No human can delete their own account or change their own role. An admin can
-manage another admin, but cannot modify root. Root is created only during first-run setup. Root changes its password through Account settings.
-After an account is updated, that user needs to sign in again.
+Agents and their tokens live on the [AI agents](/ui/ai-agents) page. A person
+who owns agents can't be deleted until the agents are deleted or given another
+owner. See
+[AI agent access](/guide/ai-agent-access) for both ways to give an agent
+access: your own personal token, or a shared agent account.
 
-These roles are available in version {{version}}. See [product status](/guide/product-status)
-for the current operational boundaries.
+Service accounts from earlier versions became AI agent accounts owned by root.
+They still read secret names on every project, and their `dpa_` tokens keep
+working.
+
+## Audit log
+
+Every reader sees what their role allows:
+
+- `audit.read_all`, held by Auditor and root: every event.
+- `audit.read`, held by Admin: events on settings and on the projects they
+  reach, and their own.
+- Everyone else: their own actions.
+
+An auditor's personal tokens read the audit log as the auditor would and never
+reach project data, which suits a SIEM. See
+[audit events](/reference/audit-events).
+
+## What each role can do
+
+Levels apply per project and environment, so this table shows the most a
+built-in role can reach. Root can do everything.
+
+| Operation                                                | Admin              | Member            | Auditor      | AI agent                 |
+| -------------------------------------------------------- | ------------------ | ----------------- | ------------ | ------------------------ |
+| See projects, environments, and secret names             | With a grant       | With a grant      | With a grant | With a grant             |
+| Reveal, export, and run with values                      | With read          | With read         | No           | With read                |
+| Change, import, and roll back secrets                    | With write         | With write        | No           | No                       |
+| Rename, protect, or delete environments; runner tokens   | With manage        | With manage       | No           | No                       |
+| Rename or delete projects, add environments, give access | As project manager | No                | No           | No                       |
+| Create projects                                          | Yes                | No                | No           | No                       |
+| Manage accounts, AI agents, and groups                   | Within their own   | No                | No           | No                       |
+| Read the audit log                                       | Their projects     | Their own actions | All of it    | No                       |
+| Hold personal tokens                                     | Project data       | Project data      | Audit only   | Read only, via the owner |
+| Roles, single sign-on, backups, factory reset            | No                 | No                | No           | No                       |
 
 Full-instance backup listing, creation, upload, download, restore, and deletion
-are root-only because snapshots contain every project and human account.
+are root-only because snapshots contain every project and account.
 
 ## Factory reset
 
-The root-only factory reset deletes every account (including root), all
-projects, environments, secrets, runner tokens, AI accounts and their tokens,
-audit history, and server-held backups. It preserves deployment configuration
+The root-only factory reset deletes every account (including root and AI
+agents), all projects, environments, secrets, runner tokens, personal tokens,
+grants, groups, custom roles, audit history, and server-held backups. It preserves deployment configuration
 and the master key, then reopens first-run setup. The Admin UI requires the
 root password, an explicit acknowledgment, and `FACTORY RESET`. The offline
 `dopbase admin factory-reset` command requires the server to be stopped, the

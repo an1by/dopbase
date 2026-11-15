@@ -83,7 +83,7 @@ async fn run_interactive_export(
   let router = Router::new()
     .route(
       "/api/v1/auth/session",
-      get(|| async { Json(json!({"data":{"email":"fixture@example.com"}})) }),
+      get(|| async { Json(json!({"data":{"email":"fixture@dopbase.com"}})) }),
     )
     .route("/api/v1/auth/reauthenticate", post(reauthenticate))
     .route(
@@ -303,7 +303,7 @@ async fn runner_export_uses_injected_and_saved_credentials_and_audits_the_snapsh
   assert!(output(command, None).await.status.success());
   assert_eq!(fs::read(&path).unwrap(), b"API_KEY=runner-private-marker\n");
 
-  let api = reqwest::Client::new();
+  let api = crate::commands::support::http();
   let endpoint = format!("{}/api/v1/environments/{id}/secrets/export", fixture.url);
   let runner: Value = api
     .post(&endpoint)
@@ -369,7 +369,7 @@ async fn runner_export_rejects_other_environments_and_invalid_credentials_withou
     .arg("--force");
   failure(&output(command, None).await, "TOKEN_SCOPE_INVALID");
   for target in [&other, "env_absent"] {
-    let response = reqwest::Client::new()
+    let response = crate::commands::support::http()
       .post(format!(
         "{}/api/v1/environments/{target}/secrets/export",
         fixture.url
@@ -417,7 +417,7 @@ async fn runner_export_rejects_other_environments_and_invalid_credentials_withou
     let result = output(command, None).await;
     failure(&result, "AUTHENTICATION_INVALID");
     assert!(result.stdout.is_empty());
-    let response = reqwest::Client::new()
+    let response = crate::commands::support::http()
       .post(format!(
         "{}/api/v1/environments/{id}/secrets/export",
         fixture.url
@@ -444,7 +444,7 @@ async fn runner_export_rejects_other_environments_and_invalid_credentials_withou
 }
 
 #[tokio::test(flavor = "multi_thread")]
-async fn agent_export_is_denied_by_the_cli_and_server() {
+async fn metadata_token_export_is_denied_by_the_server() {
   use super::support::{failure, output};
   let (fixture, id, _) = runner_fixture().await;
   let created = fixture.agent_token().await;
@@ -460,11 +460,11 @@ async fn agent_export_is_denied_by_the_cli_and_server() {
     let result = output(command, None).await;
     failure(
       &result,
-      "AI agents may access secret metadata but never secret values",
+      "Your access to this environment does not allow this.",
     );
     assert!(result.stdout.is_empty());
   }
-  let response = reqwest::Client::new()
+  let response = crate::commands::support::http()
     .post(format!(
       "{}/api/v1/environments/{id}/secrets/export",
       fixture.url
@@ -538,7 +538,7 @@ async fn runner_export_preserves_files_on_render_failure_and_never_falls_back_to
 #[tokio::test(flavor = "multi_thread")]
 async fn browser_export_still_requires_csrf_and_recent_password_authentication() {
   let (fixture, id, _) = runner_fixture().await;
-  let api = reqwest::Client::new();
+  let api = crate::commands::support::http();
   let (cookie, valid_csrf) = super::support::browser_credentials(&fixture).await;
   let endpoint = format!("{}/api/v1/environments/{id}/secrets/export", fixture.url);
   for csrf in [None, Some("invalid"), Some(valid_csrf.as_str())] {

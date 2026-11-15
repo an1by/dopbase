@@ -9,6 +9,7 @@ use super::{
   repository::{self, NewDeviceRequest},
   service::issue_session,
 };
+use crate::utils::time::Stamp;
 use crate::{
   constants::{
     api::auth::CLI_APPROVE_PAGE,
@@ -17,58 +18,24 @@ use crate::{
       RATE_LIMITED,
     },
     limits::{
-      CLI_DEVICE_CODE_MINUTES, CLI_DEVICE_POLL_INTERVAL_SECONDS, MAX_PENDING_CLI_DEVICE_REQUESTS,
-      MAX_PENDING_CLI_DEVICE_REQUESTS_PER_CLIENT,
+      CLI_DEVICE_CODE_MINUTES, CLI_DEVICE_POLL_INTERVAL_SECONDS, CLI_SESSION_ABSOLUTE_DAYS,
+      MAX_PENDING_CLI_DEVICE_REQUESTS, MAX_PENDING_CLI_DEVICE_REQUESTS_PER_CLIENT,
     },
     tokens::{DEVICE_CODE_PREFIX, DEVICE_REQUEST_ID_PREFIX},
   },
-  extractors::{require_project_manager, require_recent_browser_auth},
+  extractors::{require_person, require_recent_browser_auth},
   http::HttpError,
   models::{AdminRole, AuthIdentity, SessionKind},
   modules::common,
-  services::{client_ip, token},
+  services::{cache::Reservation, client_ip, token},
   state::AppState,
+  utils::passcode,
 };
 use axum::http::StatusCode;
 use chrono::{DateTime, Duration, Utc};
 
-/// Consonants only (RFC 8628 section 6.1): no vowels to spell words, and
-/// nothing that reads as another character.
-const USER_CODE_ALPHABET: &[u8] = b"BCDFGHJKLMNPQRSTVWXZ";
-const USER_CODE_LENGTH: usize = 8;
 const MAX_HOSTNAME_LENGTH: usize = 64;
-
-fn generate_user_code() -> Result<String, HttpError> {
-  let mut code = String::with_capacity(USER_CODE_LENGTH);
-  // Rejection sampling keeps every letter equally likely: 240 is the
-  // largest multiple of the alphabet size that fits in a byte.
-  let limit = (256 / USER_CODE_ALPHABET.len() * USER_CODE_ALPHABET.len()) as u8;
-  while code.len() < USER_CODE_LENGTH {
-    let mut bytes = [0_u8; 16];
-    getrandom::fill(&mut bytes).map_err(|_| HttpError::internal())?;
-    for byte in bytes {
-      if byte < limit && code.len() < USER_CODE_LENGTH {
-        code.push(USER_CODE_ALPHABET[byte as usize % USER_CODE_ALPHABET.len()] as char);
-      }
-    }
-  }
-  Ok(code)
-}
-
-/// `WDJB-MJHT`, `wdjb mjht`, and `WDJBMJHT` are the same code.
-fn normalize_user_code(value: &str) -> Option<String> {
-  let code: String = value
-    .chars()
-    .filter(|character| !matches!(character, '-' | ' '))
-    .map(|character| character.to_ascii_uppercase())
-    .collect();
-  (code.len() == USER_CODE_LENGTH && code.bytes().all(|byte| USER_CODE_ALPHABET.contains(&byte)))
-    .then_some(code)
-}
-
-fn display_user_code(code: &str) -> String {
-  format!("{}-{}", &code[..4], &code[4..])
-}
+const MAX_CLIENT_LENGTH: usize = 80;
 
 /// The hostname is shown to the approver, so keep it short and plain.
 fn sanitize_hostname(value: Option<&str>) -> Option<String> {
@@ -79,6 +46,32 @@ fn sanitize_hostname(value: Option<&str>) -> Option<String> {
     .take(MAX_HOSTNAME_LENGTH)
     .collect();
   (!hostname.is_empty()).then_some(hostname)
+}
+
+/// The client name is shown to the approver too. Unlike a hostname it has
+/// spaces, so keep printable ASCII and fold runs of whitespace into one.
+fn sanitize_client(value: Option<&str>) -> Option<String> {
+  let printable: String = value?
+    .chars()
+    .map(|character| {
+      if character.is_whitespace() {
+        ' '
+      } else {
+        character
+      }
+    })
+    .filter(|character| character.is_ascii_graphic() || *character == ' ')
+    .collect();
+  let client: String = printable
+    .split(' ')
+    .filter(|word| !word.is_empty())
+    .collect::<Vec<_>>()
+    .join(" ")
+    .chars()
+    .take(MAX_CLIENT_LENGTH)
+    .collect();
+  let client = client.trim_end();
+  (!client.is_empty()).then(|| client.to_owned())
 }
 
 fn parse_time(value: &str) -> Result<DateTime<Utc>, HttpError> {
@@ -112,7 +105,7 @@ fn rate_limited() -> HttpError {
 /// Approving hands out a long-lived CLI session, so only a human signed in
 /// to the Admin UI may do it, never another CLI session or a token.
 fn require_browser_human(identity: &AuthIdentity) -> Result<(&str, &str, &str), HttpError> {
-  let (admin_id, email) = require_project_manager(identity)?;
+  let (admin_id, email) = require_person(identity)?;
   match identity {
     AuthIdentity::Admin {
       kind: SessionKind::Browser,
@@ -169,15 +162,15 @@ pub async fn start(
   let now = Utc::now();
   let expires_at = now + Duration::minutes(CLI_DEVICE_CODE_MINUTES);
   let hostname = sanitize_hostname(request.hostname.as_deref());
+  let client = sanitize_client(request.client.as_deref());
   let ip_address = client_ip::current().map(|address| address.to_string());
   let device_code = token::generate(DEVICE_CODE_PREFIX).map_err(|_| HttpError::internal())?;
 
-  let now_text = now.to_rfc3339();
-  let mut tx = state.db.pool().begin().await?;
+  let now_text = now.stamp();
+  let mut tx = crate::services::change::Change::begin(state.db.pool()).await?;
   // Expired rows stay for an hour so a late poll still reads "expired"
   // rather than "invalid", then this recurring path removes them.
-  repository::delete_stale_device_requests(&mut tx, &(now - Duration::hours(1)).to_rfc3339())
-    .await?;
+  repository::delete_stale_device_requests(&mut tx, &(now - Duration::hours(1)).stamp()).await?;
   let (pending, pending_here) =
     repository::pending_device_requests(&mut tx, ip_address.as_deref(), &now_text).await?;
   if pending >= MAX_PENDING_CLI_DEVICE_REQUESTS
@@ -190,7 +183,7 @@ pub async fn start(
   // fail the login when one happens.
   let mut user_code = None;
   for _ in 0..3 {
-    let candidate = generate_user_code()?;
+    let candidate = passcode::generate().map_err(|_| HttpError::internal())?;
     let inserted = repository::insert_device_request(
       &mut tx,
       NewDeviceRequest {
@@ -200,9 +193,10 @@ pub async fn start(
         purpose,
         target_session_id: target_session,
         client_hostname: hostname.as_deref(),
+        client_name: client.as_deref(),
         client_ip: ip_address.as_deref(),
         now: &now_text,
-        expires_at: &expires_at.to_rfc3339(),
+        expires_at: &expires_at.stamp(),
       },
     )
     .await?;
@@ -214,7 +208,7 @@ pub async fn start(
   let user_code = user_code.ok_or_else(HttpError::internal)?;
   tx.commit().await?;
 
-  let user_code = display_user_code(&user_code);
+  let user_code = passcode::display(&user_code);
   let verification_uri = format!(
     "{}{CLI_APPROVE_PAGE}",
     state.config.public_url.trim_end_matches('/')
@@ -264,7 +258,7 @@ pub async fn poll(
       }
       None => false,
     };
-    repository::touch_device_request(state.db.pool(), &row.id, &now.to_rfc3339()).await?;
+    repository::touch_device_request(state.db.pool(), &row.id, &now.stamp()).await?;
     return Ok(DeviceTokenResponse {
       status: if too_fast {
         DevicePollStatus::SlowDown
@@ -275,7 +269,7 @@ pub async fn poll(
     });
   }
 
-  let mut tx = state.db.pool().begin().await?;
+  let mut tx = crate::services::change::Change::begin(state.db.pool()).await?;
   // The status check and the flip happen in one statement, so two polls
   // racing on the same approved code cannot both receive a session.
   let approved = repository::consume_device_request(&mut tx, &row.id).await?;
@@ -284,15 +278,11 @@ pub async fn poll(
   let (email, role_value) = repository::account(&mut tx, &admin_id)
     .await?
     .ok_or_else(invalid_code)?;
-  let role = AdminRole::parse_human(&role_value).ok_or_else(HttpError::internal)?;
+  let role = AdminRole::parse(&role_value).ok_or_else(HttpError::internal)?;
   if purpose == "reauth" {
-    let confirmed = repository::confirm_session_of(
-      &mut tx,
-      target_session.as_deref(),
-      &admin_id,
-      &now.to_rfc3339(),
-    )
-    .await?;
+    let confirmed =
+      repository::confirm_session_of(&mut tx, target_session.as_deref(), &admin_id, &now.stamp())
+        .await?;
     if !confirmed {
       return Err(invalid_code());
     }
@@ -301,7 +291,7 @@ pub async fn poll(
       role.audit_actor_type(),
       Some(&admin_id),
       Some(&email),
-      "admin.reauthenticated",
+      crate::services::events::Action::AdminReauthenticated,
       None,
       None,
       Some("session"),
@@ -321,7 +311,7 @@ pub async fn poll(
     role.audit_actor_type(),
     Some(&admin_id),
     Some(&email),
-    "login.succeeded",
+    crate::services::events::Action::LoginSucceeded,
     None,
     None,
     Some("session"),
@@ -339,7 +329,7 @@ pub async fn poll(
       session_kind: SessionKind::Cli,
       token: Some(session.token),
       csrf_token: None,
-      last_login_at: Some(session.created_at.to_rfc3339()),
+      last_login_at: Some(session.created_at.stamp()),
     }),
   })
 }
@@ -353,7 +343,7 @@ pub async fn cancel(
   repository::cancel_device_request(
     state.db.pool(),
     &token::hash(device_code),
-    &Utc::now().to_rfc3339(),
+    &Utc::now().stamp(),
   )
   .await?;
   Ok(())
@@ -365,15 +355,17 @@ async fn user_code_hash(
   state: &AppState,
   session_id: &str,
   user_code: &str,
-) -> Result<(String, Vec<u8>), HttpError> {
+) -> Result<(Reservation, Vec<u8>), HttpError> {
   let limit_key = format!("cli_user_code:{session_id}");
-  if !state.rate_limiter.check(&limit_key).await {
-    return Err(rate_limited());
-  }
-  match normalize_user_code(user_code) {
-    Some(code) => Ok((limit_key, token::hash(&code))),
+  let attempt = state
+    .rate_limiter
+    .reserve(&limit_key)
+    .await
+    .ok_or_else(rate_limited)?;
+  match passcode::normalize(user_code) {
+    Some(code) => Ok((attempt, token::hash(&code))),
     None => {
-      state.rate_limiter.failure(&limit_key).await;
+      attempt.fail();
       Err(unknown_user_code())
     }
   }
@@ -385,16 +377,17 @@ pub async fn inspect(
   user_code: &str,
 ) -> Result<DeviceRequestDetails, HttpError> {
   let (admin_id, _, session_id) = require_browser_human(identity)?;
-  let (limit_key, hash) = user_code_hash(state, session_id, user_code).await?;
+  let (attempt, hash) = user_code_hash(state, session_id, user_code).await?;
   let details =
-    repository::pending_device_request(state.db.pool(), &hash, admin_id, &Utc::now().to_rfc3339())
+    repository::pending_device_request(state.db.pool(), &hash, admin_id, &Utc::now().stamp())
       .await?;
   let Some(row) = details else {
-    state.rate_limiter.failure(&limit_key).await;
+    attempt.fail();
     return Err(unknown_user_code());
   };
   Ok(DeviceRequestDetails {
     hostname: row.client_hostname,
+    client: row.client_name,
     ip_address: row.client_ip,
     created_at: row.created_at,
     expires_at: row.expires_at,
@@ -403,6 +396,8 @@ pub async fn inspect(
     } else {
       DevicePurpose::Login
     },
+    // The same limit `issue_session` gives a CLI session.
+    session_days: u32::try_from(CLI_SESSION_ABSOLUTE_DAYS).map_err(|_| HttpError::internal())?,
   })
 }
 
@@ -416,13 +411,13 @@ pub async fn decide(
   if approve {
     require_recent_browser_auth(identity)?;
   }
-  let (limit_key, hash) = user_code_hash(state, session_id, user_code).await?;
-  let now = Utc::now().to_rfc3339();
-  let mut tx = state.db.pool().begin().await?;
+  let (attempt, hash) = user_code_hash(state, session_id, user_code).await?;
+  let now = Utc::now().stamp();
+  let mut tx = crate::services::change::Change::begin(state.db.pool()).await?;
   let decided = repository::decide_device_request(&mut tx, &hash, admin_id, approve, &now).await?;
   let Some((request_id, hostname)) = decided else {
     drop(tx);
-    state.rate_limiter.failure(&limit_key).await;
+    attempt.fail();
     return Err(unknown_user_code());
   };
   common::audit(
@@ -431,9 +426,9 @@ pub async fn decide(
     Some(admin_id),
     Some(email),
     if approve {
-      "cli_login.approved"
+      crate::services::events::Action::CliLoginApproved
     } else {
-      "cli_login.denied"
+      crate::services::events::Action::CliLoginDenied
     },
     None,
     None,
@@ -443,6 +438,6 @@ pub async fn decide(
   )
   .await?;
   tx.commit().await?;
-  state.rate_limiter.clear(&limit_key).await;
+  attempt.succeed();
   Ok(())
 }

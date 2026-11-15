@@ -1,5 +1,6 @@
 use super::{model::*, repository};
 use crate::modules::common;
+use crate::utils::time::Stamp;
 use crate::{
   constants::{
     errors::{
@@ -12,31 +13,62 @@ use crate::{
     },
     tokens::{ADMIN_SESSION_PREFIX, CSRF_TOKEN_PREFIX, SESSION_ID_PREFIX},
   },
-  extractors::{require_project_manager, require_recent_browser_auth},
+  extractors::{require_person, require_recent_browser_auth},
   http::HttpError,
   models::{AdminRole, AuthIdentity, SessionKind},
-  services::token,
+  services::{
+    authx::{self, Capability, SignInRefusal},
+    token,
+  },
   state::AppState,
 };
 use chrono::{DateTime, Duration, Utc};
-use sqlx::{Sqlite, Transaction};
 pub struct LoginResult {
   pub response: LoginResponse,
   pub cookie_token: Option<String>,
 }
+/// Whole minutes in `duration`, rounded up.
+fn whole_minutes(duration: std::time::Duration) -> u64 {
+  let seconds = duration.as_secs() + u64::from(duration.subsec_nanos() > 0);
+  seconds.div_ceil(60)
+}
+
+/// The same words for an unknown email and a wrong password, so the reply
+/// says nothing about which accounts exist. Near the limit it says what
+/// happens next.
+fn wrong_credentials(remaining: u32) -> String {
+  if !(1..=3).contains(&remaining) {
+    return "Email or password is wrong.".to_owned();
+  }
+  let tries = if remaining == 1 { "try" } else { "tries" };
+  let pause = whole_minutes(crate::services::cache::RateLimiter::window());
+  format!("Email or password is wrong. {remaining} more {tries}, then a {pause}-minute pause.")
+}
+
 pub async fn login(
   state: &AppState,
   request: LoginRequest,
 ) -> Result<LoginResult, HttpError> {
   let email = common::validate_email(&request.email)?;
   let limit_key = format!("login:{email}");
-  if !state.rate_limiter.check(&limit_key).await {
+  let Some(attempt) = state.rate_limiter.reserve(&limit_key).await else {
+    let message = match state.rate_limiter.retry_after(&limit_key).await {
+      Some(wait) => {
+        let minutes = whole_minutes(wait).max(1);
+        format!(
+          "Too many tries. Wait {minutes} {}, then try again.",
+          if minutes == 1 { "minute" } else { "minutes" }
+        )
+      }
+      // Refused because the limiter is full, not because of this email.
+      None => "Too many login attempts. Please try again later.".to_owned(),
+    };
     return Err(HttpError::new(
       axum::http::StatusCode::TOO_MANY_REQUESTS,
       RATE_LIMITED,
-      "Too many login attempts. Please try again later.",
+      message,
     ));
-  }
+  };
   let admin = repository::admin_by_email(state.db.pool(), &email).await?;
   let valid = common::verify_password_or_dummy(
     request.password.clone(),
@@ -44,62 +76,90 @@ pub async fn login(
   )
   .await?;
   if !valid {
-    state.rate_limiter.failure(&limit_key).await;
-    let _ = common::audit_standalone(
+    attempt.fail();
+    common::audit_standalone(
       state.db.pool(),
       "anonymous",
       None,
       Some(&email),
-      "login.failed",
+      crate::services::events::Action::LoginFailed,
       None,
       None,
       None,
       None,
       serde_json::json!({}),
     )
-    .await;
+    .await?;
+    let remaining = state.rate_limiter.remaining(&limit_key).await;
     return Err(HttpError::unauthorized(
       AUTHENTICATION_INVALID,
-      "The email or password is incorrect.",
+      &wrong_credentials(remaining),
     ));
   }
-  state.rate_limiter.clear(&limit_key).await;
+  attempt.succeed();
   let (admin_id, email, _, role_value) = admin.expect("validated");
-  let role = AdminRole::parse_human(&role_value).ok_or_else(HttpError::internal)?;
+  let role = AdminRole::parse(&role_value).ok_or_else(HttpError::internal)?;
   // The password was right, so saying why it is refused leaks nothing.
-  // TODO(rbac): root is the fixed break-glass role that keeps password
-  // sign-in. Check a permission instead once roles are configurable.
-  if role != AdminRole::Root
-    && crate::modules::sso::service::policy(state)
-      .await?
-      .require_sso
-  {
-    let _ = common::audit_standalone(
-      state.db.pool(),
-      role.audit_actor_type(),
-      Some(&admin_id),
-      Some(&email),
-      "login.failed",
-      None,
-      None,
-      None,
-      None,
-      serde_json::json!({"reason":"password_login_disabled"}),
+  let mut conn = state.db.pool().acquire().await?;
+  let access = authx::load_access(&mut conn, &admin_id, &state.config.features).await?;
+  drop(conn);
+  let actor_type = if access.as_ref().is_some_and(|access| access.is_root) {
+    "root"
+  } else {
+    "admin"
+  };
+  // Only a break-glass account, root, keeps password sign-in while single
+  // sign-on is required, so there is always a way back in.
+  let refusal = authx::sign_in_refusal(access.as_ref(), || async {
+    Ok::<_, HttpError>(
+      crate::modules::sso::service::policy(state)
+        .await?
+        .require_sso,
     )
-    .await;
-    return Err(HttpError::forbidden(
-      PASSWORD_LOGIN_DISABLED,
-      "Password sign-in is turned off for this account. Use single sign-on.",
-    ));
+  })
+  .await?;
+  match refusal {
+    None => {}
+    Some(SignInRefusal::Disabled) => {
+      return Err(HttpError::unauthorized(
+        AUTHENTICATION_INVALID,
+        "The account is disabled.",
+      ));
+    }
+    Some(SignInRefusal::TokenOnly) => {
+      return Err(HttpError::unauthorized(
+        AUTHENTICATION_INVALID,
+        "This account signs in with tokens only.",
+      ));
+    }
+    Some(SignInRefusal::SsoRequired) => {
+      common::audit_standalone(
+        state.db.pool(),
+        actor_type,
+        Some(&admin_id),
+        Some(&email),
+        crate::services::events::Action::LoginFailed,
+        None,
+        None,
+        None,
+        None,
+        serde_json::json!({"reason":"password_login_disabled"}),
+      )
+      .await?;
+      return Err(HttpError::forbidden(
+        PASSWORD_LOGIN_DISABLED,
+        "Password sign-in is turned off for this account. Use single sign-on.",
+      ));
+    }
   }
-  let mut tx = state.db.pool().begin().await?;
+  let mut tx = crate::services::change::Change::begin(state.db.pool()).await?;
   let session = issue_session(&mut tx, &admin_id, request.session_kind).await?;
   common::audit(
     &mut tx,
-    role.audit_actor_type(),
+    actor_type,
     Some(&admin_id),
     Some(&email),
-    "login.succeeded",
+    crate::services::events::Action::LoginSucceeded,
     None,
     None,
     Some("session"),
@@ -115,7 +175,7 @@ pub async fn login(
     session_kind: request.session_kind,
     token: (request.session_kind == SessionKind::Cli).then(|| session.token.clone()),
     csrf_token: session.csrf,
-    last_login_at: Some(session.created_at.to_rfc3339()),
+    last_login_at: Some(session.created_at.stamp()),
   };
   Ok(LoginResult {
     response,
@@ -134,7 +194,7 @@ pub(crate) struct IssuedSession {
 /// signing in ends here, so lifetimes and retention stay identical across
 /// them. The caller records the audit event and commits.
 pub(crate) async fn issue_session(
-  tx: &mut Transaction<'_, Sqlite>,
+  tx: &mut sqlx::SqliteConnection,
   admin_id: &str,
   kind: SessionKind,
 ) -> Result<IssuedSession, HttpError> {
@@ -159,7 +219,7 @@ pub(crate) async fn issue_session(
   let session_id = token::public_id(SESSION_ID_PREFIX);
   // Keep revoked/expired session history for 30 days for operational
   // diagnosis, then prune it during the naturally recurring login path.
-  repository::prune_sessions(tx, &(now - Duration::days(30)).to_rfc3339()).await?;
+  repository::prune_sessions(tx, &(now - Duration::days(30)).stamp()).await?;
   repository::insert_session(
     tx,
     repository::NewSession {
@@ -168,12 +228,14 @@ pub(crate) async fn issue_session(
       kind: kind.as_str(),
       token_hash: &token::hash(&raw),
       csrf_hash: csrf.as_deref().map(token::hash).as_deref(),
-      now: &now.to_rfc3339(),
-      idle_expires_at: &idle.to_rfc3339(),
-      absolute_expires_at: &absolute.to_rfc3339(),
+      now: &now.stamp(),
+      idle_expires_at: &idle.stamp(),
+      absolute_expires_at: &absolute.stamp(),
     },
   )
   .await?;
+  // Only a new session counts as signing in; confirming one does not.
+  repository::mark_signed_in(tx, admin_id, &now.stamp()).await?;
   Ok(IssuedSession {
     id: session_id,
     token: raw,
@@ -182,20 +244,19 @@ pub(crate) async fn issue_session(
   })
 }
 /// Whether this account may confirm itself with its password: it has one,
-/// and single sign-on does not require otherwise.
+/// and single sign-on does not require otherwise. Break-glass accounts keep
+/// their password either way.
 async fn password_confirmation(
   state: &AppState,
   admin_id: &str,
-  role: AdminRole,
+  breakglass: bool,
 ) -> Result<bool, HttpError> {
   let hash = repository::password_hash(state.db.pool(), admin_id)
     .await?
     .unwrap_or_default();
-  // TODO(rbac): root keeps its password when single sign-on is required.
-  // Check a permission instead once roles are configurable.
   Ok(
     common::has_password(&hash)
-      && (role == AdminRole::Root
+      && (breakglass
         || !crate::modules::sso::service::policy(state)
           .await?
           .require_sso),
@@ -206,16 +267,29 @@ pub async fn session(
   state: &AppState,
   identity: &AuthIdentity,
 ) -> Result<SessionResponse, HttpError> {
-  if let AuthIdentity::Admin { admin_id, role, .. } = identity {
+  if let AuthIdentity::Admin {
+    admin_id, access, ..
+  } = identity
+  {
     let mut response = session_summary(identity)?;
+    response.features = state.config.features.list();
+    response.max_users = state.config.features.user_limit();
     response.has_password = common::has_password(
       &repository::password_hash(state.db.pool(), admin_id)
         .await?
         .unwrap_or_default(),
     );
-    response.password_confirmation = password_confirmation(state, admin_id, *role).await?;
+    response.password_confirmation =
+      password_confirmation(state, admin_id, access.has(Capability::PasswordBreakglass)).await?;
     response.sso_confirmation =
       crate::modules::sso::service::confirmation_name(state, admin_id).await?;
+    if let AuthIdentity::Admin { access, .. } = identity
+      && let Some(role_id) = &access.role_id
+    {
+      response.token_scope = repository::token_scope(state.db.pool(), role_id)
+        .await?
+        .unwrap_or_else(|| "none".into());
+    }
     return Ok(response);
   }
   session_summary(identity)
@@ -231,15 +305,22 @@ fn session_summary(identity: &AuthIdentity) -> Result<SessionResponse, HttpError
       recent_auth_at,
       created_at,
       csrf_hash,
+      access,
       ..
     } => Ok(SessionResponse {
       admin_id: admin_id.clone(),
       email: email.clone(),
       role: *role,
+      role_name: access.role_name.clone(),
+      capabilities: access.capabilities().collect(),
+      features: Vec::new(),
+      max_users: None,
+      max_level: access.max_level,
+      token_scope: "none".into(),
       session_kind: *kind,
       recent_authentication: Utc::now() - *recent_auth_at
         <= Duration::minutes(RECENT_AUTHENTICATION_MINUTES),
-      last_login_at: Some(created_at.to_rfc3339()),
+      last_login_at: Some(created_at.stamp()),
       has_password: false,
       password_confirmation: false,
       sso_confirmation: None,
@@ -251,9 +332,9 @@ fn session_summary(identity: &AuthIdentity) -> Result<SessionResponse, HttpError
       AUTHORIZATION_DENIED,
       "A runner token has no human session.",
     )),
-    AuthIdentity::ServiceAccount { .. } => Err(HttpError::forbidden(
+    AuthIdentity::Token { .. } => Err(HttpError::forbidden(
       AUTHORIZATION_DENIED,
-      "An AI service account has no human session.",
+      "A personal token has no session.",
     )),
   }
 }
@@ -261,20 +342,20 @@ pub async fn logout(
   state: &AppState,
   identity: &AuthIdentity,
 ) -> Result<(), HttpError> {
-  let (admin_id, email) = require_project_manager(identity)?;
+  let (admin_id, email) = require_person(identity)?;
   let session_id = match identity {
     AuthIdentity::Admin { session_id, .. } => session_id,
     _ => unreachable!(),
   };
-  let now = Utc::now().to_rfc3339();
-  let mut tx = state.db.pool().begin().await?;
+  let now = Utc::now().stamp();
+  let mut tx = crate::services::change::Change::begin(state.db.pool()).await?;
   repository::revoke_session(&mut tx, session_id, &now).await?;
   common::audit(
     &mut tx,
     identity.audit_actor_type(),
     Some(admin_id),
     Some(email),
-    "logout.succeeded",
+    crate::services::events::Action::LogoutSucceeded,
     None,
     None,
     Some("session"),
@@ -290,22 +371,22 @@ pub async fn reauthenticate(
   identity: &AuthIdentity,
   password: &str,
 ) -> Result<(), HttpError> {
-  let (admin_id, email) = require_project_manager(identity)?;
+  let (admin_id, email) = require_person(identity)?;
   // Password re-verification is brute-forceable through a hijacked session,
   // so it shares the login limiter's budget for this account.
   let limit_key = format!("password_verify:{admin_id}");
-  if !state.rate_limiter.check(&limit_key).await {
+  let Some(attempt) = state.rate_limiter.reserve(&limit_key).await else {
     return Err(HttpError::new(
       axum::http::StatusCode::TOO_MANY_REQUESTS,
       RATE_LIMITED,
       "Too many attempts. Please try again later.",
     ));
-  }
+  };
   let hash = repository::password_hash(state.db.pool(), admin_id)
     .await?
     .ok_or_else(|| HttpError::unauthorized(AUTHENTICATION_INVALID, "The session is invalid."))?;
-  let role = match identity {
-    AuthIdentity::Admin { role, .. } => *role,
+  let breakglass = match identity {
+    AuthIdentity::Admin { access, .. } => access.has(Capability::PasswordBreakglass),
     _ => unreachable!(),
   };
   if !common::has_password(&hash) {
@@ -314,32 +395,32 @@ pub async fn reauthenticate(
       "This account has no password. Confirm with single sign-on instead.",
     ));
   }
-  if !password_confirmation(state, admin_id, role).await? {
+  if !password_confirmation(state, admin_id, breakglass).await? {
     return Err(HttpError::forbidden(
       PASSWORD_LOGIN_DISABLED,
       "Passwords are turned off for this account. Confirm with single sign-on instead.",
     ));
   }
   if !common::verify_password_async(password.to_owned(), hash).await? {
-    state.rate_limiter.failure(&limit_key).await;
+    attempt.fail();
     return Err(HttpError::unauthorized(
       AUTHENTICATION_INVALID,
       "The password is incorrect.",
     ));
   }
-  state.rate_limiter.clear(&limit_key).await;
+  attempt.succeed();
   let session_id = match identity {
     AuthIdentity::Admin { session_id, .. } => session_id,
     _ => unreachable!(),
   };
-  let mut tx = state.db.pool().begin().await?;
-  repository::mark_recent_auth(&mut tx, session_id, &Utc::now().to_rfc3339()).await?;
+  let mut tx = crate::services::change::Change::begin(state.db.pool()).await?;
+  repository::mark_recent_auth(&mut tx, session_id, &Utc::now().stamp()).await?;
   common::audit(
     &mut tx,
     identity.audit_actor_type(),
     Some(admin_id),
     Some(email),
-    "admin.reauthenticated",
+    crate::services::events::Action::AdminReauthenticated,
     None,
     None,
     None,
@@ -355,24 +436,24 @@ pub async fn change_password(
   identity: &AuthIdentity,
   request: ChangePasswordRequest,
 ) -> Result<(), HttpError> {
-  let (admin_id, email) = require_project_manager(identity)?;
+  let (admin_id, email) = require_person(identity)?;
   // Verifying the current password is the same brute-force surface as
   // reauthentication, so it shares that limiter budget.
   let limit_key = format!("password_verify:{admin_id}");
-  if !state.rate_limiter.check(&limit_key).await {
+  let Some(attempt) = state.rate_limiter.reserve(&limit_key).await else {
     return Err(HttpError::new(
       axum::http::StatusCode::TOO_MANY_REQUESTS,
       RATE_LIMITED,
       "Too many attempts. Please try again later.",
     ));
-  }
+  };
   common::validate_password(&request.new_password)?;
   let old = repository::password_hash(state.db.pool(), admin_id)
     .await?
     .ok_or_else(|| HttpError::unauthorized(AUTHENTICATION_INVALID, "The session is invalid."))?;
   if common::has_password(&old) {
     if !common::verify_password_async(request.current_password.clone(), old).await? {
-      state.rate_limiter.failure(&limit_key).await;
+      attempt.fail();
       return Err(HttpError::unauthorized(
         AUTHENTICATION_INVALID,
         "The password is incorrect.",
@@ -395,18 +476,36 @@ pub async fn change_password(
     }
     require_recent_browser_auth(identity)?;
   }
-  state.rate_limiter.clear(&limit_key).await;
+  attempt.succeed();
   let new_hash = common::hash_password_async(request.new_password.clone()).await?;
-  let now = Utc::now().to_rfc3339();
-  let mut tx = state.db.pool().begin().await?;
+  let now = Utc::now().stamp();
+  let mut tx = crate::services::change::Change::begin(state.db.pool()).await?;
   repository::set_password_hash(&mut tx, admin_id, &new_hash, &now).await?;
   repository::revoke_sessions_of(&mut tx, admin_id, &now).await?;
+  // Personal tokens made under the old password go too.
+  let revoked =
+    crate::modules::tokens::personal::repository::revoke_all(&mut tx, admin_id, &now).await?;
+  for (token_id, name) in &revoked {
+    common::audit(
+      &mut tx,
+      identity.audit_actor_type(),
+      Some(admin_id),
+      Some(email),
+      crate::services::events::Action::PersonalTokenRevoked,
+      None,
+      None,
+      Some("personal_token"),
+      Some(token_id),
+      serde_json::json!({"userId": admin_id, "user": email, "name": name, "reason": "password_changed"}),
+    )
+    .await?;
+  }
   common::audit(
     &mut tx,
     identity.audit_actor_type(),
     Some(admin_id),
     Some(email),
-    "admin.password_changed",
+    crate::services::events::Action::AdminPasswordChanged,
     None,
     None,
     Some("admin"),

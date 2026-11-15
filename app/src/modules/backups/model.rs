@@ -6,6 +6,9 @@ pub struct BackupItem {
   pub key: String,
   pub size: u64,
   pub created_at: String,
+  /// What upgrading a 0.1.x backup did, when this upload was one.
+  #[serde(skip_serializing_if = "Option::is_none")]
+  pub upgrade: Option<super::upgrade::UpgradeReport>,
 }
 
 #[derive(Clone, Debug, Default, Deserialize, ToSchema)]

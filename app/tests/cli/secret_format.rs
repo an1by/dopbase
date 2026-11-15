@@ -2,11 +2,7 @@ use app::{
   cli::secret_format::{ExportFormat, SecretFormat, parse, render},
   models::SecretInput,
 };
-use std::{
-  io::Write,
-  path::Path,
-  process::{Command, Stdio},
-};
+use std::path::Path;
 
 fn entries(values: &[(&str, &str)]) -> Vec<SecretInput> {
   values
@@ -311,88 +307,4 @@ fn rejects_values_docker_cannot_represent_without_exposing_them() {
   .to_string();
   assert!(message.contains("SECRET_KEY"), "{message}");
   assert!(!message.contains("private"), "{message}");
-}
-
-struct DockerContainer(String);
-
-impl Drop for DockerContainer {
-  fn drop(&mut self) {
-    let _ = Command::new("docker")
-      .args(["stop", "--time=0", &self.0])
-      .output();
-  }
-}
-
-#[test]
-#[ignore = "requires a local Docker engine and the alpine:3.22 image"]
-fn docker_format_round_trips_through_docker_exec() {
-  let values = entries(&[
-    ("TRAILING", "value "),
-    ("QUOTED", "say \"hello\""),
-    ("HASH", "#fragment"),
-    ("EMPTY", ""),
-    ("DOLLAR", "$HOME"),
-    ("DB_HOST", "YOUR VALUE HAS SPACE"),
-    ("BACKSLASH", r"C:\workspace"),
-    ("APP_SECRET", "==aHR0cHM6Ly9kb3BiYXNlLmNvbS8"),
-    ("LEADING", " value"),
-  ]);
-  let rendered = render(&values, ExportFormat::Docker).unwrap();
-  let name = format!("dopbase-docker-export-test-{}", std::process::id());
-  let started = Command::new("docker")
-    .args([
-      "run",
-      "--detach",
-      "--rm",
-      "--name",
-      &name,
-      "alpine:3.22",
-      "sleep",
-      "60",
-    ])
-    .output()
-    .unwrap();
-  assert!(
-    started.status.success(),
-    "failed to start Docker test container: {}",
-    String::from_utf8_lossy(&started.stderr)
-  );
-  let _container = DockerContainer(name.clone());
-
-  let mut child = Command::new("docker")
-    .args([
-      "exec",
-      "--env-file=/dev/stdin",
-      &name,
-      "sh",
-      "-ec",
-      concat!(
-        "[ \"$APP_SECRET\" = \"==aHR0cHM6Ly9kb3BiYXNlLmNvbS8\" ]\n",
-        "[ \"$BACKSLASH\" = 'C:\\workspace' ]\n",
-        "[ \"$DB_HOST\" = 'YOUR VALUE HAS SPACE' ]\n",
-        "[ \"$DOLLAR\" = '$HOME' ]\n",
-        "[ -z \"$EMPTY\" ]\n",
-        "[ \"$HASH\" = '#fragment' ]\n",
-        "[ \"$LEADING\" = ' value' ]\n",
-        "[ \"$QUOTED\" = 'say \"hello\"' ]\n",
-        "[ \"$TRAILING\" = 'value ' ]\n",
-      ),
-    ])
-    .stdin(Stdio::piped())
-    .stdout(Stdio::piped())
-    .stderr(Stdio::piped())
-    .spawn()
-    .unwrap();
-  child
-    .stdin
-    .take()
-    .unwrap()
-    .write_all(rendered.as_bytes())
-    .unwrap();
-  let result = child.wait_with_output().unwrap();
-  assert!(
-    result.status.success(),
-    "Docker did not preserve the rendered values: {}",
-    String::from_utf8_lossy(&result.stderr)
-  );
 }

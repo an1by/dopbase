@@ -7,12 +7,13 @@ use std::{
 
 use crate::{
   cli::commands::{
-    admin, audit, auth, backup, cache, client, environment, export, import, init, project, restore,
-    run, secret, server, token, update,
+    access, admin, audit, auth, backup, cache, client, environment, export, import, init, project,
+    restore, run, secret, server, token, update,
   },
   constants::help::*,
 };
 
+pub use access::AccessArgs;
 pub use admin::AdminCommand;
 pub use audit::{AuditCommand, AuditFilters};
 pub use auth::LoginArgs;
@@ -141,7 +142,7 @@ pub enum Command {
   /// Authenticate with the active server.
   #[command(after_help = auth::LOGIN_HELP)]
   Login(LoginArgs),
-  /// Remove the saved credential for the active server.
+  /// End the saved login on the server that issued it and remove it.
   #[command(after_help = auth::LOGOUT_HELP)]
   Logout,
   /// Alias for `dopbase client status`.
@@ -180,12 +181,15 @@ pub enum Command {
   /// file. Every export requires interactive password confirmation.
   #[command(after_help = export::HELP)]
   Export(ExportArgs),
-  /// Manage CI/runner access tokens for an environment.
+  /// Manage runner tokens for an environment, and your personal tokens.
   #[command(after_help = token::HELP)]
   Token {
     #[command(subcommand)]
     command: TokenCommand,
   },
+  /// Show what you, or the personal token in DOPBASE_TOKEN, can reach.
+  #[command(after_help = access::HELP)]
+  Access(AccessArgs),
   /// Verify the integrity of the audit log (administrator only).
   ///
   /// The audit log is a hash chain: each record stores the hash of the one
@@ -199,7 +203,8 @@ pub enum Command {
   /// Run a command with an environment's secrets injected as env vars.
   ///
   /// Falls back to DOPBASE_ENV, then the active server's saved default, when
-  /// no environment argument is given. Secret values are passed to the child
+  /// no environment argument is given. A runner token needs neither: it
+  /// always runs its own environment. Secret values are passed to the child
   /// process only and are never printed. A successful fetch refreshes an
   /// encrypted local cache. If the server is unavailable, the last cache for
   /// the same server, environment, and credential is used. Everything after

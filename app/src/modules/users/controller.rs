@@ -11,8 +11,10 @@ use axum::{
 
 /// List users
 ///
-/// Return every administrator and member account ordered by role and email.
-/// Requires an authenticated administrator browser session.
+/// Return the people you may see, ordered by role and email: everyone with
+/// users.view, and with agents.manage the people who could own an AI agent.
+/// AI agents are listed by `GET /api/v1/agents`. Requires an Admin UI
+/// session.
 #[utoipa::path(
   get,
   path = crate::constants::api::users::COLLECTION,
@@ -21,7 +23,7 @@ use axum::{
   responses(
     (status = 200, description = "Users fetched", body = inline(HttpResponseFormat<Vec<UserResponse>>)),
     (status = 401, description = "Authentication is required", body = crate::http::ErrorBody),
-    (status = 403, description = "Administrator browser session is required", body = crate::http::ErrorBody),
+    (status = 403, description = "An Admin UI session with users.view or an agents capability is required", body = crate::http::ErrorBody),
   ),
 )]
 pub async fn list(
@@ -31,6 +33,33 @@ pub async fn list(
   Ok(HttpResponse::ok(
     service::list(&state, &identity).await?,
     "USERS_FETCHED",
+  ))
+}
+
+/// List user identities
+///
+/// Return each account's id and email, ordered by email. Lighter than the
+/// full list, for screens that only need to name people, such as the audit
+/// log's Actor filter. Requires an authenticated browser session that can
+/// view users.
+#[utoipa::path(
+  get,
+  path = crate::constants::api::users::IDENTITIES,
+  tag = "users",
+  security(("cookieAuth" = [])),
+  responses(
+    (status = 200, description = "User identities fetched", body = inline(HttpResponseFormat<Vec<UserIdentity>>)),
+    (status = 401, description = "Authentication is required", body = crate::http::ErrorBody),
+    (status = 403, description = "Administrator browser session is required", body = crate::http::ErrorBody),
+  ),
+)]
+pub async fn identities(
+  State(state): State<AppState>,
+  identity: AuthIdentity,
+) -> Result<HttpResponse<Vec<UserIdentity>>, crate::http::HttpError> {
+  Ok(HttpResponse::ok(
+    service::identities(&state, &identity).await?,
+    "USER_IDENTITIES_FETCHED",
   ))
 }
 
@@ -64,9 +93,9 @@ pub async fn get(
 
 /// Create a user
 ///
-/// Provision a new administrator or member user account. Requires an
-/// authenticated administrator browser session with recent re-authentication
-/// and the CSRF header.
+/// Add a person, which needs users.manage. AI agents are added with
+/// `POST /api/v1/agents`. Requires an Admin UI session with recent
+/// authentication and the CSRF header.
 #[utoipa::path(
   post,
   path = crate::constants::api::users::COLLECTION,
@@ -75,6 +104,7 @@ pub async fn get(
   request_body = CreateUserRequest,
   responses(
     (status = 201, description = "User created", body = inline(HttpResponseFormat<UserResponse>)),
+    (status = 400, description = "The role signs in with tokens only (AI agents are added at /api/v1/agents), or `ownerId` was sent", body = crate::http::ErrorBody),
     (status = 401, description = "Authentication is required", body = crate::http::ErrorBody),
     (status = 403, description = "Administrator browser session with recent authentication and CSRF token is required, or root role requested", body = crate::http::ErrorBody),
     (status = 409, description = "An account with this email already exists", body = crate::http::ErrorBody),
@@ -183,5 +213,69 @@ pub async fn unlink_sso(
   Ok(HttpResponse::ok(
     service::unlink_sso(&state, &identity, &headers, &id).await?,
     "USER_SSO_UNLINKED",
+  ))
+}
+
+/// Disable a user
+///
+/// The account can't sign in, its sessions end, and its personal tokens and
+/// those of AI agents it owns are refused until it is enabled again.
+/// Disabling a disabled account changes nothing. Root and your own account
+/// can't be disabled. A person needs users.manage; an AI agent its owner
+/// with agents.view, or agents.manage. Requires the Admin UI with recent
+/// authentication and the CSRF header.
+#[utoipa::path(
+  post,
+  path = crate::constants::api::users::DISABLE,
+  tag = "users",
+  security(("cookieAuth" = [])),
+  params(("id" = String, Path, description = "User ID with usr_ prefix")),
+  responses(
+    (status = 200, description = "User disabled", body = inline(HttpResponseFormat<UserResponse>)),
+    (status = 401, description = "Authentication is required", body = crate::http::ErrorBody),
+    (status = 403, description = "users.manage (agents.view as the owner, or agents.manage, for an AI agent), CSRF, or recent authentication is required, the account is root or your own, or it has access you don't", body = crate::http::ErrorBody),
+    (status = 404, description = "The user was not found", body = crate::http::ErrorBody),
+  ),
+)]
+pub async fn disable(
+  State(state): State<AppState>,
+  headers: HeaderMap,
+  identity: AuthIdentity,
+  Path(id): Path<String>,
+) -> Result<HttpResponse<UserResponse>, crate::http::HttpError> {
+  Ok(HttpResponse::ok(
+    service::set_status(&state, &identity, &headers, &id, UserStatus::Disabled).await?,
+    "USER_DISABLED",
+  ))
+}
+
+/// Enable a user
+///
+/// Let a disabled account sign in again. Its tokens that are still valid
+/// work again. Enabling an active account changes nothing. Same rights as
+/// disabling it, except that an AI agent disabled by someone other than its
+/// owner needs agents.manage to enable.
+#[utoipa::path(
+  post,
+  path = crate::constants::api::users::ENABLE,
+  tag = "users",
+  security(("cookieAuth" = [])),
+  params(("id" = String, Path, description = "User ID with usr_ prefix")),
+  responses(
+    (status = 200, description = "User enabled", body = inline(HttpResponseFormat<UserResponse>)),
+    (status = 401, description = "Authentication is required", body = crate::http::ErrorBody),
+    (status = 403, description = "users.manage (agents.view as the owner, or agents.manage, for an AI agent), CSRF, or recent authentication is required, the account is root or your own, or it has access you don't", body = crate::http::ErrorBody),
+    (status = 404, description = "The user was not found", body = crate::http::ErrorBody),
+  ),
+)]
+pub async fn enable(
+  State(state): State<AppState>,
+  headers: HeaderMap,
+  identity: AuthIdentity,
+  Path(id): Path<String>,
+) -> Result<HttpResponse<UserResponse>, crate::http::HttpError> {
+  Ok(HttpResponse::ok(
+    service::set_status(&state, &identity, &headers, &id, UserStatus::Active).await?,
+    "USER_ENABLED",
   ))
 }

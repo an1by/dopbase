@@ -169,3 +169,30 @@ pub async fn scope<F: Future>(
 pub fn current() -> Option<IpAddr> {
   CLIENT_IP.try_with(|address| *address).ok().flatten()
 }
+
+/// The rate-limit bucket for an address. IPv6 clients usually hold a whole
+/// /64 and can pick a new address in it per request, so they share one
+/// bucket per /64. An IPv4 address mapped into IPv6 counts as itself.
+pub fn bucket(address: Option<IpAddr>) -> String {
+  match address {
+    None => "unknown".to_owned(),
+    Some(IpAddr::V4(v4)) => v4.to_string(),
+    Some(IpAddr::V6(v6)) => match v6.to_ipv4_mapped() {
+      Some(v4) => v4.to_string(),
+      None => {
+        let segments = v6.segments();
+        let network = std::net::Ipv6Addr::new(
+          segments[0],
+          segments[1],
+          segments[2],
+          segments[3],
+          0,
+          0,
+          0,
+          0,
+        );
+        format!("{network}/64")
+      }
+    },
+  }
+}

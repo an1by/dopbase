@@ -34,16 +34,16 @@
 
 # Days to keep audit records. Older records are moved to the
 # audit-archive directory in the data directory.
-# Accepts: 1 or more. Remove this line to keep records forever.
+# Accepts: 0 or more. 0 keeps records forever. Default: 365.
 # Environment: DOPBASE_AUDIT_RETENTION_DAYS
-audit_retention_days = 365
+# audit_retention_days = 365
 
 # Versions of each secret that keep their encrypted value and can be
 # rolled back to. Older versions keep only who changed them and when.
 # A lower value applies to a secret the next time it changes.
 # Accepts: 2 to 1000. Default: 20.
 # Environment: DOPBASE_SECRET_HISTORY_VERSIONS
-secret_history_versions = 20
+# secret_history_versions = 20
 
 # Reverse proxies allowed to report the client address. Audit records
 # store the connection's address unless it comes from one of these, in
@@ -62,6 +62,38 @@ secret_history_versions = 20
 # Accepts: true or false. Default: false.
 # Environment: DOPBASE_DOCS
 # docs = false
+
+# Check GitHub for a newer Dopbase release when the Status page is open, at
+# most once a day. The server makes no outbound calls while this is off.
+# Accepts: true or false. Default: false.
+# Environment: DOPBASE_UPDATE_CHECK
+# update_check = false
+
+# Let people sign in with an OpenID Connect provider such as Google or
+# Keycloak. While this is off, accounts that only sign in with single
+# sign-on can't sign in; root can always use its password.
+# Accepts: true or false. Default: false.
+# Environment: DOPBASE_SSO
+# sso = false
+
+# Let admins add and change people, groups and the access they're given.
+# While this is off, existing accounts keep their role and access, and AI
+# agents work as usual.
+# Accepts: true or false. Default: false.
+# Environment: DOPBASE_RBAC
+# rbac = false
+
+# Let root create and edit custom roles. Needs rbac = true too.
+# While this is off, people who already hold a custom role keep it.
+# Accepts: true or false. Default: false.
+# Environment: DOPBASE_RBAC_ROLES
+# rbac_roles = false
+
+# Cap how many active people the instance holds. Root, AI agents and
+# disabled accounts don't count. Needs rbac = true too.
+# Accepts: a whole number; 0 means no limit. Default: 0.
+# Environment: DOPBASE_RBAC_MAX_USERS
+# rbac_max_users = 0
 
 # Master encryption key settings.
 # Uncomment the table header before enabling settings below.

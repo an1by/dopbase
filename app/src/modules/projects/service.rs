@@ -1,5 +1,7 @@
 use super::{model::*, repository};
 use crate::modules::common;
+use crate::modules::grants;
+use crate::utils::time::Stamp;
 use crate::{
   constants::{
     errors::{
@@ -9,9 +11,14 @@ use crate::{
     limits::{MAX_SECRET_COLLECTION_BYTES, MAX_SECRETS_PER_ENVIRONMENT},
     tokens::PROJECT_ID_PREFIX,
   },
+  extractors::{require_capability, require_read_access},
   http::HttpError,
   models::{AffectedCounts, AuthIdentity},
-  services::token,
+  services::{
+    access::{Reach, Refusal, Resource},
+    authx::{self, Capability, Level},
+    token,
+  },
   state::AppState,
 };
 use chrono::Utc;
@@ -26,18 +33,86 @@ fn map_unique(error: sqlx::Error) -> HttpError {
     HttpError::from(error)
   }
 }
-pub async fn list(state: &AppState) -> Result<Vec<ProjectResponse>, HttpError> {
-  Ok(repository::list(state.db.pool()).await?)
+fn not_found() -> HttpError {
+  Refusal::Hidden.into_http(Resource::Project)
 }
-pub async fn show(
+
+async fn reach(
   state: &AppState,
+  identity: &AuthIdentity,
+) -> Result<Reach, HttpError> {
+  let mut conn = state.db.pool().acquire().await?;
+  Ok(Reach::load(&mut conn, identity).await?)
+}
+
+pub async fn list(
+  state: &AppState,
+  identity: &AuthIdentity,
+) -> Result<Vec<ProjectResponse>, HttpError> {
+  require_read_access(identity)?;
+  let reach = reach(state, identity).await?;
+  Ok(
+    repository::list(state.db.pool())
+      .await?
+      .into_iter()
+      .filter_map(|mut project| {
+        project.level = reach.project(&project.id)?;
+        Some(project)
+      })
+      .collect(),
+  )
+}
+
+/// The project, when the caller's level on it is at least `needed`. A
+/// project the caller cannot see at all is reported as missing.
+pub async fn authorize(
+  state: &AppState,
+  identity: &AuthIdentity,
   reference: &str,
+  needed: Level,
 ) -> Result<ProjectResponse, HttpError> {
-  repository::find(state.db.pool(), reference)
+  require_read_access(identity)?;
+  let mut project = repository::find(state.db.pool(), reference)
     .await?
-    .ok_or_else(|| {
-      HttpError::not_found("PROJECT_NOT_FOUND", "The requested project was not found.")
-    })
+    .ok_or_else(not_found)?;
+  let mut conn = state.db.pool().acquire().await?;
+  let reach = Reach::load_project(&mut conn, identity, &project.id).await?;
+  drop(conn);
+  project.level = reach
+    .require_project(&project.id, needed)
+    .map_err(|refusal| refusal.into_http(Resource::Project))?;
+  Ok(project)
+}
+
+fn creator_actor<'a>(
+  identity: &AuthIdentity,
+  creator: &'a str,
+  email: &'a str,
+) -> grants::store::Actor<'a> {
+  grants::store::Actor {
+    actor_type: identity.audit_actor_type(),
+    id: creator,
+    label: email,
+  }
+}
+
+/// The account to make project manager of a new project, when its grants
+/// would not show it the project otherwise. Root needs no grant.
+async fn creator_needing_grant<'a>(
+  state: &AppState,
+  identity: &'a AuthIdentity,
+) -> Result<Option<&'a str>, HttpError> {
+  let AuthIdentity::Admin {
+    admin_id, access, ..
+  } = identity
+  else {
+    return Ok(None);
+  };
+  let mut conn = state.db.pool().acquire().await?;
+  let data = authx::account_data_access(&mut conn, admin_id, access).await?;
+  // A new project has no grants of its own yet, so only an all-projects
+  // grant can reach it.
+  Ok((data.project("") < Level::ProjectManager).then_some(admin_id.as_str()))
 }
 pub async fn create(
   state: &AppState,
@@ -45,19 +120,25 @@ pub async fn create(
   request: CreateProjectRequest,
 ) -> Result<ProjectResponse, HttpError> {
   common::validate_slug(&request.name, "PROJECT_NAME_INVALID", "Project name")?;
-  let (admin_id, email) = crate::extractors::require_project_manager(identity)?;
+  let (admin_id, email) = require_capability(identity, Capability::ProjectsCreate)?;
+  let creator = creator_needing_grant(state, identity).await?;
   let id = token::public_id(PROJECT_ID_PREFIX);
-  let now = Utc::now().to_rfc3339();
-  let mut tx = state.db.pool().begin().await?;
-  let project = repository::insert(&mut tx, &id, &request.name, &now)
+  let now = Utc::now().stamp();
+  let mut tx = crate::services::change::Change::begin(state.db.pool()).await?;
+  let mut project = repository::insert(&mut tx, &id, &request.name, &now)
     .await
     .map_err(map_unique)?;
+  if let Some(creator) = creator {
+    grants::store::grant_creator(&mut tx, creator_actor(identity, creator, email), &id, &now)
+      .await?;
+  }
+  project.level = Level::ProjectManager;
   common::audit(
     &mut tx,
     identity.audit_actor_type(),
     Some(admin_id),
     Some(email),
-    "project.created",
+    crate::services::events::Action::ProjectCreated,
     Some(&id),
     None,
     Some("project"),
@@ -75,11 +156,11 @@ pub async fn rename(
   request: RenameProjectRequest,
 ) -> Result<ProjectResponse, HttpError> {
   common::validate_slug(&request.name, "PROJECT_NAME_INVALID", "Project name")?;
-  let (admin_id, email) = crate::extractors::require_project_manager(identity)?;
-  let project = show(state, reference).await?;
-  let now = Utc::now().to_rfc3339();
-  let mut tx = state.db.pool().begin().await?;
-  let updated = sqlx::query("UPDATE projects SET name=?,updated_at=? WHERE id=?")
+  let (admin_id, email) = crate::extractors::require_person(identity)?;
+  let project = authorize(state, identity, reference, Level::ProjectManager).await?;
+  let now = Utc::now().stamp();
+  let mut tx = crate::services::change::Change::begin(state.db.pool()).await?;
+  let updated = sqlx::query("UPDATE projects SET name=$1,updated_at=$2 WHERE id=$3")
     .bind(&request.name)
     .bind(&now)
     .bind(&project.id)
@@ -87,17 +168,14 @@ pub async fn rename(
     .await
     .map_err(map_unique)?;
   if updated.rows_affected() != 1 {
-    return Err(HttpError::not_found(
-      "PROJECT_NOT_FOUND",
-      "The requested project was not found.",
-    ));
+    return Err(not_found());
   }
   common::audit(
     &mut tx,
     identity.audit_actor_type(),
     Some(admin_id),
     Some(email),
-    "project.renamed",
+    crate::services::events::Action::ProjectRenamed,
     Some(&project.id),
     None,
     Some("project"),
@@ -106,34 +184,31 @@ pub async fn rename(
   )
   .await?;
   tx.commit().await?;
-  show(state, &project.id).await
+  authorize(state, identity, &project.id, Level::Metadata).await
 }
 pub async fn delete(
   state: &AppState,
   identity: &AuthIdentity,
   reference: &str,
 ) -> Result<DeleteProjectResponse, HttpError> {
-  let (admin_id, email) = crate::extractors::require_project_manager(identity)?;
-  let project = show(state, reference).await?;
-  let mut tx = state.db.pool().begin_with("BEGIN IMMEDIATE").await?;
+  let (admin_id, email) = crate::extractors::require_person(identity)?;
+  let project = authorize(state, identity, reference, Level::ProjectManager).await?;
+  let mut tx = crate::services::change::Change::begin(state.db.pool()).await?;
   let environments: i64 =
-    sqlx::query_scalar("SELECT COUNT(*) FROM environments WHERE project_id=?")
+    sqlx::query_scalar("SELECT COUNT(*) FROM environments WHERE project_id=$1")
       .bind(&project.id)
       .fetch_one(&mut *tx)
       .await?;
-  let secrets:i64=sqlx::query_scalar("SELECT COUNT(*) FROM secrets WHERE environment_id IN(SELECT id FROM environments WHERE project_id=?)").bind(&project.id).fetch_one(&mut *tx).await?;
-  let tokens:i64=sqlx::query_scalar("SELECT COUNT(*) FROM runner_tokens WHERE environment_id IN(SELECT id FROM environments WHERE project_id=?)").bind(&project.id).fetch_one(&mut *tx).await?;
-  let deleted = sqlx::query("DELETE FROM projects WHERE id=?")
+  let secrets:i64=sqlx::query_scalar("SELECT COUNT(*) FROM secrets WHERE environment_id IN(SELECT id FROM environments WHERE project_id=$1)").bind(&project.id).fetch_one(&mut *tx).await?;
+  let tokens:i64=sqlx::query_scalar("SELECT COUNT(*) FROM runner_tokens WHERE environment_id IN(SELECT id FROM environments WHERE project_id=$1)").bind(&project.id).fetch_one(&mut *tx).await?;
+  let deleted = sqlx::query("DELETE FROM projects WHERE id=$1")
     .bind(&project.id)
     .execute(&mut *tx)
     .await?;
   if deleted.rows_affected() != 1 {
-    return Err(HttpError::not_found(
-      "PROJECT_NOT_FOUND",
-      "The requested project was not found.",
-    ));
+    return Err(not_found());
   }
-  common::audit(&mut tx,identity.audit_actor_type(),Some(admin_id),Some(email),"project.deleted",Some(&project.id),None,Some("project"),Some(&project.id),serde_json::json!({"name":project.name,"environments":environments,"secrets":secrets,"tokens":tokens})).await?;
+  common::audit(&mut tx,identity.audit_actor_type(),Some(admin_id),Some(email),crate::services::events::Action::ProjectDeleted,Some(&project.id),None,Some("project"),Some(&project.id),serde_json::json!({"name":project.name,"environments":environments,"secrets":secrets,"tokens":tokens})).await?;
   tx.commit().await?;
   Ok(DeleteProjectResponse {
     affected: AffectedCounts {
@@ -185,50 +260,48 @@ pub async fn init(
       ));
     }
   }
-  let (admin_id, email) = crate::extractors::require_project_manager(identity)?;
+  let (admin_id, email) = require_capability(identity, Capability::ProjectsCreate)?;
+  let creator = creator_needing_grant(state, identity).await?;
   let project_id = token::public_id(PROJECT_ID_PREFIX);
-  let now = Utc::now().to_rfc3339();
-  let mut tx = state.db.pool().begin_with("BEGIN IMMEDIATE").await?;
-  let project = repository::insert(&mut tx, &project_id, &request.project_name, &now)
+  let now = Utc::now().stamp();
+  let mut tx = crate::services::change::Change::begin(state.db.pool()).await?;
+  let mut project = repository::insert(&mut tx, &project_id, &request.project_name, &now)
     .await
     .map_err(map_unique)?;
+  if let Some(creator) = creator {
+    grants::store::grant_creator(
+      &mut tx,
+      creator_actor(identity, creator, email),
+      &project_id,
+      &now,
+    )
+    .await?;
+  }
+  project.level = Level::ProjectManager;
   let environment_id = crate::modules::environments::service::insert_generated(
     &mut tx,
     &project_id,
     &request.environment_name,
+    false,
     &now,
   )
   .await?;
-  let encrypted = request
-    .entries
-    .iter()
-    .map(|entry| {
-      state
-        .crypto
-        .encrypt(entry.value.as_bytes(), &environment_id, &entry.key, 1)
-        .map(|value| (entry, value))
-    })
-    .collect::<Result<Vec<_>, _>>()
-    .map_err(|_| HttpError::internal())?;
-  for (entry, value) in encrypted {
-    crate::modules::secrets::repository::write_version(
+  // The new environment's first values go through the secret store like
+  // any other write.
+  for entry in &request.entries {
+    crate::modules::secrets::store::put(
+      state,
       &mut tx,
-      crate::modules::secrets::repository::NewVersion {
-        environment_id: &environment_id,
-        key: &entry.key,
-        version: 1,
-        encrypted: value,
-        created_at: &now,
-        now: &now,
-        change: crate::modules::secrets::repository::ChangeType::Created,
-        source_version: None,
-        actor: crate::modules::secrets::repository::VersionActor {
-          actor_type: identity.audit_actor_type(),
-          actor_id: Some(admin_id),
-          actor_label: Some(email),
-        },
-        keep: state.config.secret_history_versions,
+      crate::modules::secrets::store::Writer {
+        actor_type: identity.audit_actor_type(),
+        actor_id: admin_id,
+        label: email,
       },
+      &environment_id,
+      &entry.key,
+      &entry.value,
+      None,
+      None,
     )
     .await?;
   }
@@ -237,7 +310,7 @@ pub async fn init(
     identity.audit_actor_type(),
     Some(admin_id),
     Some(email),
-    "project.initialized",
+    crate::services::events::Action::ProjectInitialized,
     Some(&project_id),
     Some(&environment_id),
     Some("project"),

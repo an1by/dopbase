@@ -1,5 +1,6 @@
 use super::{error::BootstrapError, model::*, service};
 use crate::{
+  constants::limits::{MAX_MASTER_KEY_FIELD_BYTES, MAX_SETUP_TOKEN_FIELD_BYTES},
   http::{HttpResponse, HttpResponseFormat},
   state::AppState,
 };
@@ -88,18 +89,40 @@ pub async fn create_admin(
 )]
 pub async fn restore(
   State(state): State<AppState>,
+  headers: axum::http::HeaderMap,
   mut multipart: axum::extract::Multipart,
 ) -> Result<HttpResponse<BootstrapRestoreResponse>, crate::http::HttpError> {
   let mut file_name = None;
   let mut file_bytes = None;
   let mut master_key_bytes = None;
-  let mut setup_token = None;
+  // The token comes in a header or as a form field ahead of the file, and
+  // is checked before the file is read, so nobody without it can make the
+  // server buffer a large upload.
+  if state.setup.read().await.token.is_none() {
+    return Err(crate::http::HttpError::conflict(
+      "BOOTSTRAP_CLOSED",
+      "This instance has already been initialized.",
+    ));
+  }
+  let mut setup_token = headers
+    .get(crate::constants::api::bootstrap::SETUP_TOKEN_HEADER)
+    .and_then(|value| value.to_str().ok())
+    .map(str::to_owned);
+  if let Some(token) = &setup_token {
+    service::verify_setup_token(&state, token).await?;
+  }
 
   while let Some(field) = multipart.next_field().await.map_err(|_| {
     crate::http::HttpError::bad_request("MULTIPART_ERROR", "Failed to process multipart upload.")
   })? {
     match field.name() {
       Some("file") | Some("backup") => {
+        if setup_token.is_none() {
+          return Err(crate::http::HttpError::bad_request(
+            "SETUP_TOKEN_REQUIRED",
+            "Send the setup token before the backup file.",
+          ));
+        }
         file_name = field.file_name().map(|s| s.to_string());
         let data = field.bytes().await.map_err(|_| {
           crate::http::HttpError::bad_request(
@@ -110,12 +133,18 @@ pub async fn restore(
         file_bytes = Some(data.to_vec());
       }
       Some("key") | Some("master_key") => {
-        let data = field.bytes().await.map_err(|_| {
-          crate::http::HttpError::bad_request(
-            "MULTIPART_ERROR",
-            "Failed to read uploaded master key.",
-          )
-        })?;
+        if setup_token.is_none() {
+          return Err(crate::http::HttpError::bad_request(
+            "SETUP_TOKEN_REQUIRED",
+            "Send the setup token before the master key.",
+          ));
+        }
+        let data = read_small_field(
+          field,
+          MAX_MASTER_KEY_FIELD_BYTES,
+          "Failed to read uploaded master key.",
+        )
+        .await?;
         if !data.is_empty() {
           let parsed = crate::services::crypto::parse_master_key(&data).map_err(|e| {
             crate::http::HttpError::bad_request("INVALID_MASTER_KEY", &e.to_string())
@@ -124,10 +153,19 @@ pub async fn restore(
         }
       }
       Some("setup_token") | Some("setupToken") => {
-        let data = field.text().await.map_err(|_| {
+        let data = read_small_field(
+          field,
+          MAX_SETUP_TOKEN_FIELD_BYTES,
+          "Failed to read setup token.",
+        )
+        .await?;
+        let data = String::from_utf8(data).map_err(|_| {
           crate::http::HttpError::bad_request("MULTIPART_ERROR", "Failed to read setup token.")
         })?;
-        setup_token = Some(data);
+        if setup_token.is_none() {
+          service::verify_setup_token(&state, &data).await?;
+          setup_token = Some(data);
+        }
       }
       _ => {}
     }
@@ -145,10 +183,34 @@ pub async fn restore(
   let response = service::restore_bootstrap(
     &state,
     &name,
-    &bytes,
+    bytes,
     &setup_token,
     master_key_bytes.as_deref(),
   )
   .await?;
   Ok(HttpResponse::ok(response, "BACKUP_RESTORED"))
+}
+
+/// Reads a small form field, giving up once it passes `limit` bytes, so an
+/// oversized field is never held in memory in full.
+async fn read_small_field(
+  mut field: axum::extract::multipart::Field<'_>,
+  limit: usize,
+  failure: &str,
+) -> Result<Vec<u8>, crate::http::HttpError> {
+  let mut data = Vec::new();
+  while let Some(chunk) = field
+    .chunk()
+    .await
+    .map_err(|_| crate::http::HttpError::bad_request("MULTIPART_ERROR", failure))?
+  {
+    if data.len() + chunk.len() > limit {
+      return Err(crate::http::HttpError::bad_request(
+        "MULTIPART_FIELD_TOO_LARGE",
+        "A form field is larger than this request allows.",
+      ));
+    }
+    data.extend_from_slice(&chunk);
+  }
+  Ok(data)
 }

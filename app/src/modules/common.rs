@@ -13,7 +13,6 @@ use serde_json::Value;
 use crate::{
   constants::errors::{EMAIL_INVALID, EMAIL_INVALID_MESSAGE},
   http::HttpError,
-  services::{audit_chain::AuditEntry, token},
 };
 
 pub fn validate_slug(
@@ -166,10 +165,8 @@ pub async fn verify_password_async(
 /// Record an audit event on the caller's connection.
 ///
 /// The record joins the tamper-evident hash chain, which reads the chain head
-/// before inserting. The connection must therefore already hold SQLite's
-/// write lock: pass an immediate transaction, or a transaction whose first
-/// statement was a write. Every business transaction that audits already
-/// writes first, and [`audit_standalone`] handles the remaining cases.
+/// before inserting, so the connection must hold SQLite's write lock: pass a
+/// [`crate::services::change::Change`], which always does.
 ///
 /// The client IP comes from the current request, when there is one.
 #[allow(clippy::too_many_arguments)]
@@ -178,20 +175,16 @@ pub async fn audit(
   actor_type: &str,
   actor_id: Option<&str>,
   actor_label: Option<&str>,
-  action: &str,
+  action: crate::services::events::Action,
   project_id: Option<&str>,
   environment_id: Option<&str>,
   resource_type: Option<&str>,
   resource_id: Option<&str>,
   metadata: Value,
 ) -> Result<(), sqlx::Error> {
-  let metadata = metadata.to_string();
-  let created_at = chrono::Utc::now().to_rfc3339();
-  let ip_address = crate::services::client_ip::current().map(|address| address.to_string());
-  crate::services::audit_chain::append(
+  crate::services::change::record_on(
     connection,
-    &AuditEntry {
-      id: &token::public_id("aud_"),
+    crate::services::change::Event {
       actor_type,
       actor_id,
       actor_label,
@@ -200,9 +193,7 @@ pub async fn audit(
       environment_id,
       resource_type,
       resource_id,
-      ip_address: ip_address.as_deref(),
-      metadata: &metadata,
-      created_at: &created_at,
+      metadata,
     },
   )
   .await
@@ -218,14 +209,14 @@ pub async fn audit_standalone(
   actor_type: &str,
   actor_id: Option<&str>,
   actor_label: Option<&str>,
-  action: &str,
+  action: crate::services::events::Action,
   project_id: Option<&str>,
   environment_id: Option<&str>,
   resource_type: Option<&str>,
   resource_id: Option<&str>,
   metadata: Value,
 ) -> Result<(), sqlx::Error> {
-  let mut transaction = pool.begin_with("BEGIN IMMEDIATE").await?;
+  let mut transaction = crate::services::change::Change::begin(pool).await?;
   audit(
     &mut transaction,
     actor_type,

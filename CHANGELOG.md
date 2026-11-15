@@ -2,6 +2,271 @@
 
 All notable changes to Dopbase are documented in this file.
 
+## 0.2.0 - 2026-11-15
+
+[Dopbase](https://dopbase.com) 0.2.0 adds roles, grants and groups for access
+per project or environment, plus personal tokens, AI agents with an owner,
+protected environments and a Compare tab. Single sign-on and people management
+are off by default, and runner tokens always expire. 0.2.0 won't start on a
+0.1.x data directory: back up and restore as described in
+[Upgrade to 0.2.0](docs/self-hosting/upgrade-to-0-2.md). The breaking changes
+are listed under **Note**.
+
+### Added
+
+- `dopbase restore`, the **Backups** upload and restore during setup take
+  0.1.x backups and upgrade them on the way in, with a report of what was left
+  out or changed. See [Upgrade to 0.2.0](docs/self-hosting/upgrade-to-0-2.md).
+- `dopbase admin passcode <email>`, run on the server machine, prints a
+  one-time passcode and a `/launch` link that signs that account in to the
+  Admin UI. It lasts 60 seconds (`--ttl`) and works once. API:
+  `POST /api/v1/auth/launch`, which answers `401` `PASSCODE_INVALID` for a
+  wrong or expired passcode and `429` `RATE_LIMITED` after too many tries.
+- `DOPBASE_SSO`, `DOPBASE_RBAC` and `DOPBASE_RBAC_ROLES` (`sso`, `rbac`,
+  `rbac_roles` in `server.toml`) turn on single sign-on, people and group
+  management, and custom roles. A feature that's off answers `403`
+  `FEATURE_DISABLED`.
+- `DOPBASE_RBAC_MAX_USERS` (`rbac_max_users`) caps active people while RBAC is
+  on. Root, AI agents and disabled accounts don't count. At the limit, adding
+  or enabling someone answers `409` `USER_LIMIT_REACHED`.
+- Roles and grants. A role holds capabilities and caps the access its grants
+  can give; Admin, Member, Auditor and AI agent are built in. A grant gives a
+  user or group a level, from `metadata` to `project_manager`, on all
+  projects, one project or one environment. `GET /api/v1/auth/session` adds
+  `roleName`, `capabilities` and `maxLevel`.
+- AI agent capabilities: `agents.view` creates agents and runs your own,
+  `agents.view_all` shows every agent, and `agents.manage` changes anyone's.
+  Members can create agents, and an agent's owner can give it access up to
+  their own. `ownerId` on `POST /api/v1/agents` answers `OWNER_NOT_SETTABLE`.
+- **Access** tab on the project page lists who reaches the project, and
+  project managers give or remove access there. API: `PUT /api/v1/grants`,
+  `DELETE /api/v1/grants/{id}`, `GET /api/v1/projects/{ref}/access` and
+  `GET /api/v1/users/{id}/access`.
+- **Groups** page. A grant to a group reaches every member, and leaving the
+  group takes that access away on the next request.
+- Personal tokens (`dpp_`) act as their account from a script or an AI agent,
+  limited to a project or environment and a level. Create them on the Account
+  page or with `dopbase token personal create`, then use them as
+  `DOPBASE_TOKEN`.
+- Custom roles on the new **Roles** page or with `POST /api/v1/roles`. Give
+  one with `roleId` on `POST` and `PATCH /api/v1/users`.
+- Audit tokens: Auditor personal tokens that read the audit log and no project
+  data, for a SIEM. Create one with `dopbase token personal create --audit`.
+- `dopbase access` shows what you or `DOPBASE_TOKEN` can reach, and
+  `dopbase access --project <ref>` lists who reaches a project.
+- Protected environments, which a project grant below project manager doesn't
+  reach. Turn protection on from Access or with `{"protected": true}` on
+  `PATCH /api/v1/environments/{id}` or `POST /api/v1/projects/{ref}/environments`.
+- **Compare** tab on the project page shows which keys match, differ or are
+  missing across up to four environments, and fills a missing key from
+  another environment without showing the value. API:
+  `GET /api/v1/environments/{id}/compare`,
+  `POST /api/v1/environments/{id}/secrets/{key}/copy`, and `"createOnly": true`
+  on `PUT /api/v1/environments/{id}/secrets/{key}` to refuse a key that exists.
+- Guided setup: a checklist on Projects until the first project exists, a
+  development, staging and protected production list for an empty project, and
+  copy or `.env` import for an empty environment
+  (`POST /api/v1/environments/{id}/copy-secrets`).
+- Environment IDs in the console. Click one to copy it, then use it in place
+  of `project/environment`, as in `dopbase run env_918204 -- npm start`.
+- **Activity** tab with the audit trail for an environment or its project,
+  linking to the full audit log with the same filters.
+- **Settings** tab where project managers rename the project and protect,
+  rename or delete its environments.
+- **AI agents** page for token-only accounts used by bots and CI, with an
+  owner, **New token** and **Transfer owner**, which revokes the agent's
+  tokens. API: `"replaceExisting": true` on `POST /api/v1/agents/{id}/tokens`.
+- A page for each person and each group, with tabs for their access, groups
+  or members, and tokens. Access shows where every grant comes from.
+- Disable an account without deleting it: it is signed out and its tokens
+  stop. API: `POST /api/v1/users/{id}/disable` and `/enable`.
+- Setup has root save a recovery kit with the master key before the console
+  opens.
+- The CLI approval page shows the machine, client, address and expiry before
+  you approve, and **It doesn't match** denies the request. **Go back** on the
+  code, denied, expired and signed-in screens opens Projects.
+- A wrong password says how many tries are left before a 15-minute pause.
+- The audit log opens an event in a side panel that shows whether the hash
+  chain checks out up to it. **Verify chain** checks the whole log.
+- **Forgot password?** on the sign-in page says who can reset it.
+- `GET /api/v1/users/identities` returns only each account's `id` and
+  `email`.
+- Health checks on the Status page and `GET /api/v1/status`, with a fix button
+  for each failing one, **Run checks**, **Copy diagnostics** and a **Disk
+  usage** card. `POST /api/v1/status/checks/run` runs them now.
+- `update_check` in `server.toml` (or `DOPBASE_UPDATE_CHECK=true`) lets the
+  Status page say when a newer release is out. It is off by default.
+- `GET /api/v1/runtime/secrets` gives a runner token the secrets of its own
+  environment, so an SDK needs only the server URL and the token. It supports
+  `ETag` and `If-None-Match`.
+- The CLI sends `User-Agent: dopbase/<version>`, and every API response
+  carries `X-Dopbase-Version`. When the server is a minor or major release
+  ahead, the CLI prints one warning per command. Set
+  `DOPBASE_VERSION_WARNING=false` to hide it.
+- A request whose `User-Agent` names a Dopbase CLI older than 0.2.0 gets `400`
+  `CLI_UPGRADE_REQUIRED` with the command to update. No released CLI sends
+  one: 0.1.x CLIs send no `User-Agent`, so they aren't refused, and
+  `GET /api/v1/health` answers every client.
+
+### Improvement
+
+- Service accounts are now AI agents owned by root with the same reach, and
+  their `dpa_` tokens keep working. The built-in AI agent role reaches up to
+  Write, and new agent tokens start on Read.
+- Lists show only the projects and environments your grants reach, and the
+  rest return 404. The upgrade gives admins `project_manager` and members
+  `write` on all projects; new members start with no access.
+- Creating a project needs `projects.create`, and the creator becomes its
+  project manager.
+- Nobody can change an account above their own, give a role they don't hold,
+  or change their own grants.
+- The audit log shows each reader what their role allows. Auditor and root
+  see every event; members see their own actions and nothing from
+  environments they can't reach.
+- A personal token that reaches values can reveal, export and run without a
+  password prompt.
+- `dopbase run` with a runner token runs the token's environment and needs no
+  reference. A reference or `DOPBASE_ENV` naming another environment stops the
+  run.
+- `dopbase client status` shows the account's role and how the CLI signed in.
+  The JSON output adds `role`.
+- `dopbase server start` opens with `Dopbase <version>` and one line under
+  it, instead of the name, tagline and version on three lines.
+- Single sign-on tells a disabled account that it is disabled. Before, it
+  said no account used that email. The login redirect and the
+  `sso_login.failed` audit event carry `account_disabled`.
+- `dopbase client connect local` no longer needs the local server running, and
+  follows the instance's public URL. See
+  [client connect](docs/cli/client-connect.md#return-to-the-local-server).
+- `dopbase admin reset-password` works with the server running or stopped,
+  and prints the data directory it changed.
+- Timestamps in API responses look like `2026-11-08T09:30:00.000Z`, with
+  milliseconds and `Z` instead of `+00:00`.
+- `GET /api/v1/status` returns `null` for a count it couldn't read instead of
+  failing. `GET /api/v1/instance` can report `keyAvailability` as `changed`,
+  `missing` or `unreadable`.
+- Uploading and restoring a backup get 15 minutes before they time out,
+  instead of 30 seconds.
+- CLI commands against an `http://` server start about 100 ms faster on macOS.
+- A runner token's `last_used_at` is written at most once a minute.
+- **Projects** is a tree: each project opens to list its environments.
+- Environment pages use names, as in `/projects/payments/prod/secrets`. Old
+  ID links redirect, and renaming an environment breaks links to its old name.
+- The project page has a context bar with project and environment switchers
+  (press E) and **Run**, which shows how to run an app with its values.
+- The **Secrets** table has a key filter, a .env view and a row menu. **Copy
+  value** copies without showing the value and is audited like a reveal.
+- The sidebar groups pages under Workspace, Access and Instance, and a page
+  your role can't open shows **No access**.
+- Sign in, Setup and CLI approval have a new layout. Sign in puts single
+  sign-on first and warns when Caps Lock is on.
+- **Backups** puts each backup's actions in a row menu, and deleting one asks
+  for its file name.
+- **Audit log** filters are chips kept in the address.
+- The Admin UI caches what it has read, so going back to a screen is instant.
+- The project page works on phones.
+- New Dopbase logo and icon set in the console, docs and README.
+- The security policy now lists supported versions: 0.2.x gets security
+  fixes, and 0.1.x and earlier don't.
+- The README explains how secrets are encrypted and stored, and what Dopbase
+  can't protect against.
+- The project rail is gone. Use the Projects tree instead.
+- The `/instance` page redirects to `/status`.
+
+### Security
+
+- Wrong passwords sent all at once can't get past the 5-try limit. The same
+  holds for password confirmation, factory reset, CLI login codes, single
+  sign-on callbacks and the setup token.
+- Wrong setup tokens count per client address, 5 in 15 minutes, with 50
+  shared by everyone, so one caller can't keep setup closed.
+- Runner tokens stop while the person who made them is turned off, and go
+  when they're deleted. Creating one needs a recent sign-in.
+- A new password, set by the account or by an admin, revokes the account's
+  personal tokens as well as its sessions.
+- Downloading the master key and restoring a backup need a recent sign-in from
+  CLI sessions as well as browser ones.
+- Linking a single sign-on identity needs a recent sign-in.
+- `PUT` on a secret and a merge import respect the 1,000-key and 2 MiB limits
+  per environment.
+- Restoring a backup keeps tokens revoked since the backup was made revoked.
+- `dopbase run` skips `GIT_CONFIG_*`, `GIT_SSH_COMMAND`, `PAGER`, `EDITOR`,
+  `PYTHONPATH` and similar names unless `--only` names them. See
+  [names that load code](docs/guide/run-an-application.md#names-that-load-code).
+- Creating, downloading, uploading or deleting a backup, and downloading the
+  master key, fail when the audit record can't be written.
+- A runner token gets the same 403 for an environment that doesn't exist as
+  for one it can't reach.
+- `dopbase run` with a runner token prints only the key count and source, and
+  leaves out the project, environment and ID.
+- A runner token's 403 repeats the reference only when it has no control
+  characters, so a crafted reference can't fake lines in a CI log.
+- A failed backup re-key returns a generic message; the cause, which could
+  name environment IDs and secret keys, goes to the server log.
+- The CLI no longer prints the password of a server address it rejects.
+- `dopbase logout` ends the CLI session on the server before deleting the
+  saved login, so a copied session token stops working.
+- The CLI and single sign-on use rustls 0.23.46 and rustls-webpki 0.103.16.
+  They fix four TLS advisories (CVE-2026-123609, CVE-2026-123610,
+  CVE-2026-123611, CVE-2026-123613) and reject certificates issued through the
+  distrusted emSign intermediates (CVE-2026-111943).
+- Backups are read and written with zip 9.5, which fixes CVE-2026-115905,
+  CVE-2026-115906 and CVE-2026-115909. Dopbase never called the affected code.
+
+### Note
+
+- **Breaking:** 0.2.0 stores its data in a new schema and won't start on a
+  0.1.x data directory. Back up on 0.1.x, then run `dopbase restore` on a fresh
+  0.2.0. Everyone signs in again afterwards.
+- **Breaking:** Single sign-on and people management are off by default. If
+  you use them, set `DOPBASE_SSO=true` and `DOPBASE_RBAC=true` before
+  upgrading, or accounts that only sign in with single sign-on are locked out.
+- **Breaking:** Audit records are kept for 365 days by default. A
+  `server.toml` with no `audit_retention_days` line starts archiving older
+  records to `audit-archive/` after the upgrade; set it to `0` to keep all.
+- **Breaking:** Backups are written as `DOPBASE_BACKUP_V3`, which 0.1.x can't
+  restore.
+- **Breaking:** Restore during setup needs the setup token before the file and
+  master key, in `X-Dopbase-Setup-Token` or as the first form field. Otherwise
+  it answers `400` `SETUP_TOKEN_REQUIRED`; oversized fields answer
+  `MULTIPART_FIELD_TOO_LARGE`.
+- **Breaking:** Runner tokens always expire: 90 days by default, a year at
+  most, and new ones pick a lifetime. `--expires-in never` answers
+  `EXPIRY_INVALID`. Runner tokens restored from 0.1.x expire within 365 days.
+- **Breaking:** New runner token names must start with a lowercase letter, use
+  only lowercase letters, numbers and single hyphens, and be at most 63
+  characters; others get `TOKEN_NAME_INVALID`. Existing tokens keep theirs.
+- **Breaking:** `/api/v1/users` lists and changes people only. AI agents live
+  under `/api/v1/agents`, have a `name` instead of an `email`, and new ones get
+  an `agt_` id. See [identity](docs/reference/identity.md).
+- **Breaking:** Refused admin requests say `Your role does not allow this operation.`
+  instead of `This operation requires an administrator.`
+- **Breaking:** `PATCH /api/v1/environments/{id}` returns
+  `ENVIRONMENT_UPDATED` instead of `ENVIRONMENT_RENAMED`.
+- **Breaking:** `dopbase login` and `dopbase logout` exit with code 1 while
+  `DOPBASE_TOKEN` is set, since the token wins over a saved login. Drop
+  `dopbase logout` from CI cleanup that runs with the token set.
+- **Breaking:** `/api/v1/service-accounts` is removed. Use
+  `POST /api/v1/agents` and `/api/v1/agents/{id}/tokens`.
+- **Breaking:** `GET /api/v1/status` no longer returns `databaseHealth` and
+  `keyAvailability`. They were always `healthy` and `available`.
+- Restoring 0.1.x backups is deprecated and planned to go away in 0.3.0.
+  Upgrade 0.1.x instances to 0.2.x first; there will be no direct path from
+  0.1.x to 0.3.0.
+
+### Fixed
+
+- `dopbase client connect local` works while `dopbase server start` runs in
+  the foreground. See [client connect](docs/cli/client-connect.md).
+- `dopbase admin reset-password` and `dopbase admin factory-reset` refuse
+  while the CLI is connected to a different server, instead of changing the
+  local instance.
+- `dopbase admin reset-password` no longer creates a data directory, database
+  or master key where there is no instance, and no longer upgrades the database.
+- Restoring a backup keeps the restoring account's last sign-in time.
+- `dopbase server logs --watch` exits 0 on Ctrl+C even when you press it
+  right as the command starts. Before, an early Ctrl+C ended it with exit 130.
+
 ## 0.1.10 - 2026-10-26
 
 [Dopbase](https://dopbase.com) 0.1.10 adds single sign-on for the Admin UI

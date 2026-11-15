@@ -1,0 +1,26 @@
+-- Drops the whole 0.2.0 schema, children before parents.
+DROP TRIGGER IF EXISTS audit_events_sealed_immutable;
+DROP TABLE IF EXISTS audit_chain_anchor;
+DROP TABLE IF EXISTS audit_events;
+DROP TABLE IF EXISTS grants;
+DROP TABLE IF EXISTS group_members;
+DROP TABLE IF EXISTS groups;
+DROP TABLE IF EXISTS personal_tokens;
+DROP TABLE IF EXISTS runner_tokens;
+DROP TABLE IF EXISTS secret_versions;
+DROP TABLE IF EXISTS secrets;
+DROP TABLE IF EXISTS environments;
+DROP TABLE IF EXISTS projects;
+DROP TABLE IF EXISTS passcodes;
+DROP TABLE IF EXISTS cli_device_requests;
+DROP TABLE IF EXISTS sso_flows;
+DROP TABLE IF EXISTS user_identities;
+DROP TABLE IF EXISTS sso_providers;
+DROP TABLE IF EXISTS sessions;
+DROP VIEW IF EXISTS account_profiles;
+DROP TABLE IF EXISTS agents;
+DROP TABLE IF EXISTS users;
+DROP TABLE IF EXISTS accounts;
+DROP TABLE IF EXISTS role_capabilities;
+DROP TABLE IF EXISTS roles;
+DROP TABLE IF EXISTS instance_metadata;

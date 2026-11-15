@@ -28,6 +28,5 @@
 
 - [ ] I kept this pull request focused on one problem.
 - [ ] I added or updated tests for behavior changes, or explained why tests are not needed.
-- [ ] I updated the documentation and `CHANGELOG.md` when public behavior changed, or explained why they are not needed.
+- [ ] I updated the documentation in `/docs` and `CHANGELOG.md` when public behavior changed, or explained why they are not needed.
 - [ ] I added a screenshot or video demo for a feature or improvement, or explained why one is not needed.
-- [ ] I updated relevan documentation inside `/docs`

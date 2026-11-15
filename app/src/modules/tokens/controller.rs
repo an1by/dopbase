@@ -52,9 +52,9 @@ pub async fn list(
   request_body = CreateTokenRequest,
   responses(
     (status = 201, description = "Token created. The plaintext token is returned once", body = inline(HttpResponseFormat<CreatedTokenResponse>)),
-    (status = 400, description = "Invalid expiry. Use hours or days up to 3 years", body = crate::http::ErrorBody),
+    (status = 400, description = "Invalid expiry. Runner tokens last 90 days by default and at most 365", body = crate::http::ErrorBody),
     (status = 401, description = "Authentication is required", body = crate::http::ErrorBody),
-    (status = 403, description = "Administrator with a valid CSRF token is required", body = crate::http::ErrorBody),
+    (status = 403, description = "Administrator with a valid CSRF token and a recent sign-in is required", body = crate::http::ErrorBody),
     (status = 404, description = "The environment was not found", body = crate::http::ErrorBody),
     (status = 409, description = "A token with this name already exists in the environment", body = crate::http::ErrorBody),
     (status = 422, description = "Token role or name is invalid", body = crate::http::ErrorBody),

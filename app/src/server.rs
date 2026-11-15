@@ -22,7 +22,6 @@ use axum::{
 };
 use tower_http::{
   request_id::{MakeRequestUuid, PropagateRequestIdLayer, SetRequestIdLayer},
-  timeout::TimeoutLayer,
   trace::TraceLayer,
 };
 use utoipa::openapi::security::{ApiKey, ApiKeyValue, Http, HttpAuthScheme, SecurityScheme};
@@ -72,30 +71,10 @@ pub(crate) async fn prepare_instance(config: &ServerConfig) -> Result<(DbClient,
   if reset_marker.exists() {
     // A reset marker is durable intent. Re-run the database phase during setup
     // so a process crash cannot leave a partially reset instance usable.
-    let mut tx = db.pool().begin().await?;
-    for table in [
-      "audit_events",
-      "audit_chain_anchor",
-      "audit_chain_genesis",
-      "runner_tokens",
-      "agent_tokens",
-      "secrets",
-      "environment_env_layout",
-      "environments",
-      "projects",
-      "cli_device_requests",
-      "sso_flows",
-      "admin_identities",
-      "sso_providers",
-      "sessions",
-      "service_accounts",
-      "admins",
-    ] {
-      sqlx::query(&format!("DELETE FROM {table}"))
-        .execute(&mut *tx)
-        .await
-        .with_context(|| format!("failed to resume factory reset for {table}"))?;
-    }
+    let mut tx = db.pool().begin_with("BEGIN IMMEDIATE").await?;
+    crate::services::instance_tables::wipe(&mut tx)
+      .await
+      .context("failed to resume factory reset")?;
     tx.commit()
       .await
       .context("failed to commit resumed factory reset")?;
@@ -120,7 +99,7 @@ async fn build_instance_state(
   setup_enabled: bool,
 ) -> Result<AppState> {
   let (db, crypto) = prepare_instance(&config).await?;
-  let admin_count: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM admins")
+  let admin_count: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM accounts")
     .fetch_one(db.pool())
     .await?;
   // The presets are compiled in; a broken file fails here, not at the first
@@ -140,12 +119,13 @@ async fn build_instance_state(
     oidc: Default::default(),
     maintenance: Arc::new(std::sync::atomic::AtomicBool::new(false)),
     started_at: std::time::Instant::now(),
+    status: Default::default(),
   })
 }
 
 pub fn router(state: AppState) -> Router {
   let request_id = HeaderName::from_static("x-request-id");
-  let mut router = Router::new().merge(modules::routes());
+  let mut router = Router::new().merge(modules::routes(&state));
   if state.config.docs_enabled {
     let mut openapi = modules::openapi();
     openapi.info.title = "Dopbase API".to_string();
@@ -171,10 +151,8 @@ pub fn router(state: AppState) -> Router {
   router
     .fallback(static_fallback)
     .layer(DefaultBodyLimit::max(3 * 1024 * 1024))
-    .layer(TimeoutLayer::with_status_code(
-      StatusCode::REQUEST_TIMEOUT,
-      Duration::from_secs(30),
-    ))
+    .layer(middleware::from_fn(request_timeout))
+    .layer(middleware::from_fn(middlewares::cli_version::check))
     .layer(TraceLayer::new_for_http())
     .layer(PropagateRequestIdLayer::new(request_id.clone()))
     .layer(SetRequestIdLayer::new(request_id, MakeRequestUuid))
@@ -184,11 +162,32 @@ pub fn router(state: AppState) -> Router {
       maintenance_gate,
     ))
     .layer(axum::middleware::from_fn(middlewares::security::headers))
+    .layer(middleware::from_fn(
+      middlewares::cli_version::version_header,
+    ))
     .layer(middleware::from_fn_with_state(
       state.clone(),
       middlewares::client_ip::capture,
     ))
     .with_state(state)
+}
+
+/// Most requests get 30 seconds. Uploading and restoring a backup copy the
+/// whole instance, and restoring a 0.1.x backup upgrades it first, so those
+/// get longer. The heavy parts run off the async workers either way.
+async fn request_timeout(
+  request: Request<axum::body::Body>,
+  next: Next,
+) -> Response {
+  let path = request.uri().path();
+  let long = path == api::backups::UPLOAD
+    || path == api::bootstrap::RESTORE
+    || (path.starts_with(api::backups::COLLECTION) && path.ends_with("/restore"));
+  let limit = Duration::from_secs(if long { 15 * 60 } else { 30 });
+  match tokio::time::timeout(limit, next.run(request)).await {
+    Ok(response) => response,
+    Err(_) => StatusCode::REQUEST_TIMEOUT.into_response(),
+  }
 }
 
 async fn maintenance_gate(
@@ -257,9 +256,8 @@ pub fn startup_banner(
   let public_url = public_url.trim_end_matches('/');
   let heading = Style::new().effects(Effects::BOLD);
   let mut rows = vec![
-    format!("{heading}Dopbase{heading:#}"),
-    "Secure, Simple and Private".to_string(),
-    format!("Version {}", env!("CARGO_PKG_VERSION")),
+    format!("{heading}Dopbase {}{heading:#}", env!("CARGO_PKG_VERSION")),
+    "Keep control of what they can access.".to_string(),
     String::new(),
     format!("Public URL: {public_url}"),
     format!("Bind:       {bind_address}"),
@@ -467,6 +465,9 @@ async fn serve_instance(
   if let Some(warning) = state.config.public_url_warning() {
     anstream::eprintln!("{}\n", startup_warning(&warning));
   }
+  if let Some(warning) = state.config.features_warning() {
+    anstream::eprintln!("{}\n", startup_warning(&warning));
+  }
   if let Some(setup) = setup_token.as_deref() {
     eprintln!(
       "{}",
@@ -544,6 +545,22 @@ impl InstanceLock {
     Ok(Some(Self { file }))
   }
 
+  /// Take the lock if no server holds it. `None` means a server is running
+  /// for this database (or the database is in memory).
+  pub fn acquire_if_free(database_url: &str) -> Result<Option<Self>> {
+    if database_url.contains(":memory:") {
+      return Ok(None);
+    }
+    let file = Self::open(database_url)?;
+    match file.try_lock() {
+      Ok(()) => Ok(Some(Self { file })),
+      Err(std::fs::TryLockError::WouldBlock) => Ok(None),
+      Err(std::fs::TryLockError::Error(error)) => {
+        Err(error).context("failed to take the Dopbase database lock")
+      }
+    }
+  }
+
   pub fn is_held(database_url: &str) -> Result<bool> {
     if database_url.contains(":memory:") {
       return Ok(false);
@@ -618,7 +635,7 @@ async fn static_fallback(
 }
 
 #[derive(rust_embed::RustEmbed)]
-#[folder = "../dist/"]
+#[folder = "../ui/dist/"]
 struct AdminAssets;
 
 fn looks_like_asset(path: &str) -> bool {

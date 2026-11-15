@@ -17,8 +17,8 @@ use tokio::{
 #[test]
 fn login_email_is_trimmed_lowercased_and_validated() {
   assert_eq!(
-    normalize_login_email("  Admin@Example.COM  ").unwrap(),
-    "admin@example.com"
+    normalize_login_email("  Admin@Dopbase.COM  ").unwrap(),
+    "admin@dopbase.com"
   );
   assert_eq!(
     normalize_login_email("not-an-email")
@@ -180,6 +180,24 @@ async fn json_requests_preserve_their_body_and_content_length() {
     assert_eq!(sent_body, expected_body);
     assert!(result.unwrap().is_null());
   }
+}
+
+#[tokio::test]
+async fn requests_name_the_cli_version() {
+  let (result, request) = api_response(
+    Method::GET,
+    None,
+    "200 OK",
+    r#"{"data":null}"#,
+    "application/json",
+  )
+  .await;
+  let expected = format!("\r\nuser-agent: dopbase/{}\r\n", env!("CARGO_PKG_VERSION"));
+  assert!(
+    request.to_ascii_lowercase().contains(&expected),
+    "{request}"
+  );
+  assert!(result.unwrap().is_null());
 }
 
 #[tokio::test]
@@ -368,7 +386,7 @@ async fn api_client_does_not_follow_redirects() {
   assert!(server_task.await.unwrap(), "client followed the redirect");
 }
 
-use app::cli::client::{credential_from_sources, validate_runner_token};
+use app::cli::client::{credential_from_sources, environment_token_set, validate_runner_token};
 #[test]
 fn environment_token_has_priority_over_the_saved_credential() {
   let environment = "dbs_BBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBB";
@@ -407,4 +425,18 @@ fn invalid_environment_token_never_loads_saved_credentials() {
       .is_err()
     );
   }
+}
+
+#[test]
+fn environment_token_set_follows_the_credential_rules() {
+  assert!(!environment_token_set(Err(std::env::VarError::NotPresent)).unwrap());
+  assert!(environment_token_set(Ok("dpp_anything".into())).unwrap());
+  let empty = environment_token_set(Ok(String::new()))
+    .unwrap_err()
+    .to_string();
+  assert!(empty.contains("set but empty"), "{empty}");
+  let invalid = environment_token_set(Err(std::env::VarError::NotUnicode("x".into())))
+    .unwrap_err()
+    .to_string();
+  assert!(invalid.contains("invalid Unicode"), "{invalid}");
 }

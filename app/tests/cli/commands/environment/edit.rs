@@ -294,7 +294,7 @@ async fn interruption_after_confirming_apply_waits_for_the_save_result() {
       state.started.notify_one();
       state.release.notified().await;
     }
-    let mut forwarded = reqwest::Client::new()
+    let mut forwarded = crate::commands::support::http()
       .request(method, format!("{}{uri}", state.url))
       .header(header::AUTHORIZATION, authorization);
     if !body.is_empty() {

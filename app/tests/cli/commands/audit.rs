@@ -303,7 +303,7 @@ async fn audit_export_writes_a_private_file_and_needs_force_to_replace_it() {
 
 #[tokio::test(flavor = "multi_thread")]
 async fn audit_retention_archives_expired_records_and_verification_continues() {
-  let fixture = Fixture::with_config(|config| config.audit_retention_days = Some(30)).await;
+  let fixture = Fixture::with_config(|config| config.audit_retention_days = 30).await;
   fixture.environment().await;
 
   // The log went quiet past the retention window: every record written so
@@ -413,7 +413,7 @@ fn ids(page: &Value) -> Vec<String> {
 #[tokio::test(flavor = "multi_thread")]
 async fn audit_list_pages_newest_first_and_prints_the_next_page_command() {
   let fixture = Fixture::new().await;
-  seed(&fixture, "page.seeded", "pager@example.com", 5).await;
+  seed(&fixture, "page.seeded", "pager@dopbase.com", 5).await;
 
   let first = fixture
     .run(&["audit", "list", "--action", "page.seeded", "--limit", "2"])
@@ -435,7 +435,7 @@ async fn audit_list_pages_newest_first_and_prints_the_next_page_command() {
   ] {
     assert!(stdout.contains(header), "{stdout}");
   }
-  assert!(stdout.contains("pager@example.com"), "{stdout}");
+  assert!(stdout.contains("pager@dopbase.com"), "{stdout}");
   assert!(stdout.contains("2 event(s)"), "{stdout}");
   // The hint goes to standard error so the table can be piped, and it
   // repeats the filters, because a cursor only makes sense with them.
@@ -476,7 +476,7 @@ async fn audit_list_pages_newest_first_and_prints_the_next_page_command() {
   assert_eq!(seen, expected);
 
   // Filter values that need quoting survive the round trip.
-  seed(&fixture, "it's odd", "pager@example.com", 2).await;
+  seed(&fixture, "it's odd", "pager@dopbase.com", 2).await;
   let quoted = fixture
     .run(&["audit", "list", "--action", "it's odd", "--limit", "1"])
     .await;
@@ -493,7 +493,7 @@ async fn audit_list_pages_newest_first_and_prints_the_next_page_command() {
 async fn audit_list_json_returns_the_api_page_unchanged() {
   let fixture = Fixture::new().await;
   fixture.environment().await;
-  seed(&fixture, "page.seeded", "pager@example.com", 60).await;
+  seed(&fixture, "page.seeded", "pager@dopbase.com", 60).await;
 
   let api = fixture
     .request(reqwest::Method::GET, "/api/v1/audit-events", None)
@@ -634,37 +634,40 @@ async fn audit_list_prints_stored_text_without_terminal_controls() {
 }
 
 #[tokio::test(flavor = "multi_thread")]
-async fn audit_list_is_for_administrators_only() {
+async fn audit_list_shows_people_without_audit_read_only_their_own_actions() {
   use super::support::{browser_credentials, failure};
   let fixture = Fixture::new().await;
   fixture.environment().await;
 
-  // An agent token never reaches the audit log.
+  // A data token never reaches the audit log.
   let created = fixture.agent_token().await;
   let token = created["plaintextToken"].as_str().unwrap();
   let mut command = fixture.command();
   command.env("DOPBASE_TOKEN", token).args(["audit", "list"]);
   let result = output(command, None).await;
-  assert!(!result.status.success());
+  failure(&result, "This token reads project data, not the audit log.");
   assert!(result.stdout.is_empty());
   assert!(!String::from_utf8_lossy(&result.stderr).contains(token));
 
-  // A signed-in member gets the server's authorization error.
+  // A signed-in member sees their own actions and nothing else.
   let (cookie, csrf) = browser_credentials(&fixture).await;
-  let api = reqwest::Client::new();
-  api
+  let api = crate::commands::support::http();
+  let member: Value = api
     .post(format!("{}/api/v1/users", fixture.url))
     .header("cookie", &cookie)
     .header("x-dopbase-csrf", &csrf)
-    .json(&json!({"email":"member@example.com","password":"correct-horse-456","role":"member"}))
+    .json(&json!({"email":"member@dopbase.com","password":"correct-horse-456","role":"member"}))
     .send()
     .await
     .unwrap()
     .error_for_status()
+    .unwrap()
+    .json()
+    .await
     .unwrap();
   let login: Value = api
     .post(format!("{}/api/v1/auth/login", fixture.url))
-    .json(&json!({"email":"member@example.com","password":"correct-horse-456","sessionKind":"cli"}))
+    .json(&json!({"email":"member@dopbase.com","password":"correct-horse-456","sessionKind":"cli"}))
     .send()
     .await
     .unwrap()
@@ -676,10 +679,16 @@ async fn audit_list_is_for_administrators_only() {
   app::cli::session::save(
     &fixture.resolved(),
     login["data"]["token"].as_str().unwrap(),
-    Some("member@example.com"),
+    Some("member@dopbase.com"),
   )
   .unwrap();
-  let result = fixture.run(&["audit", "list"]).await;
-  failure(&result, "This operation requires an administrator.");
-  assert!(result.stdout.is_empty());
+  let events = fixture.json(&["audit", "list"]).await;
+  let items = events["items"].as_array().unwrap();
+  assert!(!items.is_empty(), "{events}");
+  assert!(
+    items
+      .iter()
+      .all(|event| event["actorId"] == member["data"]["id"]),
+    "{events}"
+  );
 }

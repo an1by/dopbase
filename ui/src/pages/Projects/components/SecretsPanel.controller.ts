@@ -1,0 +1,498 @@
+import { computed, onUnmounted, ref, watch } from "vue";
+import type { Ref } from "vue";
+import { useQuery } from "@pinia/colada";
+import * as secretsApi from "~/services/secrets.api";
+import type {
+  ExportSecretsResponse,
+  ImportSecretsResponse,
+  SecretMetadata,
+} from "~/services/secrets.api";
+import { ApiError } from "~/services/http.client";
+import { useReauthentication } from "~/composable";
+import { useAuthStore } from "~/stores/auth.store";
+import { loadFailure, onlyWhen } from "~/queries/helpers";
+import { useInvalidate } from "~/queries/invalidate";
+import { secretsQuery } from "~/queries/secrets";
+import {
+  mergeLayoutValues,
+  parseEnvFileLines,
+  serializeEnvFile,
+  stripLayoutValues,
+  type EnvFileIssue,
+} from "~/utils/env-file";
+import { formatCountdown } from "~/utils/format";
+import { copyText } from "~/utils/clipboard";
+
+/** How long a revealed plaintext stays visible in component memory. */
+export const REVEAL_SECONDS = 30;
+
+/**
+ * Secrets panel controller: metadata listing, secure set/delete, and the
+ * recent-password reveal flow with its auto-hide countdown.
+ *
+ * Revealed plaintext lives only in this component's memory — never in
+ * storage, global state or the query cache — and is dropped on route change
+ * or unmount. The cached secret list holds keys and metadata only.
+ * Copying does not extend the timer.
+ *
+ * The `.env` editor follows the same discipline: opening it reauthenticates
+ * and loads all plaintext into the buffer (via the export endpoint), and
+ * the buffer is wiped on close, environment change, or unmount. Saving runs
+ * a server dry-run first and persists the value-free layout alongside the
+ * entries so comments and ordering survive reloads.
+ */
+export function useSecretsPanelController(environmentId: Ref<string>) {
+  const invalidate = useInvalidate();
+  // Keyed by environment, so another one starts empty and a late answer for
+  // the previous one never lands here.
+  const secretList = useQuery(() =>
+    onlyWhen(environmentId.value !== "", secretsQuery(environmentId.value)),
+  );
+  // A failed reload clears the rows, so nothing acts on keys that may be gone.
+  const loadError = loadFailure(secretList, "Could not load secrets.", {
+    withData: true,
+  });
+  const secrets = computed<SecretMetadata[] | null>(() =>
+    loadError.value ? null : (secretList.data.value ?? null),
+  );
+  // Only a first load shows the skeleton; a background refresh keeps the rows.
+  const loading = computed(
+    () => secretList.isLoading.value && secretList.data.value === undefined,
+  );
+  const actionError = ref<string | null>(null);
+  const { runWithReauth } = useReauthentication();
+  const auth = useAuthStore();
+  let operationScope = new AbortController();
+  let editorScope = new AbortController();
+  let editorImportScope = new AbortController();
+
+  /** Narrows the table by key. Kept while switching environments. */
+  const filter = ref("");
+  const visibleSecrets = computed(() => {
+    const query = filter.value.trim().toLowerCase();
+    if (!secrets.value || !query) return secrets.value;
+    return secrets.value.filter((secret) =>
+      secret.key.toLowerCase().includes(query),
+    );
+  });
+
+  /** The key whose value was just copied, for a short confirmation. */
+  const copiedKey = ref<string | null>(null);
+  let copiedTimer: ReturnType<typeof setTimeout> | null = null;
+
+  const revealedKey = ref<string | null>(null);
+  const revealedValue = ref<string | null>(null);
+  const revealSecondsLeft = ref(0);
+  let hideTimer: ReturnType<typeof setInterval> | null = null;
+
+  // .env editor state — declared before the environment watch below, which
+  // wipes the buffer immediately on mount.
+  /** Whether the editor view is active. Content lives only while it is. */
+  const editorOpen = ref(false);
+  const editorContent = ref<string | null>(null);
+  /** The content as last loaded or saved, which is the dirty-check baseline. */
+  const editorBaseline = ref<string | null>(null);
+  const editorLoading = ref(false);
+  const editorLoadError = ref<string | null>(null);
+  const editorSaving = ref(false);
+  const editorError = ref<string | null>(null);
+  /** Dry-run result awaiting confirmation. */
+  const editorDiff = ref<ImportSecretsResponse | null>(null);
+  /** True when the initial load is parked behind the reauth dialog. */
+  const editorAwaitingReauth = ref(false);
+
+  function hideRevealed(): void {
+    revealedKey.value = null;
+    revealedValue.value = null;
+    revealSecondsLeft.value = 0;
+    if (hideTimer) {
+      clearInterval(hideTimer);
+      hideTimer = null;
+    }
+  }
+
+  /** Refreshes this environment's list and everything showing its secrets. */
+  async function reload(target = environmentId.value): Promise<void> {
+    await invalidate.secretsChanged(target);
+  }
+
+  // Another environment: drop everything tied to the last one's keys.
+  watch(
+    environmentId,
+    () => {
+      operationScope.abort();
+      operationScope = new AbortController();
+      editorImportScope.abort();
+      editorScope.abort();
+      editorScope = new AbortController();
+      hideRevealed();
+      wipeEditor();
+      actionError.value = null;
+    },
+    { immediate: true },
+  );
+  onUnmounted(() => {
+    if (copiedTimer) clearTimeout(copiedTimer);
+    operationScope.abort();
+    editorScope.abort();
+    editorImportScope.abort();
+    hideRevealed();
+    wipeEditor();
+  });
+
+  const revealCountdown = computed(() =>
+    formatCountdown(revealSecondsLeft.value),
+  );
+
+  /**
+   * Records a failed action, unless the session is gone: the "Session
+   * expired" dialog already says what happened, and a banner behind it
+   * would only suggest the save itself was the problem.
+   */
+  function reportActionError(cause: unknown, fallback: string): void {
+    if (!auth.sessionExpired)
+      actionError.value = describeError(cause, fallback);
+  }
+
+  function describeError(cause: unknown, fallback: string): string {
+    if (cause instanceof ApiError && cause.firstCode === "REQUEST_INVALID") {
+      return "Keys may use letters, numbers, and '_', and cannot start with a number.";
+    }
+    if (cause instanceof ApiError && cause.status === 0) {
+      return "Cannot reach the Dopbase server.";
+    }
+    return fallback;
+  }
+
+  async function reveal(key: string): Promise<void> {
+    const target = environmentId.value;
+    const signal = operationScope.signal;
+    actionError.value = null;
+    try {
+      await runWithReauth(async () => {
+        const revealed = await secretsApi.revealSecret(target, key);
+        if (signal.aborted || environmentId.value !== target) return;
+        hideRevealed();
+        revealedKey.value = revealed.key;
+        revealedValue.value = revealed.value;
+        revealSecondsLeft.value = REVEAL_SECONDS;
+        hideTimer = setInterval(() => {
+          revealSecondsLeft.value -= 1;
+          if (revealSecondsLeft.value <= 0) hideRevealed();
+        }, 1000);
+      }, signal);
+    } catch (cause) {
+      if (signal.aborted) return;
+      reportActionError(cause, "Could not reveal the secret.");
+    }
+  }
+
+  /**
+   * Copies a value without showing it. It reads the value the same way
+   * Reveal does, so it asks for the password when needed and is recorded
+   * in the audit log.
+   */
+  async function copyValue(key: string): Promise<void> {
+    const target = environmentId.value;
+    const signal = operationScope.signal;
+    actionError.value = null;
+    try {
+      await runWithReauth(async () => {
+        const revealed = await secretsApi.revealSecret(target, key);
+        if (signal.aborted || environmentId.value !== target) return;
+        if (!(await copyText(revealed.value))) {
+          actionError.value =
+            "The browser blocked the copy. Reveal the value and copy it from there.";
+          return;
+        }
+        copiedKey.value = key;
+        if (copiedTimer) clearTimeout(copiedTimer);
+        copiedTimer = setTimeout(() => (copiedKey.value = null), 2000);
+      }, signal);
+    } catch (cause) {
+      if (signal.aborted) return;
+      reportActionError(cause, "Could not copy the secret.");
+    }
+  }
+
+  async function setSecret(key: string, value: string): Promise<void> {
+    const target = environmentId.value;
+    actionError.value = null;
+    try {
+      await secretsApi.setSecret(target, key, value);
+      await reload(target);
+    } catch (cause) {
+      reportActionError(cause, "Could not save the secret.");
+      throw cause;
+    }
+  }
+
+  async function deleteSecret(key: string): Promise<void> {
+    const target = environmentId.value;
+    actionError.value = null;
+    try {
+      await secretsApi.deleteSecret(target, key);
+      if (environmentId.value === target && revealedKey.value === key)
+        hideRevealed();
+      // Even after a switch: the cached list for `target` still has the key.
+      await reload(target);
+    } catch (cause) {
+      reportActionError(cause, "Could not delete the secret.");
+      throw cause;
+    }
+  }
+
+  /** Reauthenticates and returns a serialized export for the owning dialog. */
+  async function exportSecretsFile(signal?: AbortSignal): Promise<string> {
+    const target = environmentId.value;
+    let response: ExportSecretsResponse | undefined;
+    await runWithReauth(async () => {
+      response = await secretsApi.exportSecrets(target);
+    }, signal);
+    if (response === undefined) throw new Error("The export returned no data.");
+    return serializeEnvFile(response.entries);
+  }
+
+  // -------------------------------------------------------------------------
+  // .env editor
+  // -------------------------------------------------------------------------
+
+  function wipeEditor(): void {
+    editorOpen.value = false;
+    editorContent.value = null;
+    editorBaseline.value = null;
+    editorLoading.value = false;
+    editorLoadError.value = null;
+    editorSaving.value = false;
+    editorError.value = null;
+    editorDiff.value = null;
+    editorAwaitingReauth.value = false;
+  }
+
+  const parsedEditor = computed(() =>
+    editorContent.value === null
+      ? { entries: [], issues: [] as EnvFileIssue[] }
+      : parseEnvFileLines(editorContent.value),
+  );
+  const editorIssues = computed<EnvFileIssue[]>(
+    () => parsedEditor.value.issues,
+  );
+  const editorEntries = computed(() => parsedEditor.value.entries);
+  const editorDirty = computed(
+    () =>
+      editorContent.value !== null &&
+      editorContent.value !== editorBaseline.value,
+  );
+  const editorCanSave = computed(
+    () =>
+      editorDirty.value &&
+      editorIssues.value.length === 0 &&
+      !editorLoading.value &&
+      !editorSaving.value,
+  );
+
+  /**
+   * Opens the editor: loads the stored layout (values-free) and, behind
+   * reauthentication, the current plaintext values, then merges both into
+   * the editable buffer. With no stored layout yet, a fresh `KEY=` slot
+   * layout is generated from the current keys. When the value load is
+   * parked behind the reauthentication dialog, the buffer is filled by the
+   * parked retry once the password is confirmed.
+   */
+  async function openEditor(): Promise<void> {
+    const target = environmentId.value;
+    editorScope.abort();
+    editorScope = new AbortController();
+    const signal = editorScope.signal;
+    editorOpen.value = true;
+    editorLoading.value = true;
+    editorLoadError.value = null;
+    editorDiff.value = null;
+    editorError.value = null;
+    editorAwaitingReauth.value = false;
+    let loaded = false;
+    try {
+      const stored = await secretsApi.getEnvLayout(target);
+      if (signal.aborted || environmentId.value !== target) return;
+      await runWithReauth(
+        async () => {
+          // The merge happens inside the closure so a parked reauthentication
+          // retry fills the buffer when the password is confirmed.
+          if (!editorOpen.value || signal.aborted) return;
+          const exported = await secretsApi.exportSecrets(target);
+          if (signal.aborted || environmentId.value !== target) return;
+          const content = mergeLayoutValues(stored.layout, exported.entries);
+          editorContent.value = content;
+          editorBaseline.value = content;
+          editorAwaitingReauth.value = false;
+          loaded = true;
+        },
+        signal,
+        () => {
+          if (!signal.aborted && environmentId.value === target) {
+            editorLoading.value = false;
+            editorAwaitingReauth.value = true;
+          }
+        },
+      );
+    } catch (cause) {
+      if (signal.aborted) return;
+      editorLoadError.value = describeError(
+        cause,
+        "Could not load the secrets for editing.",
+      );
+    } finally {
+      if (!signal.aborted && environmentId.value === target) {
+        editorLoading.value = false;
+      }
+    }
+    if (
+      !signal.aborted &&
+      environmentId.value === target &&
+      !loaded &&
+      editorLoadError.value === null
+    ) {
+      editorAwaitingReauth.value = true;
+    }
+  }
+
+  function closeEditor(): void {
+    cancelEditorImport();
+    editorScope.abort();
+    editorScope = new AbortController();
+    wipeEditor();
+  }
+
+  function cancelEditorImport(): void {
+    editorImportScope.abort();
+    editorImportScope = new AbortController();
+    editorSaving.value = false;
+    editorDiff.value = null;
+  }
+
+  watch(editorContent, cancelEditorImport, { flush: "sync" });
+
+  /** Previews or applies the captured editor draft after password confirmation. */
+  async function importDraft(dryRun: boolean): Promise<boolean> {
+    if (editorContent.value === null || editorSaving.value) return false;
+    if (dryRun ? !editorCanSave.value : editorDiff.value === null) return false;
+    const target = environmentId.value;
+    const content = editorContent.value;
+    const signal = editorImportScope.signal;
+    const request = {
+      mode: "replace" as const,
+      dryRun,
+      entries: editorEntries.value.map(({ key, value }) => ({ key, value })),
+      ...(dryRun
+        ? {}
+        : {
+            envLayout: stripLayoutValues(content),
+            expectedRevision: editorDiff.value!.revision,
+          }),
+    };
+    editorSaving.value = true;
+    editorError.value = null;
+    try {
+      await runWithReauth(async () => {
+        const result = await secretsApi.importSecrets(target, request, signal);
+        if (signal.aborted || environmentId.value !== target) return;
+        if (dryRun) {
+          editorDiff.value = result;
+        } else {
+          editorBaseline.value = content;
+          editorDiff.value = null;
+          hideRevealed();
+          await reload(target);
+        }
+      }, signal);
+      return !signal.aborted && environmentId.value === target;
+    } catch (cause) {
+      if (
+        signal.aborted ||
+        environmentId.value !== target ||
+        (cause instanceof DOMException && cause.name === "AbortError")
+      )
+        return false;
+      if (cause instanceof ApiError && cause.hasCode("IMPORT_PREVIEW_STALE")) {
+        editorDiff.value = null;
+        editorError.value = "The secrets changed. Preview your changes again.";
+      } else {
+        editorError.value = describeError(
+          cause,
+          dryRun
+            ? "The changes are not valid. Check the editor and try again."
+            : "The changes could not be saved. Nothing may have changed — review and try again.",
+        );
+      }
+      return false;
+    } finally {
+      if (!signal.aborted && environmentId.value === target)
+        editorSaving.value = false;
+    }
+  }
+
+  function saveDraft(): Promise<boolean> {
+    return importDraft(true);
+  }
+
+  function applyDraft(): Promise<boolean> {
+    return importDraft(false);
+  }
+
+  /** Reverts the buffer to the last loaded or saved content. */
+  function discardDraft(): void {
+    cancelEditorImport();
+    if (editorBaseline.value !== null)
+      editorContent.value = editorBaseline.value;
+    editorDiff.value = null;
+    editorError.value = null;
+  }
+
+  /** Returns from the confirmation summary to the buffer. */
+  function backToEditing(): void {
+    cancelEditorImport();
+  }
+
+  return {
+    secrets,
+    loading,
+    loadError,
+    actionError,
+    /** Refetches the metadata listing (e.g. after a full-page import). */
+    reload,
+    filter,
+    visibleSecrets,
+    copiedKey,
+    copyValue,
+    revealedKey,
+    revealedValue,
+    revealCountdown,
+    hideRevealed,
+    reveal,
+    setSecret,
+    deleteSecret,
+    exportSecretsFile,
+    editorOpen,
+    editorContent,
+    editorLoading,
+    editorLoadError,
+    editorAwaitingReauth,
+    editorSaving,
+    editorError,
+    editorDiff,
+    editorIssues,
+    editorEntries,
+    editorDirty,
+    editorCanSave,
+    openEditor,
+    closeEditor,
+    saveDraft,
+    applyDraft,
+    discardDraft,
+    backToEditing,
+  };
+}
+
+export type SecretsPanelController = ReturnType<
+  typeof useSecretsPanelController
+>;
