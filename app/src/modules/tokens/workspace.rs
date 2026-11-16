@@ -2,20 +2,23 @@ use super::{model::*, repository};
 use crate::{
   constants::{
     errors::TOKEN_SCOPE_INVALID,
-    limits::{RUNNER_TOKEN_DEFAULT_DAYS, RUNNER_TOKEN_MAX_DAYS},
     tokens::{WORKSPACE_TOKEN_ID_PREFIX, WORKSPACE_TOKEN_PREFIX},
   },
-  extractors::{require_person, require_recent_auth},
+  extractors::{require_capability, require_recent_auth},
   http::HttpError,
   models::AuthIdentity,
   modules::common,
+  services::authx::Capability,
   services::token,
   state::AppState,
   utils::time::Stamp,
 };
-use chrono::{Duration, Utc};
+use chrono::Utc;
 
-async fn ensure_workspace(pool: &sqlx::SqlitePool, workspace_id: &str) -> Result<(), HttpError> {
+async fn ensure_workspace(
+  pool: &sqlx::SqlitePool,
+  workspace_id: &str,
+) -> Result<(), HttpError> {
   let exists: bool = sqlx::query_scalar("SELECT EXISTS(SELECT 1 FROM workspaces WHERE id=$1)")
     .bind(workspace_id)
     .fetch_one(pool)
@@ -31,28 +34,12 @@ async fn ensure_workspace(pool: &sqlx::SqlitePool, workspace_id: &str) -> Result
   }
 }
 
-fn lifetime(expires_in: Option<&str>) -> Result<Duration, HttpError> {
-  let Some(value) = expires_in else {
-    return Ok(Duration::days(RUNNER_TOKEN_DEFAULT_DAYS));
-  };
-  let invalid = |message: &str| HttpError::bad_request("EXPIRY_INVALID", message);
-  let duration = token::expiry_duration(value)
-    .map_err(invalid)?
-    .ok_or_else(|| invalid("Workspace tokens always expire. Choose a number of hours or days."))?;
-  if duration > Duration::days(RUNNER_TOKEN_MAX_DAYS) {
-    return Err(invalid(&format!(
-      "Workspace tokens last at most {RUNNER_TOKEN_MAX_DAYS} days."
-    )));
-  }
-  Ok(duration)
-}
-
 pub async fn list(
   state: &AppState,
   identity: &AuthIdentity,
   workspace_id: &str,
 ) -> Result<Vec<WorkspaceTokenMetadata>, HttpError> {
-  require_person(identity)?;
+  require_capability(identity, Capability::ProjectsCreate)?;
   ensure_workspace(state.db.pool(), workspace_id).await?;
   Ok(repository::list_workspace(state.db.pool(), workspace_id).await?)
 }
@@ -63,7 +50,7 @@ pub async fn create(
   workspace_id: &str,
   request: CreateTokenRequest,
 ) -> Result<CreatedWorkspaceTokenResponse, HttpError> {
-  let (admin_id, email) = require_person(identity)?;
+  let (admin_id, email) = require_capability(identity, Capability::ProjectsCreate)?;
   if request.role != "workspace" {
     return Err(HttpError::validation(std::collections::BTreeMap::from([(
       TOKEN_SCOPE_INVALID.into(),
@@ -75,7 +62,9 @@ pub async fn create(
   ensure_workspace(state.db.pool(), workspace_id).await?;
   require_recent_auth(identity)?;
   let now = Utc::now();
-  let expires_at = Some((now + lifetime(request.expires_in.as_deref())?).stamp());
+  let expires_at = Some(
+    (now + super::service::token_lifetime(request.expires_in.as_deref(), "Workspace")?).stamp(),
+  );
   let token_id = token::public_id(WORKSPACE_TOKEN_ID_PREFIX);
   let raw = token::generate(WORKSPACE_TOKEN_PREFIX).map_err(|_| HttpError::internal())?;
   let now = now.stamp();
@@ -133,7 +122,7 @@ pub async fn revoke(
   identity: &AuthIdentity,
   id: &str,
 ) -> Result<WorkspaceTokenMetadata, HttpError> {
-  let (admin_id, email) = require_person(identity)?;
+  let (admin_id, email) = require_capability(identity, Capability::ProjectsCreate)?;
   let token = repository::find_workspace(state.db.pool(), id)
     .await?
     .ok_or_else(|| HttpError::not_found("TOKEN_NOT_FOUND", "The requested token was not found."))?;

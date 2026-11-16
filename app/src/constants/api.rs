@@ -142,7 +142,10 @@ pub mod projects {
   }
 
   pub fn access(project_ref: &str) -> String {
-    super::render(ACCESS, &[("project_ref", &super::encode_project_ref(project_ref))])
+    super::render(
+      ACCESS,
+      &[("project_ref", &super::encode_project_ref(project_ref))],
+    )
   }
 }
 

@@ -4,6 +4,13 @@ use utoipa::ToSchema;
 
 use crate::services::authx::{Access, Level, Scope};
 
+/// Where a runner token may read secrets. Exactly one parent.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum RunnerScope {
+  Environment(String),
+  Workspace(String),
+}
+
 #[derive(Clone, Debug)]
 pub enum AuthIdentity {
   Admin {
@@ -18,10 +25,11 @@ pub enum AuthIdentity {
     /// The account's capabilities and level ceiling, from its role.
     access: Access,
   },
+  /// A machine token. The scope names exactly one parent: an environment
+  /// or a workspace.
   Runner {
     token_id: String,
-    environment_id: Option<String>,
-    workspace_id: Option<String>,
+    scope: RunnerScope,
   },
   /// A personal token. It acts for its account, within the token's scope
   /// and level, and never holds the account's instance capabilities.
@@ -53,6 +61,17 @@ impl AuthIdentity {
       Self::Admin { role, .. } => role.audit_actor_type(),
       Self::Runner { .. } => "runner",
       Self::Token { .. } => "personal_token",
+    }
+  }
+
+  /// The environment a runner token is bound to, when it is an environment token.
+  pub fn runner_environment_id(&self) -> Option<&str> {
+    match self {
+      Self::Runner {
+        scope: RunnerScope::Environment(id),
+        ..
+      } => Some(id),
+      _ => None,
     }
   }
 }

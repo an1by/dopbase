@@ -325,3 +325,61 @@ pub async fn init(
     secret_count: request.entries.len(),
   })
 }
+
+pub async fn set_location(
+  state: &AppState,
+  identity: &AuthIdentity,
+  reference: &str,
+  request: ProjectLocationRequest,
+) -> Result<ProjectResponse, HttpError> {
+  let (admin_id, email) = require_capability(identity, Capability::ProjectsCreate)?;
+  let project = authorize(state, identity, reference, Level::ProjectManager).await?;
+  let mut tx = crate::services::change::Change::begin(state.db.pool()).await?;
+  if let Some(workspace_id) = &request.workspace_id {
+    let path = request.relative_path.as_deref().unwrap_or(".");
+    crate::modules::workspaces::validate_relative(path)?;
+    if !repository::workspace_exists(&mut tx, workspace_id).await? {
+      return Err(HttpError::not_found(
+        "WORKSPACE_NOT_FOUND",
+        "Workspace not found.",
+      ));
+    }
+    if repository::name_taken_in_workspace(&mut tx, workspace_id, &project.name, Some(&project.id))
+      .await?
+    {
+      return Err(HttpError::conflict(
+        "PROJECT_ALREADY_EXISTS",
+        "A project with this name already exists in the workspace.",
+      ));
+    }
+    repository::upsert_location(&mut tx, &project.id, workspace_id, &path.replace('\\', "/"))
+      .await
+      .map_err(|error| {
+        if error.to_string().contains("UNIQUE") {
+          HttpError::conflict(
+            "PROJECT_PATH_IN_USE",
+            "This workspace directory is already assigned to a project.",
+          )
+        } else {
+          error.into()
+        }
+      })?;
+  } else {
+    repository::clear_location(&mut tx, &project.id).await?;
+  }
+  common::audit(
+    &mut tx,
+    identity.audit_actor_type(),
+    Some(admin_id),
+    Some(email),
+    crate::services::events::Action::ProjectLocationUpdated,
+    Some(&project.id),
+    None,
+    Some("project"),
+    Some(&project.id),
+    serde_json::json!({"workspaceId": request.workspace_id, "relativePath": request.relative_path}),
+  )
+  .await?;
+  tx.commit().await?;
+  authorize(state, identity, &project.id, Level::Metadata).await
+}

@@ -580,6 +580,8 @@ fn assert_report(report: &Value) {
   assert_eq!(expired, 1);
   assert_eq!(note(&report["changed"], "runner_tokens"), 2);
   assert_eq!(note(&report["changed"], "secret_versions"), 1);
+  assert!(report["tables"]["workspaces"].as_i64().unwrap() >= 1);
+  assert_eq!(report["tables"]["project_locations"], 1);
   assert_eq!(report["archivedAuditRecords"], 1);
 }
 

@@ -66,6 +66,11 @@ export const router = createRouter({
       component: () => import("~/pages/Projects/Projects.page.vue"),
     },
     {
+      path: "/workspaces",
+      name: "workspaces",
+      component: () => import("~/pages/Workspaces/Workspaces.page.vue"),
+    },
+    {
       // Opens the project's first environment, or says it has none.
       path: "/projects/:projectRef",
       name: "project",

@@ -1,6 +1,4 @@
 use std::convert::Infallible;
-mod fork_compat;
-pub use fork_compat::require_project_manager;
 
 use axum::{
   extract::FromRequestParts,

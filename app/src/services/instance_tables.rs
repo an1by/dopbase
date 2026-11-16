@@ -6,7 +6,7 @@ use sqlx::SqliteConnection;
 /// Every table with instance data, parents before children. Insert in this
 /// order and delete in reverse. `instance_metadata` is left out: it holds
 /// the instance's own key check, not data.
-pub const INSTANCE_TABLES: [&str; 22] = [
+pub const INSTANCE_TABLES: [&str; 25] = [
   "roles",
   "role_capabilities",
   "accounts",
@@ -19,11 +19,14 @@ pub const INSTANCE_TABLES: [&str; 22] = [
   "cli_device_requests",
   "passcodes",
   "projects",
+  "workspaces",
+  "project_locations",
   "environments",
   "secrets",
   "secret_versions",
   "runner_tokens",
   "personal_tokens",
+  "workspace_tokens",
   "groups",
   "group_members",
   "grants",
@@ -51,3 +54,4 @@ pub async fn wipe(connection: &mut SqliteConnection) -> Result<(), sqlx::Error> 
   }
   Ok(())
 }
+

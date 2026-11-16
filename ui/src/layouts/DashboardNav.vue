@@ -33,6 +33,7 @@ const emit = defineEmits<{ logout: [] }>();
 
 const icons: Record<PageName, Component> = {
   projects: FolderIcon,
+  workspaces: FolderIcon,
   audit: HistoryIcon,
   users: UserIcon,
   agents: BotIcon,

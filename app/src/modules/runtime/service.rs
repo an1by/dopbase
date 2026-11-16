@@ -33,27 +33,14 @@ pub async fn secrets(
 ) -> Result<RuntimeSecrets, HttpError> {
   let AuthIdentity::Runner {
     token_id,
-    environment_id,
-    workspace_id,
+    scope: crate::models::RunnerScope::Environment(environment_id),
   } = identity
   else {
     return Err(HttpError::forbidden(
       RUNNER_TOKEN_REQUIRED,
-      "This endpoint needs a runner token.",
+      "This endpoint needs an environment runner token.",
     ));
   };
-  if workspace_id.is_some() {
-    return Err(HttpError::forbidden(
-      RUNNER_TOKEN_REQUIRED,
-      "Workspace tokens cannot use the runtime secrets endpoint.",
-    ));
-  }
-  let environment_id = environment_id.as_deref().ok_or_else(|| {
-    HttpError::forbidden(
-      RUNNER_TOKEN_REQUIRED,
-      "This endpoint needs an environment runner token.",
-    )
-  })?;
   let env = environments::service::authorize(state, identity, environment_id, Level::Read).await?;
   if let Some(reference) = reference
     && environments::service::resolve_id(state, reference)
@@ -80,14 +67,9 @@ pub async fn secrets(
     actor_id: token_id,
     actor_label: None,
   };
-  let entries = secrets::service::runtime_entries(
-    state,
-    reader,
-    &env.project_id,
-    environment_id,
-    &snapshot,
-  )
-  .await?;
+  let entries =
+    secrets::service::runtime_entries(state, reader, &env.project_id, environment_id, &snapshot)
+      .await?;
   Ok(RuntimeSecrets::Fetched {
     tag: tag(&snapshot.revision, &env),
     snapshot: RuntimeSnapshot {
@@ -104,7 +86,10 @@ pub async fn secrets(
 /// The ETag: the revision plus the names the response carries, so renaming
 /// the project or environment also ends a run of 304s. The revision alone
 /// stays what `export` returns, since imports compare against it.
-fn tag(revision: &str, env: &EnvironmentResponse) -> String {
+fn tag(
+  revision: &str,
+  env: &EnvironmentResponse,
+) -> String {
   let mut hash = Sha256::new();
   for part in [revision, &env.project_name, &env.name] {
     hash.update(part.as_bytes());
@@ -115,7 +100,10 @@ fn tag(revision: &str, env: &EnvironmentResponse) -> String {
 
 /// Whether an `If-None-Match` value names `tag`. It may list several tags,
 /// and weak tags compare like strong ones, as a conditional GET allows.
-pub fn etag_matches(header: &str, tag: &str) -> bool {
+pub fn etag_matches(
+  header: &str,
+  tag: &str,
+) -> bool {
   header.split(',').map(str::trim).any(|candidate| {
     let candidate = candidate.strip_prefix("W/").unwrap_or(candidate);
     candidate == "*"

@@ -194,10 +194,20 @@ pub async fn resolve(
   let environment = repository::resolve(state.db.pool(), reference).await?;
   // A runner gets one answer for a missing reference and another
   // environment's, so the refusal can't be used to find which ones exist.
-  if let AuthIdentity::Runner { environment_id, .. } = identity
-    && environment.as_ref().map(|environment| &environment.id) != environment_id.as_ref()
-  {
-    return Err(scope_refused(reference));
+  if matches!(identity, AuthIdentity::Runner { .. }) {
+    let allowed = match environment.as_ref() {
+      Some(found) => crate::modules::tokens::access::runner_may_access_environment(
+        state.db.pool(),
+        identity,
+        &found.id,
+      )
+      .await
+      .is_ok(),
+      None => false,
+    };
+    if !allowed {
+      return Err(scope_refused(reference));
+    }
   }
   let environment = environment.ok_or_else(not_found)?;
   let reach = reach_for(state, identity, &environment).await?;

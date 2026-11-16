@@ -1,6 +1,7 @@
 <script setup lang="ts">
 import { computed, toRef } from "vue";
 import { useSettingsPanelController } from "./SettingsPanel.controller";
+import ProjectLocation from "./ProjectLocation.vue";
 import EnvironmentId from "./EnvironmentId.vue";
 import NameDialog from "./NameDialog.vue";
 import {
@@ -109,6 +110,8 @@ const card = "rounded-card border border-line bg-panel p-4 sm:p-5";
           :error="nameError" />
       </form>
     </section>
+
+    <ProjectLocation :project="project" />
 
     <!-- Environments -->
     <section :class="card" aria-labelledby="settings-environments">

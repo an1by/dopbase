@@ -145,7 +145,7 @@ async fn every_principal_reaches_what_its_grants_role_owner_and_token_allow() {
       "runner",
       AuthIdentity::Runner {
         token_id: "tok".into(),
-        environment_id: "env_prod".into(),
+        scope: crate::models::RunnerScope::Environment("env_prod".into()),
       },
       [none, read, none, none],
     ),

@@ -12,6 +12,7 @@ pub mod model;
 pub mod service;
 pub mod snapshot;
 pub mod upgrade;
+mod workspace_upgrade;
 
 pub fn routes() -> Router<AppState> {
   Router::new()
@@ -37,3 +38,4 @@ pub fn routes() -> Router<AppState> {
     )
     .layer(DefaultBodyLimit::max(250 * 1024 * 1024))
 }
+

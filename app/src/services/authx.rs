@@ -592,6 +592,8 @@ pub enum DataAccess {
   Uniform(Level),
   /// A runner token reads values of its one environment.
   Runner(String),
+  /// Environments whose projects sit in one workspace. Loaded for the request.
+  WorkspaceRunner(Vec<String>),
   /// An account's own and group grants, capped by its role ceiling.
   Grants { grants: Vec<Grant>, ceiling: Level },
   /// What a personal token's scope covers, up to its level.
@@ -612,6 +614,8 @@ impl DataAccess {
       Self::Uniform(level) => (*level).min(Level::Manage),
       Self::Runner(id) if id == target.environment_id => Level::Read,
       Self::Runner(_) => Level::None,
+      Self::WorkspaceRunner(ids) if ids.iter().any(|id| id == target.environment_id) => Level::Read,
+      Self::WorkspaceRunner(_) => Level::None,
       Self::Grants { grants, ceiling } => environment_level(grants, target, *ceiling),
       Self::Limit { scope, level } => match scope {
         Scope::All => *level,
@@ -633,6 +637,7 @@ impl DataAccess {
       Self::Everything => Level::ProjectManager,
       Self::Uniform(level) => *level,
       Self::Runner(_) => Level::None,
+      Self::WorkspaceRunner(_) => Level::None,
       Self::Grants { grants, ceiling } => project_level(grants, project_id, *ceiling),
       Self::Limit { scope, level } => match scope {
         Scope::All => *level,
@@ -721,11 +726,19 @@ pub async fn data_access(
         }),
       ))
     }
-    AuthIdentity::Runner { environment_id, .. } => {
-      let Some(environment_id) = environment_id.clone() else {
-        return Err(sqlx::Error::RowNotFound);
-      };
-      Ok(DataAccess::Runner(environment_id))
+    AuthIdentity::Runner { scope, .. } => match scope {
+      crate::models::RunnerScope::Environment(environment_id) => {
+        Ok(DataAccess::Runner(environment_id.clone()))
+      }
+      crate::models::RunnerScope::Workspace(workspace_id) => {
+        let environments = sqlx::query_scalar(
+          "SELECT e.id FROM environments e INNER JOIN project_locations l ON l.project_id = e.project_id WHERE l.workspace_id = $1",
+        )
+        .bind(workspace_id)
+        .fetch_all(&mut *conn)
+        .await?;
+        Ok(DataAccess::WorkspaceRunner(environments))
+      }
     },
   }
 }

@@ -18,6 +18,7 @@ import type { Capability, Feature } from "~/services/access.api";
  */
 export const pages = {
   projects: { label: "Projects", capabilities: [] },
+  workspaces: { label: "Workspaces", capabilities: ["projects.create"] },
   audit: { label: "Audit log", capabilities: [] },
   users: { label: "Users", capabilities: ["users.view"] },
   agents: {
@@ -53,7 +54,7 @@ export const sidebarSections: readonly {
   label: string;
   pages: readonly PageName[];
 }[] = [
-  { label: "Workspace", pages: ["projects", "audit"] },
+  { label: "Workspace", pages: ["projects", "workspaces", "audit"] },
   { label: "Access", pages: ["users", "agents", "groups", "roles"] },
   { label: "Instance", pages: ["status", "backups", "sso"] },
 ];

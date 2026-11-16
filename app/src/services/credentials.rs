@@ -300,8 +300,30 @@ pub async fn resolve(
     }
     return Ok(AuthIdentity::Runner {
       token_id,
-      environment_id: Some(environment_id),
-      workspace_id: None,
+      scope: crate::models::RunnerScope::Environment(environment_id),
+    });
+  }
+
+  let workspace: Option<(String, String, Option<String>)> = sqlx::query_as(
+    "SELECT t.id, t.workspace_id, t.last_used_at FROM workspace_tokens t WHERE t.token_hash = $1 AND t.revoked_at IS NULL AND (t.expires_at IS NULL OR t.expires_at > $2)",
+  )
+  .bind(&hash)
+  .bind(now.stamp())
+  .fetch_optional(state.db.pool())
+  .await
+  .map_err(HttpError::from)?;
+  if let Some((token_id, workspace_id, last_used_at)) = workspace {
+    if !recently(last_used_at.as_deref(), now) {
+      sqlx::query("UPDATE workspace_tokens SET last_used_at = $1 WHERE id = $2")
+        .bind(now.stamp())
+        .bind(&token_id)
+        .execute(state.db.pool())
+        .await
+        .map_err(HttpError::from)?;
+    }
+    return Ok(AuthIdentity::Runner {
+      token_id,
+      scope: crate::models::RunnerScope::Workspace(workspace_id),
     });
   }
   Err(HttpError::unauthorized(

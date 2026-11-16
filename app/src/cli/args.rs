@@ -7,8 +7,8 @@ use std::{
 
 use crate::{
   cli::commands::{
-    access, admin, audit, auth, backup, cache, client, docker, environment, export, import, init, project,
-    restore, run, secret, server, token, update, workspace,
+    access, admin, audit, auth, backup, cache, client, docker, environment, export, import, init,
+    project, restore, run, secret, server, token, update, workspace,
   },
   constants::help::*,
 };

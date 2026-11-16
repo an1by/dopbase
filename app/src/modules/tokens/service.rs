@@ -26,17 +26,24 @@ pub async fn list(
 }
 /// How long a new runner token lives: 90 days unless asked otherwise, and
 /// never longer than a year.
-fn lifetime(expires_in: Option<&str>) -> Result<Duration, HttpError> {
+pub(crate) fn token_lifetime(
+  expires_in: Option<&str>,
+  kind: &str,
+) -> Result<Duration, HttpError> {
   let Some(value) = expires_in else {
     return Ok(Duration::days(RUNNER_TOKEN_DEFAULT_DAYS));
   };
   let invalid = |message: &str| HttpError::bad_request("EXPIRY_INVALID", message);
   let duration = token::expiry_duration(value)
     .map_err(invalid)?
-    .ok_or_else(|| invalid("Runner tokens always expire. Choose a number of hours or days."))?;
+    .ok_or_else(|| {
+      invalid(&format!(
+        "{kind} tokens always expire. Choose a number of hours or days."
+      ))
+    })?;
   if duration > Duration::days(RUNNER_TOKEN_MAX_DAYS) {
     return Err(invalid(&format!(
-      "Runner tokens last at most {RUNNER_TOKEN_MAX_DAYS} days."
+      "{kind} tokens last at most {RUNNER_TOKEN_MAX_DAYS} days."
     )));
   }
   Ok(duration)
@@ -63,7 +70,7 @@ pub async fn create(
   // session alone can't mint one.
   require_recent_auth(identity)?;
   let now = Utc::now();
-  let expires_at = Some((now + lifetime(request.expires_in.as_deref())?).stamp());
+  let expires_at = Some((now + token_lifetime(request.expires_in.as_deref(), "Runner")?).stamp());
   let token_id = token::public_id(RUNNER_TOKEN_ID_PREFIX);
   let raw = token::generate(RUNNER_TOKEN_PREFIX).map_err(|_| HttpError::internal())?;
   let now = now.stamp();
@@ -176,5 +183,6 @@ pub async fn revoke(
   tx.commit().await?;
   repository::find(state.db.pool(), id)
     .await?
-    .ok_or_else(HttpError::internal).map(Into::into)
+    .ok_or_else(HttpError::internal)
+    .map(Into::into)
 }

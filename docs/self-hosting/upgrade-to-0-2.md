@@ -61,8 +61,7 @@ unset DOPBASE_VERSION
 
 Everything that has a place in 0.2.0: accounts, roles, groups, grants,
 projects, environments, secrets with their history, runner tokens, personal
-tokens, AI agents and their tokens, single sign-on settings, and the audit
-log. Token values keep working, except personal tokens older than their role
+tokens, AI agents and their tokens, single sign-on settings, the audit log, workspaces, project locations, and workspace runner tokens (fork). Plain 0.1.x backups get a default workspace. Token values keep working, except personal tokens older than their role
 allows (see below), and secrets are re-keyed to the new instance's master
 key.
 

@@ -19,70 +19,8 @@ pub async fn location(
   axum::Json(request): axum::Json<ProjectLocationRequest>,
 ) -> Result<HttpResponse<ProjectResponse>, ProjectError> {
   require_mutation(&identity, &headers)?;
-  let (admin_id, email) = crate::extractors::require_project_manager(&identity)?;
-  let project = service::authorize(&state, &identity, &reference, crate::services::authx::Level::ProjectManager).await?;
-  let mut tx = state
-    .db
-    .pool()
-    .begin_with("BEGIN IMMEDIATE")
-    .await
-    .map_err(crate::http::HttpError::from)?;
-  if let Some(workspace_id) = &request.workspace_id {
-    let path = request.relative_path.as_deref().unwrap_or(".");
-    crate::modules::workspaces::validate_relative(path)?;
-    let exists: bool = sqlx::query_scalar("SELECT EXISTS(SELECT 1 FROM workspaces WHERE id=?)")
-      .bind(workspace_id)
-      .fetch_one(&mut *tx)
-      .await
-      .map_err(crate::http::HttpError::from)?;
-    if !exists {
-      return Err(
-        crate::http::HttpError::not_found("WORKSPACE_NOT_FOUND", "Workspace not found.").into(),
-      );
-    }
-    if crate::modules::projects::repository::name_taken_in_workspace(
-      state.db.pool(),
-      workspace_id,
-      &project.name,
-      Some(&project.id),
-    )
-    .await
-    .map_err(crate::http::HttpError::from)?
-    {
-      return Err(
-        crate::http::HttpError::conflict(
-          "PROJECT_ALREADY_EXISTS",
-          "A project with this name already exists in the workspace.",
-        )
-        .into(),
-      );
-    }
-    sqlx::query("INSERT INTO project_locations(project_id,workspace_id,relative_path) VALUES(?,?,?) ON CONFLICT(project_id) DO UPDATE SET workspace_id=excluded.workspace_id,relative_path=excluded.relative_path").bind(&project.id).bind(workspace_id).bind(path.replace('\\', "/")).execute(&mut *tx).await.map_err(|error| {
-      if error.to_string().contains("UNIQUE") { crate::http::HttpError::conflict("PROJECT_PATH_IN_USE", "This workspace directory is already assigned to a project.") } else { error.into() }
-    })?;
-  } else {
-    sqlx::query("DELETE FROM project_locations WHERE project_id=?")
-      .bind(&project.id)
-      .execute(&mut *tx)
-      .await
-      .map_err(crate::http::HttpError::from)?;
-  }
-  crate::modules::common::audit(
-    &mut *tx,
-    identity.audit_actor_type(),
-    Some(admin_id),
-    Some(email),
-    crate::services::events::Action::ProjectLocationUpdated,
-    Some(&project.id),
-    None,
-    Some("project"),
-    Some(&project.id),
-    serde_json::json!({"workspaceId":request.workspace_id,"relativePath":request.relative_path}),
-  )
-  .await?;
-  tx.commit().await.map_err(crate::http::HttpError::from)?;
   Ok(HttpResponse::ok(
-    service::authorize(&state, &identity, &project.id, crate::services::authx::Level::Metadata).await?,
+    service::set_location(&state, &identity, &reference, request).await?,
     "PROJECT_LOCATION_UPDATED",
   ))
 }

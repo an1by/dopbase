@@ -58,7 +58,7 @@ pub struct UpgradeNote {
 }
 
 impl UpgradeReport {
-  fn note(
+  pub(crate) fn note(
     list: &mut Vec<UpgradeNote>,
     table: &str,
     rows: i64,
@@ -358,6 +358,8 @@ async fn copy(
       .await
       .with_context(|| format!("copying {table}"))?;
   }
+
+  super::workspace_upgrade::upgrade_workspaces(&mut tx, &mut report, &now).await?;
 
   // Runner tokens didn't record who made them before 0.2.0. They always
   // expire now, a year at most, so one with no expiry or a later one gets
