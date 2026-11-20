@@ -108,6 +108,9 @@ strip = "symbols"
 lto = "thin"
 codegen-units = 1
 
+[profile.docker]
+inherits = "release"
+
 # Stripping proc-macro dylibs on macOS 27 can leave a misaligned LINKEDIT
 # string pool that dyld refuses to load (seen with sqlx-macros). Only the
 # release binary needs stripping.
@@ -121,3 +124,4 @@ opt-level = 3
 
 [profile.dev.package.blake2]
 opt-level = 3
+
