@@ -5,16 +5,16 @@ FROM oven/bun:1 AS admin-ui
 WORKDIR /workspace
 
 COPY package.json bun.lock ./
+COPY ui/package.json ./ui/
 RUN --mount=type=cache,target=/root/.bun/install/cache \
   bun install --frozen-lockfile
 
-COPY index.html vite.config.ts tsconfig*.json eslint.config.js ./
-COPY config ./config
-COPY public ./public
-COPY src ./src
+COPY ui/index.html ui/vite.config.ts ui/tsconfig*.json ui/eslint.config.js ./ui/
+COPY ui/public ./ui/public
+COPY ui/src ./ui/src
 
 ENV NODE_ENV=production
-RUN bun run build:ui:docker
+RUN bun run --cwd ui build
 
 FROM rust:1.98-bookworm AS chef
 
@@ -43,7 +43,8 @@ RUN --mount=type=cache,target=/usr/local/cargo/registry \
 
 COPY app/src ./src
 COPY app/migrations ./migrations
-COPY --from=admin-ui /workspace/dist /workspace/dist
+COPY app/migrations-legacy ./migrations-legacy
+COPY --from=admin-ui /workspace/ui/dist /workspace/dist
 
 RUN --mount=type=cache,target=/usr/local/cargo/registry \
   --mount=type=cache,target=/usr/local/cargo/git \
