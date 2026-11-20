@@ -474,7 +474,11 @@ fn secret_commands_parse_format_options() {
 
 #[test]
 fn validates_qualified_environment_creation_targets() {
-  for target in ["storefront/development", "prj_01JTEST/development"] {
+  for target in [
+    "storefront/development",
+    "prj_01JTEST/development",
+    "storefront/dev/extra",
+  ] {
     Cli::try_parse_from(["dopbase", "env", "create", target]).unwrap();
   }
 
@@ -482,7 +486,6 @@ fn validates_qualified_environment_creation_targets() {
     "storefront",
     "/development",
     "storefront/",
-    "storefront/dev/extra",
     "storefront/Development",
   ] {
     let error = Cli::try_parse_from(["dopbase", "env", "create", target]).unwrap_err();
@@ -1290,7 +1293,43 @@ fn parses_each_public_command_and_detects_missing_cases() {
     &["dopbase", "update"],
     &["dopbase", "backup"],
     &["dopbase", "restore", "backup.dop"],
-  ];
+    &["dopbase", "docker", "env-file", "billing/local"],
+    &[
+      "dopbase",
+      "docker",
+      "run",
+      "billing/local",
+      "--",
+      "docker",
+      "run",
+      "alpine",
+    ],
+    &[
+      "dopbase",
+      "docker",
+      "compose",
+      "billing/local",
+      "--",
+      "docker",
+      "compose",
+      "up",
+    ],
+    &["dopbase", "docker", "exec", "billing/local", "--", "dopbase", "status"],
+    &["dopbase", "project", "current"],
+    &["dopbase", "workspace", "list"],
+    &["dopbase", "workspace", "create", "team"],
+    &["dopbase", "workspace", "show", "default"],
+    &[
+      "dopbase",
+      "workspace",
+      "update",
+      "default",
+      "--name",
+      "team",
+      "--root-path",
+      "/data",
+    ],
+    &["dopbase", "workspace", "delete", "orphan", "--yes"],  ];
   let mut covered = std::collections::BTreeSet::new();
   for args in cases {
     let matches = Cli::command().try_get_matches_from(*args).unwrap();

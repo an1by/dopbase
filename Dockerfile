@@ -9,6 +9,7 @@ COPY ui/package.json ./ui/
 RUN --mount=type=cache,target=/root/.bun/install/cache \
   bun install --frozen-lockfile
 
+COPY config ./config
 COPY ui/index.html ui/vite.config.ts ui/tsconfig*.json ui/eslint.config.js ./ui/
 COPY ui/public ./ui/public
 COPY ui/src ./ui/src
@@ -65,3 +66,4 @@ WORKDIR /data
 
 ENTRYPOINT ["/usr/local/bin/dopbase"]
 CMD ["server", "start", "--config", "/etc/dopbase/server.toml"]
+
