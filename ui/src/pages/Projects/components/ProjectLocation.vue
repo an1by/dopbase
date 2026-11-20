@@ -20,7 +20,8 @@ async function load(): Promise<void> {
   if (!auth.can("projects.create")) return;
   try {
     workspaces.value = await workspacesApi.listWorkspaces();
-    workspaceId.value = props.project?.workspaceId ?? workspaces.value[0]?.id ?? "";
+    workspaceId.value =
+      props.project?.workspaceId ?? workspaces.value[0]?.id ?? "";
     relativePath.value = props.project?.relativePath ?? ".";
   } catch {
     error.value = "Could not load workspaces.";
@@ -52,9 +53,12 @@ watch(() => props.project?.id, load);
   <section
     v-if="auth.can('projects.create')"
     class="rounded-card border border-line bg-panel p-4 sm:p-5">
-    <h2 class="text-[15px] font-semibold text-ink-strong">Workspace directory</h2>
+    <h2 class="text-[15px] font-semibold text-ink-strong">
+      Workspace directory
+    </h2>
     <p class="mt-0.5 mb-4 text-sm text-ink-muted">
-      Places this project inside a workspace so workspace runner tokens can read it.
+      Places this project inside a workspace so workspace runner tokens can read
+      it.
     </p>
     <DbAlert v-if="error" class="mb-3">{{ error }}</DbAlert>
     <form class="flex max-w-md flex-col gap-3" @submit.prevent="save">
@@ -69,8 +73,14 @@ watch(() => props.project?.id, load);
           </option>
         </select>
       </label>
-      <DbInput v-model="relativePath" label="Relative path" name="relativePath" mono />
-      <DbButton type="submit" variant="primary" :loading="saving">Save directory</DbButton>
+      <DbInput
+        v-model="relativePath"
+        label="Relative path"
+        name="relativePath"
+        mono />
+      <DbButton type="submit" variant="primary" :loading="saving"
+        >Save directory</DbButton
+      >
     </form>
   </section>
 </template>

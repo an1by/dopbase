@@ -162,9 +162,7 @@ defineExpose({ focus });
          darker canvas so the editor reads as a distinct surface. -->
     <div
       class="overflow-y-auto bg-canvas"
-      :class="
-        fillHeight ? 'min-h-0 flex-1' : 'max-h-[26rem] min-h-[12rem]'
-      ">
+      :class="fillHeight ? 'min-h-0 flex-1' : 'max-h-[26rem] min-h-[12rem]'">
       <div class="relative">
         <!-- Highlight overlay: gutter number + tokens per logical line. -->
         <div

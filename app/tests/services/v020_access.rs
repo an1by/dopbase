@@ -5,7 +5,7 @@
 //! router. Here to prove the 0.2.0 rewrite safe; drop it once end-to-end
 //! tests cover the same ground.
 
-use app::models::{AdminRole, AuthIdentity, SessionKind};
+use app::models::{AdminRole, AuthIdentity, RunnerScope, SessionKind};
 use app::services::{
   access::{Reach, Refusal},
   authx::{self, Level, Scope},
@@ -145,7 +145,7 @@ async fn every_principal_reaches_what_its_grants_role_owner_and_token_allow() {
       "runner",
       AuthIdentity::Runner {
         token_id: "tok".into(),
-        scope: crate::models::RunnerScope::Environment("env_prod".into()),
+        scope: RunnerScope::Environment("env_prod".into()),
       },
       [none, read, none, none],
     ),

@@ -17,7 +17,7 @@ if (!s.includes('from "./env-triple-quote"')) {
 const KEY_PATTERN`,
   );
   s = s.replace(
-    "const KEY_PATTERN = /^[A-Za-z_][A-Za-z0-9_]*$/;\nconst TRIPLE_DOUBLE = '\"\"\"';\n\n",
+    'const KEY_PATTERN = /^[A-Za-z_][A-Za-z0-9_]*$/;\nconst TRIPLE_DOUBLE = \'"""\';\n\n',
     "const KEY_PATTERN = /^[A-Za-z_][A-Za-z0-9_]*$/;\n\n",
   );
 }

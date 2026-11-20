@@ -58,4 +58,3 @@ An account whose role signs in with tokens only, stored in `agents` and served a
 ## Workspace
 
 A workspace groups projects that share a filesystem layout on a machine. Each linked project has a relative path inside the workspace. Workspace-scoped runner tokens can read runtime secret values for every environment whose project is linked to that workspace through `project_locations`. Projects without a workspace link are outside that token scope.
-

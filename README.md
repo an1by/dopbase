@@ -133,11 +133,11 @@ irm https://raw.githubusercontent.com/dopbase/dopbase/main/scripts/install.ps1 |
 
 Default install locations:
 
-| Shell | Default directory |
-| ----- | ----------------- |
-| macOS / Linux (`install.sh`) | `~/.local/bin/dopbase` |
+| Shell                              | Default directory                        |
+| ---------------------------------- | ---------------------------------------- |
+| macOS / Linux (`install.sh`)       | `~/.local/bin/dopbase`                   |
 | Windows PowerShell (`install.ps1`) | `%LOCALAPPDATA%\Dopbase\bin\dopbase.exe` |
-| Git Bash / MinGW (`install.sh`) | `%LOCALAPPDATA%\Dopbase\bin\dopbase.exe` |
+| Git Bash / MinGW (`install.sh`)    | `%LOCALAPPDATA%\Dopbase\bin\dopbase.exe` |
 
 On Windows, run `dopbase server start` in the foreground. Background
 `server start --background`, `server stop`, and `server restart` are available

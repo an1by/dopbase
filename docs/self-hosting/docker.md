@@ -37,12 +37,12 @@ Private packages require `docker login ghcr.io` with a token that has
 
 The container expects:
 
-| Mount / setting | Purpose |
-| --------------- | ------- |
-| `./data` → `/data` | SQLite database, audit data, and `master.key` |
-| `./server.toml` → `/etc/dopbase/server.toml` | Bind address, port, public URL, docs flag |
-| `DOPBASE_DATA_DIR=/data` | Keep state inside the volume |
-| `DOPBASE_MASTER_KEY_PATH=/data/master.key` | Master key next to the database |
+| Mount / setting                              | Purpose                                       |
+| -------------------------------------------- | --------------------------------------------- |
+| `./data` → `/data`                           | SQLite database, audit data, and `master.key` |
+| `./server.toml` → `/etc/dopbase/server.toml` | Bind address, port, public URL, docs flag     |
+| `DOPBASE_DATA_DIR=/data`                     | Keep state inside the volume                  |
+| `DOPBASE_MASTER_KEY_PATH=/data/master.key`   | Master key next to the database               |
 
 Example `docker-compose.yml`:
 

@@ -9,4 +9,3 @@ for (const [name, dest] of [
   fs.copyFileSync(path.join(dir, name), path.join(dir, dest));
 }
 console.log("ok");
-

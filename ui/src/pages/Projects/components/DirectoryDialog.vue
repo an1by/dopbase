@@ -45,11 +45,7 @@ async function submit(): Promise<void> {
   saving.value = true;
   error.value = null;
   try {
-    await props.action(
-      name.value.trim(),
-      path.value.trim(),
-      workspaceId.value,
-    );
+    await props.action(name.value.trim(), path.value.trim(), workspaceId.value);
     emit("close");
   } catch (cause) {
     error.value =
@@ -77,7 +73,11 @@ const helpText = computed(() => {
 });
 </script>
 <template>
-  <DbModal :open="open" :title="title" :persistent="saving" @close="emit('close')">
+  <DbModal
+    :open="open"
+    :title="title"
+    :persistent="saving"
+    @close="emit('close')">
     <form class="flex flex-col gap-4" @submit.prevent="submit">
       <DbInput
         v-if="kind === 'workspace'"

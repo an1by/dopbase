@@ -7,15 +7,20 @@ use sqlx::{SqliteConnection, Transaction};
 
 use super::upgrade::UpgradeReport;
 use crate::{
-  constants::workspaces as workspace_ids,
-  modules::workspaces::DEFAULT_WORKSPACE_ROOT_PATH,
+  constants::workspaces as workspace_ids, modules::workspaces::DEFAULT_WORKSPACE_ROOT_PATH,
 };
 
-async fn count(connection: &mut SqliteConnection, sql: &str) -> anyhow::Result<i64> {
+async fn count(
+  connection: &mut SqliteConnection,
+  sql: &str,
+) -> anyhow::Result<i64> {
   Ok(sqlx::query_scalar(sql).fetch_one(connection).await?)
 }
 
-async fn table_exists(connection: &mut SqliteConnection, table: &str) -> anyhow::Result<bool> {
+async fn table_exists(
+  connection: &mut SqliteConnection,
+  table: &str,
+) -> anyhow::Result<bool> {
   Ok(
     sqlx::query_scalar(&format!(
       "SELECT EXISTS(SELECT 1 FROM old.sqlite_master WHERE type='table' AND name='{table}')"

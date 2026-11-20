@@ -2,7 +2,7 @@ use std::fs;
 use std::net::SocketAddr;
 
 use app::config::{
-  EnvironmentOverrides, PublicUrlSource, ServerConfig, ServerOverrides, ensure_data_dir,
+  EnvironmentOverrides, PublicUrlSource, ServerConfig, ServerOverrides,
   resolve_implicit_public_url, sqlite_url,
 };
 use app::constants::config::{

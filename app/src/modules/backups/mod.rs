@@ -38,4 +38,3 @@ pub fn routes() -> Router<AppState> {
     )
     .layer(DefaultBodyLimit::max(250 * 1024 * 1024))
 }
-

@@ -1,8 +1,14 @@
 import fs from "node:fs";
 import path from "node:path";
 
-const target = path.join(import.meta.dir, "../src/pages/Projects/components/EnvFileEditor.vue");
-let s = fs.readFileSync(path.join(import.meta.dir, "EnvFileEditor.vue.clean"), "utf8");
+const target = path.join(
+  import.meta.dir,
+  "../src/pages/Projects/components/EnvFileEditor.vue",
+);
+let s = fs.readFileSync(
+  path.join(import.meta.dir, "EnvFileEditor.vue.clean"),
+  "utf8",
+);
 
 s = s.replace(
   `import type { EnvFileIssue } from "~/utils/env-file";`,

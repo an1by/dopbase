@@ -54,4 +54,3 @@ pub async fn wipe(connection: &mut SqliteConnection) -> Result<(), sqlx::Error> 
   }
   Ok(())
 }
-

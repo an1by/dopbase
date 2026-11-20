@@ -572,13 +572,13 @@ dopbase token create --workspace default --name gitlab-production --role workspa
 dopbase token list --workspace default
 ```
 
-| Command | Purpose |
-| --- | --- |
-| `dopbase token create <ENVIRONMENT_REF> --name <NAME> --role runner [--expires-in <DURATION>]` | Environment runner (`dbs_…`) |
-| `dopbase token create --workspace <WORKSPACE_REF> --name <NAME> --role workspace [--expires-in <DURATION>]` | Workspace runner (`dbw_…`) |
-| `dopbase token list <ENVIRONMENT_REF>` | List environment tokens |
-| `dopbase token list --workspace <WORKSPACE_REF>` | List workspace tokens |
-| `dopbase token revoke <token-id>` | Revoke a token (`tok_…` or `wtk_…`) |
+| Command                                                                                                     | Purpose                             |
+| ----------------------------------------------------------------------------------------------------------- | ----------------------------------- |
+| `dopbase token create <ENVIRONMENT_REF> --name <NAME> --role runner [--expires-in <DURATION>]`              | Environment runner (`dbs_…`)        |
+| `dopbase token create --workspace <WORKSPACE_REF> --name <NAME> --role workspace [--expires-in <DURATION>]` | Workspace runner (`dbw_…`)          |
+| `dopbase token list <ENVIRONMENT_REF>`                                                                      | List environment tokens             |
+| `dopbase token list --workspace <WORKSPACE_REF>`                                                            | List workspace tokens               |
+| `dopbase token revoke <token-id>`                                                                           | Revoke a token (`tok_…` or `wtk_…`) |
 
 The plaintext token is displayed only once. Tokens can also be created and
 revoked in the [Admin UI](/ui/projects-environments) (environment) or workspace

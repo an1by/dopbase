@@ -26,7 +26,9 @@ export function lineOpensUnclosedTripleQuote(line: string): boolean {
  * 0-based line indices that are inside a multiline triple-quoted value
  * (not the opening `KEY="""` line).
  */
-export function computeTripleQuoteContinuationLines(lines: string[]): Set<number> {
+export function computeTripleQuoteContinuationLines(
+  lines: string[],
+): Set<number> {
   const continuation = new Set<number>();
   let i = 0;
   while (i < lines.length) {

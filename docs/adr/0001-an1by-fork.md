@@ -55,15 +55,15 @@ improvements from upstream.
 
 ## Fork-only capabilities
 
-| Area | Behavior |
-| ---- | -------- |
-| **Workspaces** | Tables `workspaces`, `project_locations`, `workspace_tokens`; API and CLI `workspace`; UI workspace-scoped project URLs; `dbw_` tokens via `runner_may_access_environment`. |
-| **References** | Environment and project refs accept `WORKSPACE/PROJECT/ENV` and `/PROJECT/ENV` (default workspace). |
-| **Export** | `dbs_` uses scoped export API (audit/revision); `dbw_` uses runtime secrets API from the CLI. |
-| **Docker** | `Dockerfile`, `.github/workflows/container.yml` (+ optional `container-arm.yml`); `dopbase docker run \| compose \| exec \| env-file`. |
-| **`--container`** | `docker exec` into `DOPBASE_CONTAINER` (default `dopbase`). |
-| **Windows** | Release zip + `scripts/install.ps1`; update hint in CLI; path expansion for Windows shells. |
-| **Dotenv** | Triple-quoted multiline values in `.env` parsing (fork extension; not in upstream). |
+| Area              | Behavior                                                                                                                                                                    |
+| ----------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| **Workspaces**    | Tables `workspaces`, `project_locations`, `workspace_tokens`; API and CLI `workspace`; UI workspace-scoped project URLs; `dbw_` tokens via `runner_may_access_environment`. |
+| **References**    | Environment and project refs accept `WORKSPACE/PROJECT/ENV` and `/PROJECT/ENV` (default workspace).                                                                         |
+| **Export**        | `dbs_` uses scoped export API (audit/revision); `dbw_` uses runtime secrets API from the CLI.                                                                               |
+| **Docker**        | `Dockerfile`, `.github/workflows/container.yml` (+ optional `container-arm.yml`); `dopbase docker run \| compose \| exec \| env-file`.                                      |
+| **`--container`** | `docker exec` into `DOPBASE_CONTAINER` (default `dopbase`).                                                                                                                 |
+| **Windows**       | Release zip + `scripts/install.ps1`; update hint in CLI; path expansion for Windows shells.                                                                                 |
+| **Dotenv**        | Triple-quoted multiline values in `.env` parsing (fork extension; not in upstream).                                                                                         |
 
 Design notes for workspace paths on disk: [Workspace paths (design)](/guide/workspace-paths).
 
@@ -82,11 +82,11 @@ Design notes for workspace paths on disk: [Workspace paths (design)](/guide/work
 
 ## Compatibility
 
-| Artifact | Opens fork DB with workspaces? | Notes |
-| -------- | ------------------------------ | ----- |
-| **an1by/dopbase** binary | Yes | Includes workspace migrations after upstream head. |
-| **Official dopbase** binary | No | Unknown migrations `14`–`17` / fork timestamp names. |
-| **DB after 0.1.10 migrate** | — | Do not downgrade to 0.1.9; backup before upgrade. |
+| Artifact                    | Opens fork DB with workspaces? | Notes                                                |
+| --------------------------- | ------------------------------ | ---------------------------------------------------- |
+| **an1by/dopbase** binary    | Yes                            | Includes workspace migrations after upstream head.   |
+| **Official dopbase** binary | No                             | Unknown migrations `14`–`17` / fork timestamp names. |
+| **DB after 0.1.10 migrate** | —                              | Do not downgrade to 0.1.9; backup before upgrade.    |
 
 ## Consequences
 

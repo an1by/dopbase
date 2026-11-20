@@ -98,7 +98,8 @@ async function removeSelected(): Promise<void> {
     selectedId.value = null;
     await load();
   } catch {
-    actionError.value = "Could not delete the workspace. Move its projects first.";
+    actionError.value =
+      "Could not delete the workspace. Move its projects first.";
   } finally {
     saving.value = false;
   }
@@ -149,37 +150,77 @@ onMounted(load);
           <button
             type="button"
             class="w-full rounded-control px-3 py-2 text-left text-sm"
-            :class="item.id === selectedId ? 'bg-raised text-ink-strong' : 'text-ink-muted'"
-            @click="selectedId = item.id; loadTokens()">
+            :class="
+              item.id === selectedId
+                ? 'bg-raised text-ink-strong'
+                : 'text-ink-muted'
+            "
+            @click="
+              selectedId = item.id;
+              loadTokens();
+            ">
             {{ item.name }}
           </button>
         </li>
       </ul>
       <div class="flex flex-col gap-5">
-        <form v-if="canManage" class="flex flex-wrap items-end gap-3" @submit.prevent="createWorkspace">
-          <DbInput v-model="name" label="New workspace" name="workspaceName" mono />
+        <form
+          v-if="canManage"
+          class="flex flex-wrap items-end gap-3"
+          @submit.prevent="createWorkspace">
+          <DbInput
+            v-model="name"
+            label="New workspace"
+            name="workspaceName"
+            mono />
           <DbInput v-model="rootPath" label="Root path" name="rootPath" mono />
-          <DbButton type="submit" variant="primary" :loading="saving">Create</DbButton>
+          <DbButton type="submit" variant="primary" :loading="saving"
+            >Create</DbButton
+          >
         </form>
-        <form v-if="selected && canManage" class="flex flex-col gap-3" @submit.prevent="saveSelected">
+        <form
+          v-if="selected && canManage"
+          class="flex flex-col gap-3"
+          @submit.prevent="saveSelected">
           <DbInput v-model="selected.name" label="Name" name="editName" mono />
-          <DbInput v-model="selected.rootPath" label="Root path" name="editRoot" mono />
+          <DbInput
+            v-model="selected.rootPath"
+            label="Root path"
+            name="editRoot"
+            mono />
           <div class="flex gap-2">
-            <DbButton type="submit" variant="primary" :loading="saving">Save</DbButton>
-            <DbButton type="button" variant="danger" :loading="saving" @click="removeSelected">
+            <DbButton type="submit" variant="primary" :loading="saving"
+              >Save</DbButton
+            >
+            <DbButton
+              type="button"
+              variant="danger"
+              :loading="saving"
+              @click="removeSelected">
               Delete
             </DbButton>
           </div>
         </form>
         <section v-if="selected && canManage">
-          <h2 class="mb-2 text-sm font-semibold text-ink-strong">Runner tokens</h2>
+          <h2 class="mb-2 text-sm font-semibold text-ink-strong">
+            Runner tokens
+          </h2>
           <form class="mb-3 flex items-end gap-2" @submit.prevent="createToken">
-            <DbInput v-model="tokenName" label="Token name" name="tokenName" mono />
+            <DbInput
+              v-model="tokenName"
+              label="Token name"
+              name="tokenName"
+              mono />
             <DbButton type="submit">Create token</DbButton>
           </form>
-          <p v-if="plaintext" class="mb-3 break-all font-mono text-sm">{{ plaintext }}</p>
+          <p v-if="plaintext" class="mb-3 break-all font-mono text-sm">
+            {{ plaintext }}
+          </p>
           <ul class="flex flex-col gap-1 text-sm">
-            <li v-for="token in tokens" :key="token.id" class="flex items-center justify-between gap-3">
+            <li
+              v-for="token in tokens"
+              :key="token.id"
+              class="flex items-center justify-between gap-3">
               <span class="font-mono">{{ token.name }}</span>
               <DbButton
                 v-if="!token.revokedAt"

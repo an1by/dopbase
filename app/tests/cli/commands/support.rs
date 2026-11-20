@@ -132,6 +132,7 @@ impl Fixture {
     fixture
   }
 
+  #[cfg(unix)]
   pub async fn uninitialized() -> Self {
     Self::uninitialized_with_config(|_| {}).await
   }

@@ -31,11 +31,11 @@ the CLI where your git clone lives on your machine.
 
 ## Principles
 
-| Layer | Responsibility |
-| ----- | -------------- |
-| **Server** | Logical structure: workspace **name**, project **name**, which project belongs to which workspace, **relative** directory segment per project (optional). Secrets, tokens, audit. |
-| **CLI (per machine)** | Absolute **workspace root** on this host, bound to `(server_url, workspace_id)`. |
-| **Repository (optional)** | Small committed file naming the workspace and optional path override for **this** clone—no secrets. |
+| Layer                     | Responsibility                                                                                                                                                                    |
+| ------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| **Server**                | Logical structure: workspace **name**, project **name**, which project belongs to which workspace, **relative** directory segment per project (optional). Secrets, tokens, audit. |
+| **CLI (per machine)**     | Absolute **workspace root** on this host, bound to `(server_url, workspace_id)`.                                                                                                  |
+| **Repository (optional)** | Small committed file naming the workspace and optional path override for **this** clone—no secrets.                                                                               |
 
 Absolute filesystem paths are **never required** on the server.
 
@@ -45,16 +45,16 @@ Absolute filesystem paths are **never required** on the server.
 
 **`workspaces`**
 
-| Column | Notes |
-| ------ | ----- |
-| `id`, `name`, timestamps | Unchanged |
-| `root_path` | **Removed** (or deprecated: ignored by new CLI, dropped in a later release) |
+| Column                   | Notes                                                                       |
+| ------------------------ | --------------------------------------------------------------------------- |
+| `id`, `name`, timestamps | Unchanged                                                                   |
+| `root_path`              | **Removed** (or deprecated: ignored by new CLI, dropped in a later release) |
 
 **`project_locations`**
 
-| Column | Notes |
-| ------ | ----- |
-| `workspace_id` | Unchanged |
+| Column          | Notes                                                                                                                                                          |
+| --------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `workspace_id`  | Unchanged                                                                                                                                                      |
 | `relative_path` | Path **inside the workspace root** on disk: `api`, `services/payment`, or `.` for the workspace root itself. Still unique per `(workspace_id, relative_path)`. |
 
 The server does not validate that these directories exist. It only prevents
@@ -185,24 +185,24 @@ from `cwd` (instead of defaulting `relative_path` to project name only).
 
 ## Admin UI changes
 
-| Today | Target |
-| ----- | ------ |
-| Workspace dialog: name + **Root directory** | Workspace dialog: **name only** |
-| Hint about CLI on developer machine | Link to this guide and `dopbase workspace link` |
-| Project directory in UI | Optional advanced field **relative path** only, or “Set with CLI” |
-| Rail shows `relativePath` | Keep; hide server `rootPath` |
+| Today                                       | Target                                                            |
+| ------------------------------------------- | ----------------------------------------------------------------- |
+| Workspace dialog: name + **Root directory** | Workspace dialog: **name only**                                   |
+| Hint about CLI on developer machine         | Link to this guide and `dopbase workspace link`                   |
+| Project directory in UI                     | Optional advanced field **relative path** only, or “Set with CLI” |
+| Rail shows `relativePath`                   | Keep; hide server `rootPath`                                      |
 
 The UI may show **“Not linked on this machine”** only in a future desktop
 shell; the web UI should not pretend to know local paths.
 
 ## Docker and self-hosting
 
-| Scenario | Recommendation |
-| -------- | ---------------- |
-| CLI on host, server in Docker | `dopbase workspace link` on the host with the real checkout root. |
+| Scenario                                | Recommendation                                                                                                         |
+| --------------------------------------- | ---------------------------------------------------------------------------------------------------------------------- |
+| CLI on host, server in Docker           | `dopbase workspace link` on the host with the real checkout root.                                                      |
 | Dev container with repo at `/workspace` | `dopbase workspace link --root /workspace` inside the container, or `DOPBASE_WORKSPACE_ROOT_*` in `devcontainer.json`. |
-| CI runner | `workspace link` in job setup, or always pass full `WORKSPACE/PROJECT/ENV` refs and skip cwd resolution. |
-| Server container volume | Still only `/data`; no change to workspace linking model. |
+| CI runner                               | `workspace link` in job setup, or always pass full `WORKSPACE/PROJECT/ENV` refs and skip cwd resolution.               |
+| Server container volume                 | Still only `/data`; no change to workspace linking model.                                                              |
 
 ## Migration plan
 

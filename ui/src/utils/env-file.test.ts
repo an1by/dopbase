@@ -66,9 +66,7 @@ describe("parseEnvFile", () => {
 
   it("reports unterminated triple-quoted values", () => {
     const { errors } = parseEnvFile('A="""\nstill open\n');
-    expect(errors).toEqual([
-      "Line 1: unterminated triple double quote",
-    ]);
+    expect(errors).toEqual(["Line 1: unterminated triple double quote"]);
   });
 
   it("keeps single-quoted values literally", () => {
@@ -222,7 +220,3 @@ describe("mergeLayoutValues", () => {
     expect(layout).not.toContain("two words");
   });
 });
-
-
-
-

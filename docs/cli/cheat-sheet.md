@@ -97,13 +97,13 @@ See [server setup](./setup).
 
 See [Docker integration](./docker) for full examples.
 
-| Task | Command | Example |
-| ---- | ------- | ------- |
-| Write a Docker env file | `dopbase docker env-file <ENVIRONMENT_REF> [-o FILE]` | `dopbase docker env-file workspace1/api/staging -o .env` |
-| `docker run` with secrets | `dopbase docker run <ENVIRONMENT_REF> -- docker run …` | `dopbase docker run payment-service/production -- docker run --rm my-image` |
-| `docker compose` with secrets | `dopbase docker compose <ENVIRONMENT_REF> -- docker compose …` | `dopbase docker compose workspace1/api/staging -- docker compose up` |
-| `docker exec` in Dopbase container with secrets | `dopbase docker exec <ENVIRONMENT_REF> -- <CMD>` | `dopbase docker exec workspace1/api/staging -- admin reset-password admin@example.com` |
-| Administer containerized server | `dopbase --container server …` or `dopbase --container admin …` | `dopbase --container server status` |
+| Task                                            | Command                                                         | Example                                                                                |
+| ----------------------------------------------- | --------------------------------------------------------------- | -------------------------------------------------------------------------------------- |
+| Write a Docker env file                         | `dopbase docker env-file <ENVIRONMENT_REF> [-o FILE]`           | `dopbase docker env-file workspace1/api/staging -o .env`                               |
+| `docker run` with secrets                       | `dopbase docker run <ENVIRONMENT_REF> -- docker run …`          | `dopbase docker run payment-service/production -- docker run --rm my-image`            |
+| `docker compose` with secrets                   | `dopbase docker compose <ENVIRONMENT_REF> -- docker compose …`  | `dopbase docker compose workspace1/api/staging -- docker compose up`                   |
+| `docker exec` in Dopbase container with secrets | `dopbase docker exec <ENVIRONMENT_REF> -- <CMD>`                | `dopbase docker exec workspace1/api/staging -- admin reset-password admin@example.com` |
+| Administer containerized server                 | `dopbase --container server …` or `dopbase --container admin …` | `dopbase --container server status`                                                    |
 
 ## Tokens, backups, and maintenance
 

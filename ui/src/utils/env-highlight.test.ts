@@ -110,7 +110,9 @@ describe("highlightEnvContent", () => {
   });
 
   it("highlights multiline triple-quoted bodies as values, not errors", () => {
-    const lines = highlightEnvContent('A=1\nDEPLOY_SSH_KEY="""\ndsadasdsa\n"""\n');
+    const lines = highlightEnvContent(
+      'A=1\nDEPLOY_SSH_KEY="""\ndsadasdsa\n"""\n',
+    );
     expect(lines[0].map((t) => t.type)).toEqual(["key", "equals", "value"]);
     expect(lines[1].map((t) => t.type)).toEqual(["key", "equals", "quote"]);
     expect(lines[2]).toEqual([{ text: "dsadasdsa", type: "value" }]);
@@ -133,5 +135,3 @@ describe("highlightEnvContent", () => {
     );
   });
 });
-
-

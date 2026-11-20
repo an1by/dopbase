@@ -1,5 +1,3 @@
-use std::fs;
-
 use app::services::db::{DbClient, MIGRATOR};
 use app::services::legacy_schema::LEGACY_MIGRATOR;
 
@@ -44,6 +42,7 @@ async fn connect_sets_pragmas() {
 #[cfg(unix)]
 #[tokio::test]
 async fn creates_owner_only_database_file() {
+  use std::fs;
   use std::os::unix::fs::PermissionsExt;
   let directory = tempfile::TempDir::new().unwrap();
   let database = directory.path().join("private").join("dopbase.db");

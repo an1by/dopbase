@@ -10,8 +10,8 @@ a long-lived fork of [dopbase/dopbase](https://github.com/dopbase/dopbase). Upst
 owns the public product contract; these documents explain what we add, how we merge
 upstream releases, and what we intentionally do not ship.
 
-| ADR | Title | Status |
-| --- | ----- | ------ |
+| ADR                          | Title                                      | Status   |
+| ---------------------------- | ------------------------------------------ | -------- |
 | [0001](./0001-an1by-fork.md) | Maintain the an1by fork alongside upstream | Accepted |
 
 New fork-only behavior should get an ADR (or an update to 0001) when it affects

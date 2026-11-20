@@ -59,9 +59,13 @@ function windowsZip(root) {
   ].join("\n");
   const archive = join(root, "assets/dopbase_1.2.3_windows_amd64.zip");
   for (const command of ["python3", "python"]) {
-    const result = spawnSync(command, ["-c", script, root.replaceAll("\\", "/"), archive], {
-      encoding: "utf8",
-    });
+    const result = spawnSync(
+      command,
+      ["-c", script, root.replaceAll("\\", "/"), archive],
+      {
+        encoding: "utf8",
+      },
+    );
     if (result.status === 0) return archive;
   }
   throw new Error("python is required to build the Windows release fixture");
