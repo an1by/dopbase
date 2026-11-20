@@ -45,7 +45,7 @@ RUN --mount=type=cache,target=/usr/local/cargo/registry \
 COPY app/src ./src
 COPY app/migrations ./migrations
 COPY app/migrations-legacy ./migrations-legacy
-COPY --from=admin-ui /workspace/ui/dist /workspace/dist
+COPY --from=admin-ui /workspace/ui/dist /workspace/ui/dist
 
 RUN --mount=type=cache,target=/usr/local/cargo/registry \
   --mount=type=cache,target=/usr/local/cargo/git \
@@ -66,4 +66,5 @@ WORKDIR /data
 
 ENTRYPOINT ["/usr/local/bin/dopbase"]
 CMD ["server", "start", "--config", "/etc/dopbase/server.toml"]
+
 

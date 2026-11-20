@@ -1314,7 +1314,15 @@ fn parses_each_public_command_and_detects_missing_cases() {
       "compose",
       "up",
     ],
-    &["dopbase", "docker", "exec", "billing/local", "--", "dopbase", "status"],
+    &[
+      "dopbase",
+      "docker",
+      "exec",
+      "billing/local",
+      "--",
+      "dopbase",
+      "status",
+    ],
     &["dopbase", "project", "current"],
     &["dopbase", "workspace", "list"],
     &["dopbase", "workspace", "create", "team"],
@@ -1329,7 +1337,8 @@ fn parses_each_public_command_and_detects_missing_cases() {
       "--root-path",
       "/data",
     ],
-    &["dopbase", "workspace", "delete", "orphan", "--yes"],  ];
+    &["dopbase", "workspace", "delete", "orphan", "--yes"],
+  ];
   let mut covered = std::collections::BTreeSet::new();
   for args in cases {
     let matches = Cli::command().try_get_matches_from(*args).unwrap();
