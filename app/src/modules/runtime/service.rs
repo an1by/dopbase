@@ -42,15 +42,13 @@ pub async fn secrets(
     ));
   };
   let env = environments::service::authorize(state, identity, environment_id, Level::Read).await?;
-  if let Some(reference) = reference
-    && environments::service::resolve_id(state, reference)
-      .await?
-      .as_ref()
-      .is_some_and(|id| id != environment_id)
-  {
-    // Name neither the token's environment nor whether `reference` exists:
-    // the refusal often ends up in CI logs.
-    return Err(environments::service::scope_refused(reference));
+  if let Some(reference) = reference {
+    let resolved = environments::service::resolve_id(state, reference).await?;
+    if !resolved.as_ref().is_some_and(|id| id == environment_id) {
+      // Name neither the token's environment nor whether `reference` exists:
+      // the refusal often ends up in CI logs.
+      return Err(environments::service::scope_refused(reference));
+    }
   }
   if let Some(value) = if_none_match {
     let tag = tag(
